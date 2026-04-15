@@ -51,6 +51,7 @@ FINDING_TYPE_DEFS = {
     "BBOX_CROP": ("Image cropped by BBox boundary", "HIGH"),
     "EXPLICIT_CLIP": ("Explicit clipping path applied", "HIGH"),
     "OVERLAP": ("Overlapping images", "HIGH"),
+    "OFFPAGE": ("Image extends beyond page boundary", "HIGH"),
     "SOFT_MASK": ("Soft mask on Form XObject", "INFO"),
     "IMAGE_SMASK": ("Soft mask on Image XObject", "INFO"),
     "COMPLEX_TRANSFORM": ("Complex transform (manual review needed)", "INFO"),
@@ -113,7 +114,8 @@ def init_db(db_path):
             blend_mode            TEXT    DEFAULT '/Normal',
             has_smask             INTEGER DEFAULT 0,
             in_transparency_group INTEGER DEFAULT 0,
-            form_xobject_xref    INTEGER DEFAULT 0
+            form_xobject_xref    INTEGER DEFAULT 0,
+            risk_score            INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS finding_types (
@@ -189,6 +191,14 @@ def init_db(db_path):
             INSERT OR IGNORE INTO finding_types (code, label, severity)
             VALUES (?, ?, ?)
         """, (code, label, severity))
+
+    # Migration: ensure risk_score column exists on images
+    # (databases created before risk scoring was added)
+    cur.execute("PRAGMA table_info(images)")
+    image_cols = {row[1] for row in cur.fetchall()}
+    if "risk_score" not in image_cols:
+        cur.execute(
+            "ALTER TABLE images ADD COLUMN risk_score INTEGER DEFAULT 0")
 
     conn.commit()
     return conn
@@ -1046,6 +1056,211 @@ def check_image_smasks(page_pk, page_num, findings, label_to_info):
             })
 
 
+# Threshold (in points) for considering content "outside" the page.
+# Anything within this margin is treated as a rendering quirk and
+# ignored. Standard PDF render slightly into bleed margins.
+OFFPAGE_THRESHOLD_PTS = 1.0
+
+
+def check_offpage_images(page_mu, page_num, findings, label_to_info):
+    """
+    Detect images that extend beyond the page's visible boundary.
+
+    Uses the page's CropBox (the visible area for typical viewers)
+    rather than the MediaBox, because a PDF's MediaBox can include
+    bleed area that viewers crop away. If CropBox is not defined,
+    falls back to MediaBox.
+
+    Each image is checked against the page rectangle. If any portion
+    of the image extends beyond an edge by more than
+    OFFPAGE_THRESHOLD_PTS, an OFFPAGE finding is raised with the
+    hidden percentage and per-edge breakdown.
+    """
+    # Get the page boundary - prefer CropBox over MediaBox
+    try:
+        page_rect = page_mu.cropbox
+    except AttributeError:
+        page_rect = page_mu.rect
+
+    # Some PDFs have a degenerate cropbox; fall back to mediabox/rect
+    if (page_rect is None or page_rect.is_empty
+            or page_rect.is_infinite):
+        page_rect = page_mu.rect
+
+    image_list = page_mu.get_images(full=True)
+
+    # Build label -> rect mapping using the same algorithm as
+    # check_overlapping_images so labels stay consistent.
+    xref_rects_cache = {}
+    for label, info in sorted(label_to_info.items()):
+        xref = info["xref"]
+        if xref not in xref_rects_cache:
+            try:
+                xref_rects_cache[xref] = list(
+                    page_mu.get_image_rects(xref))
+            except Exception:
+                xref_rects_cache[xref] = []
+
+    xref_rect_idx = {}
+    label_rects = []  # (label, rect)
+    for label in sorted(label_to_info.keys()):
+        info = label_to_info[label]
+        xref = info["xref"]
+        available = xref_rects_cache.get(xref, [])
+        idx = xref_rect_idx.get(xref, 0)
+        if idx < len(available):
+            rect = available[idx]
+            xref_rect_idx[xref] = idx + 1
+            if not rect.is_infinite and not rect.is_empty:
+                label_rects.append((label, rect))
+
+    # PDF coordinate convention: y increases UPWARD. PyMuPDF's Rect
+    # uses y0 (top in PDF space) and y1 (bottom). For comparison
+    # we just use the numeric values consistently.
+    px0 = page_rect.x0
+    py0 = page_rect.y0
+    px1 = page_rect.x1
+    py1 = page_rect.y1
+
+    for label, rect in label_rects:
+        # How far does each edge of the image extend past the
+        # corresponding edge of the page?
+        off_left   = max(0, px0 - rect.x0)
+        off_right  = max(0, rect.x1 - px1)
+        off_top    = max(0, py0 - rect.y0)
+        off_bottom = max(0, rect.y1 - py1)
+
+        if not any(o > OFFPAGE_THRESHOLD_PTS for o in
+                   (off_left, off_right, off_top, off_bottom)):
+            continue
+
+        # Compute hidden percentage of the image
+        img_w = rect.x1 - rect.x0
+        img_h = rect.y1 - rect.y0
+        img_area = img_w * img_h
+
+        visible_x0 = max(rect.x0, px0)
+        visible_x1 = min(rect.x1, px1)
+        visible_y0 = max(rect.y0, py0)
+        visible_y1 = min(rect.y1, py1)
+        visible_w = max(0, visible_x1 - visible_x0)
+        visible_h = max(0, visible_y1 - visible_y0)
+        visible_area = visible_w * visible_h
+        hidden_pct = (((img_area - visible_area) / img_area * 100)
+                      if img_area > 0 else 0)
+
+        edges = []
+        if off_left > OFFPAGE_THRESHOLD_PTS:
+            edges.append(f"Left: {off_left:.2f} pts off page")
+        if off_right > OFFPAGE_THRESHOLD_PTS:
+            edges.append(f"Right: {off_right:.2f} pts off page")
+        if off_top > OFFPAGE_THRESHOLD_PTS:
+            edges.append(f"Top: {off_top:.2f} pts off page")
+        if off_bottom > OFFPAGE_THRESHOLD_PTS:
+            edges.append(f"Bottom: {off_bottom:.2f} pts off page")
+
+        findings.append({
+            "image": label,
+            "type": "OFFPAGE",
+            "detail": (
+                f"Image extends beyond page boundary. "
+                f"~{hidden_pct:.1f}% of image is off-page (clipped "
+                f"by viewer to page bounds).\n"
+                f"    Image rect: ({rect.x0:.2f}, {rect.y0:.2f}) to "
+                f"({rect.x1:.2f}, {rect.y1:.2f})\n"
+                f"    Page rect:  ({px0:.2f}, {py0:.2f}) to "
+                f"({px1:.2f}, {py1:.2f})\n"
+                f"    Off-page edges:\n"
+                + "\n".join(f"      - {ed}" for ed in edges)
+            ),
+        })
+
+
+# ===================================================================
+# RISK SCORING
+# ===================================================================
+
+# Per-finding contribution to an image's risk score.
+# Scores accumulate (capped at 100).
+RISK_WEIGHTS = {
+    "BBOX_CROP": 30,           # Image content is hidden by bbox
+    "EXPLICIT_CLIP": 30,       # Image content is hidden by clip path
+    "OFFPAGE": 25,             # Image extends beyond visible page
+    "OVERLAP_BACK_FULL": 35,   # Something fully hides this image
+    "OVERLAP_BACK_PARTIAL": 15,
+    "OVERLAP_FRONT_FULL": 20,  # This image fully hides something else
+    "OVERLAP_FRONT_PARTIAL": 8,
+    "SOFT_MASK": 5,
+    "IMAGE_SMASK": 5,
+    "COMPLEX_TRANSFORM": 5,
+}
+
+RISK_SCORE_CAP = 100
+
+
+def compute_risk_scores(findings, label_to_info):
+    """
+    Compute per-image risk scores from the findings list.
+
+    Returns: {label: int_score_0_to_100}
+
+    Scoring rules:
+      - BBOX_CROP / EXPLICIT_CLIP applied to an image: +30 each
+      - OFFPAGE: +25
+      - OVERLAP where this image is the back image:
+          FULL concealment    +35
+          PARTIAL concealment +15
+      - OVERLAP where this image is the front image:
+          FULL concealment    +20 (it actively hides another image)
+          PARTIAL concealment +8
+      - SOFT_MASK / IMAGE_SMASK: +5 each
+      - COMPLEX_TRANSFORM: +5 each
+    """
+    scores = {label: 0 for label in label_to_info}
+
+    for f in findings:
+        ftype = f["type"]
+        image_field = f.get("image", "")
+
+        if ftype == "OVERLAP" and "_overlap" in f:
+            ol = f["_overlap"]
+            front = ol["front_label"]
+            back = ol["back_label"]
+            concealment = ol.get("concealment", "")
+
+            if concealment.startswith("FULL"):
+                scores[back] = scores.get(back, 0) \
+                    + RISK_WEIGHTS["OVERLAP_BACK_FULL"]
+                scores[front] = scores.get(front, 0) \
+                    + RISK_WEIGHTS["OVERLAP_FRONT_FULL"]
+            elif concealment.startswith("PARTIAL") \
+                    or concealment.startswith("VARIABLE"):
+                scores[back] = scores.get(back, 0) \
+                    + RISK_WEIGHTS["OVERLAP_BACK_PARTIAL"]
+                scores[front] = scores.get(front, 0) \
+                    + RISK_WEIGHTS["OVERLAP_FRONT_PARTIAL"]
+            continue
+
+        # All other finding types are scored against the labels in
+        # the image field. The field may contain a single label, a
+        # comma-separated list (when a Form XObject contains multiple
+        # images), or a slash-separated pair (which only happens for
+        # OVERLAP, handled above).
+        weight = RISK_WEIGHTS.get(ftype, 0)
+        if weight == 0:
+            continue
+
+        for chunk in image_field.split("/"):
+            for label in chunk.split(","):
+                label = label.strip()
+                if label in scores:
+                    scores[label] += weight
+
+    # Cap at 100
+    return {label: min(s, RISK_SCORE_CAP)
+            for label, s in scores.items()}
+
+
 # ===================================================================
 # CONSOLE REPORTING
 # ===================================================================
@@ -1077,7 +1292,7 @@ def print_report(all_findings):
         print(f"  [{t}] {label}: {count}")
     print()
 
-    high_severity = {"BBOX_CROP", "EXPLICIT_CLIP", "OVERLAP"}
+    high_severity = {"BBOX_CROP", "EXPLICIT_CLIP", "OVERLAP", "OFFPAGE"}
     idx = 0
     for page_num in sorted(all_findings.keys()):
         for f in all_findings[page_num]:
@@ -1210,18 +1425,20 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
 
         # Insert images
         label_to_image_id = {}
+        risk_scores = pd.get("risk_scores", {})
         for label in sorted(label_to_info.keys()):
             info = label_to_info[label]
             t = transparency.get(label, {})
             image_data_id = xref_to_image_data_id.get(info["xref"])
+            risk = risk_scores.get(label, 0)
 
             cur.execute("""
                 INSERT INTO images
                     (page_id, image_data_id, label,
                      z_order, opacity, blend_mode,
                      has_smask, in_transparency_group,
-                     form_xobject_xref)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     form_xobject_xref, risk_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 page_id,
                 image_data_id,
@@ -1232,6 +1449,7 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
                 1 if t.get("has_smask") else 0,
                 1 if t.get("in_transparency_group") else 0,
                 info.get("form_xref", 0),
+                risk,
             ))
             label_to_image_id[label] = cur.lastrowid
 
@@ -1440,12 +1658,17 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
         check_overlapping_images(page_mu, page_num, findings,
                                  label_to_info, transparency)
         check_image_smasks(page_pk, page_num, findings, label_to_info)
+        check_offpage_images(page_mu, page_num, findings, label_to_info)
+
+        # Compute per-image risk scores from the findings on this page
+        risk_scores = compute_risk_scores(findings, label_to_info)
 
         all_findings[page_num] = findings
         page_data[page_num] = {
             "label_to_info": label_to_info,
             "transparency": transparency,
             "findings": findings,
+            "risk_scores": risk_scores,
         }
 
     doc_mu.close()
@@ -1468,6 +1691,26 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
               f"{os.path.abspath(extract_dir)}")
     print(f"  {len(pdf_metadata)} metadata entries stored.")
     print(f"  {len(pdf_versions)} version marker(s) stored.")
+
+    # High-risk image summary
+    high_risk = []
+    total_risk_imgs = 0
+    for page_num, pd in page_data.items():
+        for label, score in pd.get("risk_scores", {}).items():
+            if score > 0:
+                total_risk_imgs += 1
+            if score >= 30:
+                high_risk.append((page_num, label, score))
+
+    if total_risk_imgs:
+        print(f"  {total_risk_imgs} image(s) carry a non-zero risk score.")
+    if high_risk:
+        high_risk.sort(key=lambda x: -x[2])
+        print(f"  {len(high_risk)} high-risk image(s) (score >= 30):")
+        for page_num, label, score in high_risk[:10]:
+            print(f"    page {page_num}, {label}: risk score {score}")
+        if len(high_risk) > 10:
+            print(f"    ... and {len(high_risk) - 10} more")
 
     return {
         "pdf": pdf_path,
@@ -1699,7 +1942,7 @@ def launch_gui(initial_pdfs=None, initial_db=None,
     # ===================================================================
     pdf_files = list(initial_pdfs) if initial_pdfs else []
     db_path_var = tk.StringVar(
-        value=initial_db or "pdf_forensics.db")
+        value=initial_db or "pdf_image_forensics.db")
     output_dir_var = tk.StringVar(value=initial_output or "")
     store_images_var = tk.BooleanVar(value=initial_store_images)
 
@@ -2028,9 +2271,9 @@ if __name__ == "__main__":
     parser.add_argument("pdf", nargs="*",
                         help="Input PDF file(s)")
     parser.add_argument("-d", "--database",
-                        default="pdf_forensics.db",
+                        default="pdf_image_forensics.db",
                         help="SQLite database path "
-                             "(default: pdf_forensics.db)")
+                             "(default: pdf_image_forensics.db)")
     parser.add_argument("-e", "--extract-dir",
                         default=None,
                         help="Output directory. For multiple PDFs, "
