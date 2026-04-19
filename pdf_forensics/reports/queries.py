@@ -15,7 +15,6 @@ col_type is one of:
   - "numeric" : number, filtered by expressions (>5, >=10, <3, 5-10)
   - "date"    : ISO date string, filtered as text
   - "hash"    : hash string, displayed monospace, prefix-match filter
-  - "nil"     : text that shows "nil" for empty values
 """
 
 from collections import OrderedDict
@@ -106,7 +105,7 @@ def _query_metadata_pivoted(conn):
     meta_col_names = []
     for (source, key), display in sorted_keys:
         columns.append({
-            "name": display, "label": display, "col_type": "nil"
+            "name": display, "label": display, "col_type": "text"
         })
         meta_col_names.append(display)
 
@@ -115,7 +114,7 @@ def _query_metadata_pivoted(conn):
     for aid in pdf_data:
         record = dict(pdf_info[aid])
         for col_name in meta_col_names:
-            record[col_name] = pdf_data[aid].get(col_name, "nil")
+            record[col_name] = pdf_data[aid].get(col_name, "")
         data.append(record)
 
     return columns, data
@@ -195,7 +194,7 @@ def _query_exif_pivoted(conn):
     meta_col_names = []
     for (source, key), display in sorted_keys:
         columns.append({
-            "name": display, "label": display, "col_type": "nil"
+            "name": display, "label": display, "col_type": "text"
         })
         meta_col_names.append(display)
 
@@ -203,7 +202,7 @@ def _query_exif_pivoted(conn):
     for md5 in img_data:
         record = dict(img_info[md5])
         for col_name in meta_col_names:
-            record[col_name] = img_data[md5].get(col_name, "nil")
+            record[col_name] = img_data[md5].get(col_name, "")
         data.append(record)
 
     return columns, data
@@ -445,10 +444,10 @@ REPORTS = [
         """,
         "columns": [
             {"name": "Filename",  "label": "Filename",  "col_type": "text"},
-            {"name": "Creator",   "label": "Creator",   "col_type": "nil"},
-            {"name": "Producer",  "label": "Producer",  "col_type": "nil"},
-            {"name": "Created",   "label": "Created",   "col_type": "nil"},
-            {"name": "Modified",  "label": "Modified",  "col_type": "nil"},
+            {"name": "Creator",   "label": "Creator",   "col_type": "text"},
+            {"name": "Producer",  "label": "Producer",  "col_type": "text"},
+            {"name": "Created",   "label": "Created",   "col_type": "text"},
+            {"name": "Modified",  "label": "Modified",  "col_type": "text"},
             {"name": "Pages",     "label": "Pages",     "col_type": "numeric"},
             {"name": "PDF MD5",   "label": "PDF MD5",   "col_type": "hash"},
         ],

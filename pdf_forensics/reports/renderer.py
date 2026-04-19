@@ -125,11 +125,6 @@ def _render_html(title, description, columns, data, db_path,
 
             if col["col_type"] == "hash" and val:
                 display = f'<span class="hash">{esc(val)}</span>'
-            elif col["col_type"] == "nil" and (
-                    val == "" or val == "nil"):
-                display = '<span class="nil">nil</span>'
-            elif col["col_type"] == "nil" and val:
-                display = esc(val)
 
             raw = str(val) if val is not None else ""
 
@@ -145,6 +140,8 @@ def _render_html(title, description, columns, data, db_path,
         data_rows.append("<tr>" + "".join(cells) + "</tr>")
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db_basename = os.path.basename(db_path) if db_path else "report"
+    esc_js_db_name = '"' + db_basename.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
     sticky_css = ""
     if sticky_cols > 0:
@@ -250,9 +247,7 @@ def _render_html(title, description, columns, data, db_path,
     font-family: "Consolas", "Monaco", monospace;
     font-size: 11px; color: #7A7A7A;
   }}
-  .nil {{
-    color: #555; font-style: italic;
-  }}
+
   .num {{ font-variant-numeric: tabular-nums; }}
 {sticky_css}
   @media print {{
@@ -267,7 +262,6 @@ def _render_html(title, description, columns, data, db_path,
     td {{ color: #000; border-bottom: 1px solid #eee; }}
     tr:hover td {{ background: inherit; }}
     .hash {{ color: #555; }}
-    .nil {{ color: #999; }}
     tr.filter-row {{ display: none; }}
     .sticky-col {{ position: static !important; }}
   }}
@@ -289,6 +283,8 @@ def _render_html(title, description, columns, data, db_path,
   <div class="stat">Rows: <strong id="visible-count">{row_count}</strong>
     / {row_count}</div>
   <button onclick="clearFilters()">Clear filters</button>
+  <button onclick="exportCSV(false)">Export all to CSV</button>
+  <button onclick="exportCSV(true)">Export filtered to CSV</button>
   <button onclick="window.print()">Print / PDF</button>
 </div>
 
@@ -415,6 +411,63 @@ def _render_html(title, description, columns, data, db_path,
   window.clearFilters = function() {{
     filters.forEach(f => {{ f.value = ""; }});
     applyFilters();
+  }};
+
+  window.exportCSV = function(filteredOnly) {{
+    // Build header row from sortable th elements
+    const headerRow = [];
+    headers.forEach(th => {{
+      // Get text content without the sort icon
+      let text = th.textContent.replace(/[\\u25B2\\u25BC]/g, "").trim();
+      headerRow.push(text);
+    }});
+
+    // Build data rows
+    const dataRows = [];
+    tbody.querySelectorAll("tr").forEach(row => {{
+      if (filteredOnly && row.classList.contains("hidden")) return;
+      const cells = [];
+      row.querySelectorAll("td").forEach(td => {{
+        cells.push(td.dataset.raw || "");
+      }});
+      dataRows.push(cells);
+    }});
+
+    // CSV escape helper
+    function csvEscape(val) {{
+      const s = String(val);
+      if (s.includes(",") || s.includes('"') ||
+          s.includes("\\n") || s.includes("\\r")) {{
+        return '"' + s.replace(/"/g, '""') + '"';
+      }}
+      return s;
+    }}
+
+    // Build CSV string
+    let csv = headerRow.map(csvEscape).join(",") + "\\n";
+    dataRows.forEach(row => {{
+      csv += row.map(csvEscape).join(",") + "\\n";
+    }});
+
+    // Generate filename from page title and database name
+    const dbName = {esc_js_db_name};
+    // Extract case prefix from DB name (e.g., "CASE-001" from "CASE-001_forensics_...")
+    const casePrefix = dbName.split("_forensics_")[0] || dbName.replace(/\\.db$/i, "");
+    const title = document.title.split(" — ")[0]
+      .replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_");
+    const suffix = filteredOnly ? "_filtered" : "";
+    const filename = casePrefix + "_" + title + suffix + ".csv";
+
+    // Trigger download
+    const blob = new Blob([csv], {{ type: "text/csv;charset=utf-8;" }});
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
   }};
 }})();
 </script>
