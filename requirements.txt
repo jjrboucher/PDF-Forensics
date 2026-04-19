@@ -1,3 +1,5 @@
 PyMuPDF
 pikepdf
 Pillow
+networkx
+pyvis

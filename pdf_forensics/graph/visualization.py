@@ -1,95 +1,18 @@
 """
-PDF Forensics — Image Relationship Graph
+Graph visualization and custom UI injection.
 
-Reads a database produced by "PDF forensics.py" and renders an
-interactive graph showing which images appear in multiple documents
-or on multiple pages.
-
-Features:
-  - Actual image thumbnails embedded in the HTML and shown on hover
-  - Right-click an image node to exclude it from the graph
-  - Excluded images panel for review and restoration
-  - Cross-document images highlighted in orange
-  - Image nodes sized by number of placements
-  - Stable layout (physics disabled after stabilization)
-
-Usage: python graph_analysis.py [database.db]
+visualize_graph() creates a pyvis HTML file, then inject_custom_ui()
+post-processes it to add the interactive features (right-click menus,
+exclude/restore, report generation, etc.).
 """
 
-import sys
 import os
-import base64
-import sqlite3
 import json
-from collections import defaultdict
 
-import networkx as nx
-from pyvis.network import Network
-
-
-# ===================================================================
-# Configuration
-# ===================================================================
-
-# Maximum thumbnail size (longest edge) embedded in the HTML.
-# Larger = better quality in tooltip, but much larger HTML file.
-THUMBNAIL_MAX_SIZE = 200
-
-# Maximum bytes for an embedded image (before resizing).
-# Images larger than this are always resized.
-THUMBNAIL_MAX_BYTES = 500 * 1024  # 500 KB
-
-
-# ===================================================================
-# Database selection
-# ===================================================================
-
-def select_database(cli_path=None):
-    """Return the path to the database to use."""
-    if cli_path:
-        if os.path.isfile(cli_path):
-            return cli_path
-        print(f"Warning: {cli_path} not found. Opening file picker...")
-
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        path = filedialog.askopenfilename(
-            title="Select PDF Forensics database",
-            filetypes=[
-                ("SQLite database", "*.db *.sqlite *.sqlite3"),
-                ("All files", "*.*"),
-            ],
-        )
-        root.destroy()
-        if path and os.path.isfile(path):
-            return path
-        if not path:
-            print("No database selected.")
-            return None
-    except Exception as e:
-        print(f"GUI unavailable ({e}). Falling back to prompt.")
-        path = input("Database path: ").strip().strip('"').strip("'")
-        if path and os.path.isfile(path):
-            return path
-
-    return None
-
-
-def validate_database(conn):
-    """Check that the expected tables exist."""
-    required = {"analyses", "pages", "images", "image_data"}
-    cur = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'")
-    tables = {row[0] for row in cur.fetchall()}
-    missing = required - tables
-    if missing:
-        raise RuntimeError(
-            f"Database is missing required tables: "
-            f"{', '.join(sorted(missing))}. "
-            f"Is this a PDF Forensics database?")
+try:
+    from pyvis.network import Network
+except ImportError:
+    pass
 
 
 def get_pdf_dirs_from_db(conn):
@@ -168,459 +91,6 @@ def select_output_path(db_path, conn,
         return path if path else suggested
 
 
-# ===================================================================
-# Data loading
-# ===================================================================
-
-def load_data(conn, scope="cross_document"):
-    """
-    Load image placements that appear more than once.
-
-    scope options:
-      'all_placements'  : md5 appears in 2+ image placements
-      'cross_page'      : md5 appears on 2+ distinct pages
-      'cross_document'  : md5 appears in 2+ distinct documents
-    """
-    if scope == "cross_document":
-        dup_filter = """
-            SELECT idata.md5_hash
-            FROM image_data idata
-            JOIN images i ON i.image_data_id = idata.id
-            JOIN pages p ON p.id = i.page_id
-            GROUP BY idata.md5_hash
-            HAVING COUNT(DISTINCT p.analysis_id) > 1
-        """
-    elif scope == "cross_page":
-        dup_filter = """
-            SELECT idata.md5_hash
-            FROM image_data idata
-            JOIN images i ON i.image_data_id = idata.id
-            GROUP BY idata.md5_hash
-            HAVING COUNT(DISTINCT i.page_id) > 1
-        """
-    else:
-        dup_filter = """
-            SELECT idata.md5_hash
-            FROM image_data idata
-            JOIN images i ON i.image_data_id = idata.id
-            GROUP BY idata.md5_hash
-            HAVING COUNT(i.id) > 1
-        """
-
-    # The risk_score column was added in a later schema version.
-    # Detect whether it exists so we degrade gracefully.
-    cur = conn.execute("PRAGMA table_info(images)")
-    has_risk = any(row[1] == "risk_score" for row in cur.fetchall())
-    risk_select = "i.risk_score AS risk_score" if has_risk \
-        else "0 AS risk_score"
-
-    query = f"""
-        SELECT
-            a.id AS analysis_id,
-            a.pdf_filename,
-            p.id AS page_id,
-            p.page_number,
-            i.id AS image_id,
-            i.label AS image_label,
-            idata.md5_hash,
-            idata.format_ext,
-            idata.width_px,
-            idata.height_px,
-            {risk_select}
-        FROM image_data idata
-        JOIN images i   ON i.image_data_id = idata.id
-        JOIN pages p    ON p.id = i.page_id
-        JOIN analyses a ON a.id = p.analysis_id
-        WHERE idata.md5_hash IN ({dup_filter})
-        ORDER BY idata.md5_hash, a.id, p.page_number
-    """
-    return conn.execute(query).fetchall()
-
-
-def load_image_bytes(conn, md5_set):
-    """
-    Load image bytes for the given md5 hashes.
-
-    Returns a dict: {md5: (bytes, format_ext, width, height)}
-    Only the first occurrence per md5 is loaded (since duplicates
-    have identical bytes by definition).
-    """
-    if not md5_set:
-        return {}
-
-    placeholders = ",".join(["?"] * len(md5_set))
-    query = f"""
-        SELECT md5_hash, image_bytes, format_ext, width_px, height_px
-        FROM image_data
-        WHERE md5_hash IN ({placeholders})
-          AND image_bytes IS NOT NULL
-        GROUP BY md5_hash
-    """
-    result = {}
-    for row in conn.execute(query, list(md5_set)):
-        md5, blob, ext, w, h = row
-        if blob:
-            result[md5] = (bytes(blob), ext, w, h)
-    return result
-
-
-def load_findings_for_md5s(conn, md5_set):
-    """
-    Return a dict: {md5: [(finding_type_code, severity, role,
-                           pdf_filename, page_number, detail), ...]}
-
-    Aggregates every finding linked to any placement of each
-    image (by md5 hash). Used for tooltips and risk explanations.
-    """
-    findings = {md5: [] for md5 in md5_set}
-    if not md5_set:
-        return findings
-
-    placeholders = ",".join(["?"] * len(md5_set))
-    try:
-        rows = conn.execute(f"""
-            SELECT
-                idata.md5_hash,
-                ft.code,
-                ft.severity,
-                fi.role,
-                a.pdf_filename,
-                p.page_number,
-                f.detail
-            FROM image_data idata
-            JOIN images i          ON i.image_data_id = idata.id
-            JOIN finding_images fi ON fi.image_id = i.id
-            JOIN findings f        ON f.id = fi.finding_id
-            JOIN finding_types ft  ON ft.id = f.finding_type_id
-            JOIN pages p           ON p.id = i.page_id
-            JOIN analyses a        ON a.id = p.analysis_id
-            WHERE idata.md5_hash IN ({placeholders})
-            ORDER BY ft.severity DESC, ft.code
-        """, list(md5_set)).fetchall()
-    except Exception:
-        return findings
-
-    for row in rows:
-        md5 = row[0]
-        findings[md5].append({
-            "code":     row[1],
-            "severity": row[2],
-            "role":     row[3],
-            "pdf":      row[4],
-            "page":     row[5],
-            "detail":   row[6],
-        })
-    return findings
-
-
-# ===================================================================
-# Thumbnail generation
-# ===================================================================
-
-def make_thumbnail_data_uri(image_bytes, ext, width, height):
-    """
-    Convert image bytes to a base64 data URI, resizing if needed.
-
-    Returns (data_uri, displayed_width, displayed_height) or None
-    if the image can't be processed.
-    """
-    if not image_bytes:
-        return None
-
-    # If image is small enough and common format, embed as-is
-    if (len(image_bytes) <= THUMBNAIL_MAX_BYTES
-            and width and height
-            and max(width, height) <= THUMBNAIL_MAX_SIZE):
-        mime = f"image/{ext}" if ext in ("jpeg", "jpg", "png",
-                                          "gif", "webp") else None
-        if mime:
-            b64 = base64.b64encode(image_bytes).decode("ascii")
-            return (f"data:{mime};base64,{b64}", width, height)
-
-    # Otherwise resize via Pillow
-    try:
-        from PIL import Image
-        import io
-    except ImportError:
-        return None
-
-    try:
-        img = Image.open(io.BytesIO(image_bytes))
-        img.load()
-    except Exception:
-        return None
-
-    # Convert mode if needed for JPEG output
-    if img.mode in ("RGBA", "LA", "P"):
-        if img.mode == "P":
-            img = img.convert("RGBA")
-        # Preserve transparency by outputting PNG
-        output_format = "PNG"
-        mime = "image/png"
-    else:
-        output_format = "JPEG"
-        mime = "image/jpeg"
-
-    # Resize preserving aspect ratio
-    orig_w, orig_h = img.size
-    max_edge = max(orig_w, orig_h)
-    if max_edge > THUMBNAIL_MAX_SIZE:
-        scale = THUMBNAIL_MAX_SIZE / max_edge
-        new_w = int(orig_w * scale)
-        new_h = int(orig_h * scale)
-        img = img.resize((new_w, new_h), Image.LANCZOS)
-    else:
-        new_w, new_h = orig_w, orig_h
-
-    buf = io.BytesIO()
-    save_kwargs = {"optimize": True}
-    if output_format == "JPEG":
-        save_kwargs["quality"] = 80
-    img.save(buf, format=output_format, **save_kwargs)
-    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-    return (f"data:{mime};base64,{b64}", new_w, new_h)
-
-
-# ===================================================================
-# Graph construction
-# ===================================================================
-
-COLOR_DOC          = "#378ADD"  # blue
-COLOR_PAGE         = "#1D9E75"  # teal-green
-
-# Image fill color is determined by risk score:
-#   low  (0-14)  : green
-#   mid  (15-34) : yellow/amber
-#   high (35+)   : red
-COLOR_RISK_LOW   = "#5DCAA5"  # green
-COLOR_RISK_MID   = "#EF9F27"  # amber
-COLOR_RISK_HIGH  = "#E24B4A"  # red
-
-# Cross-document images get an unmistakable orange border on top
-# of whatever fill color they have.
-COLOR_CROSS_DOC_BORDER = "#FA0F00"
-
-RISK_THRESHOLD_MID  = 15
-RISK_THRESHOLD_HIGH = 35
-
-
-def risk_tier(score):
-    """Return 'low' | 'mid' | 'high' based on the numeric score."""
-    if score is None:
-        return "low"
-    if score >= RISK_THRESHOLD_HIGH:
-        return "high"
-    if score >= RISK_THRESHOLD_MID:
-        return "mid"
-    return "low"
-
-
-def risk_color(score):
-    """Return the fill color for a given risk score."""
-    tier = risk_tier(score)
-    return {
-        "low":  COLOR_RISK_LOW,
-        "mid":  COLOR_RISK_MID,
-        "high": COLOR_RISK_HIGH,
-    }[tier]
-
-
-def build_graph(rows, thumbnails):
-    """
-    Build a NetworkX graph from duplicate image rows.
-
-    Each row tuple now includes risk_score as its 11th column.
-    Image color is based on the maximum risk score of any
-    placement of that image. Cross-document images get an orange
-    border drawn on top of the risk-tier fill color.
-    """
-    G = nx.Graph()
-
-    md5_doc_count = defaultdict(set)
-    md5_placements = defaultdict(int)
-    md5_max_risk = defaultdict(int)
-    for row in rows:
-        analysis_id = row[0]
-        md5 = row[6]
-        risk = row[10] if len(row) > 10 else 0
-        md5_doc_count[md5].add(analysis_id)
-        md5_placements[md5] += 1
-        if risk > md5_max_risk[md5]:
-            md5_max_risk[md5] = risk
-
-    for row in rows:
-        (analysis_id, pdf_filename, page_id, page_number,
-         image_id, image_label, md5, ext, width, height,
-         risk_score) = row
-
-        doc_node = f"doc_{analysis_id}"
-        page_node = f"page_{page_id}"
-        image_node = f"img_{md5}"
-
-        if not G.has_node(doc_node):
-            G.add_node(
-                doc_node,
-                label=pdf_filename,
-                color=COLOR_DOC,
-                shape="box",
-                size=25,
-                node_type="document",
-                pdf_filename=pdf_filename,
-            )
-
-        if not G.has_node(page_node):
-            G.add_node(
-                page_node,
-                label=f"p.{page_number}",
-                color=COLOR_PAGE,
-                shape="ellipse",
-                size=15,
-                node_type="page",
-                page_number=page_number,
-                pdf_filename=pdf_filename,
-            )
-
-        if not G.has_node(image_node):
-            doc_count = len(md5_doc_count[md5])
-            placements = md5_placements[md5]
-            is_cross_doc = doc_count > 1
-            max_risk = md5_max_risk[md5]
-            fill = risk_color(max_risk)
-            size = min(20 + placements * 3, 60)
-
-            # vis.js color object: separate background and border.
-            # Cross-doc images get a thick orange border on top of
-            # whatever risk-tier fill they have.
-            if is_cross_doc:
-                color_obj = {
-                    "background": fill,
-                    "border": COLOR_CROSS_DOC_BORDER,
-                    "highlight": {
-                        "background": fill,
-                        "border": COLOR_CROSS_DOC_BORDER,
-                    },
-                }
-            else:
-                color_obj = fill
-
-            # Note: image tooltips are built as real DOM elements on
-            # the JS side (see inject_custom_ui) because vis.js will
-            # HTML-escape string titles. We omit the title here and
-            # have the JS setupCustomUI function populate it.
-
-            node_attrs = {
-                "label": md5[:8],
-                "color": color_obj,
-                "shape": "dot",
-                "size": size,
-                "node_type": "image",
-                "md5": md5,
-                "risk_score": int(max_risk),
-                "is_cross_doc": is_cross_doc,
-            }
-            if is_cross_doc:
-                # Visible border width — applied to all cross-doc nodes
-                node_attrs["borderWidth"] = 4
-                node_attrs["borderWidthSelected"] = 6
-
-            G.add_node(image_node, **node_attrs)
-
-        G.add_edge(doc_node, page_node)
-        G.add_edge(
-            page_node, image_node,
-            title=f"{image_label} on page {page_number}",
-        )
-
-    return G
-
-
-# ===================================================================
-# Visualization
-# ===================================================================
-
-def build_image_metadata(rows, findings_by_md5=None):
-    """
-    Build a metadata dict keyed by md5 for the JavaScript side.
-
-    findings_by_md5 (optional): dict from load_findings_for_md5s,
-    used to attach the per-image finding list to the JS metadata.
-    """
-    findings_by_md5 = findings_by_md5 or {}
-    meta = {}
-    usage = defaultdict(list)
-    md5_max_risk = defaultdict(int)
-    md5_doc_set = defaultdict(set)
-
-    for row in rows:
-        analysis_id = row[0]
-        pdf_filename = row[1]
-        page_number = row[3]
-        image_label = row[5]
-        md5 = row[6]
-        ext = row[7]
-        width = row[8]
-        height = row[9]
-        risk = row[10] if len(row) > 10 else 0
-
-        usage[md5].append({
-            "pdf": pdf_filename,
-            "page": page_number,
-            "label": image_label,
-            "risk": int(risk),
-        })
-        md5_doc_set[md5].add(analysis_id)
-        if risk > md5_max_risk[md5]:
-            md5_max_risk[md5] = risk
-
-        if md5 not in meta:
-            meta[md5] = {
-                "md5": md5,
-                "format": ext,
-                "width": width,
-                "height": height,
-                "usage": [],
-            }
-
-    for md5, entries in usage.items():
-        meta[md5]["usage"] = entries
-        meta[md5]["risk_score"]  = int(md5_max_risk[md5])
-        meta[md5]["risk_tier"]   = risk_tier(md5_max_risk[md5])
-        meta[md5]["is_cross_doc"] = len(md5_doc_set[md5]) > 1
-        meta[md5]["findings"]     = findings_by_md5.get(md5, [])
-
-    return meta
-
-
-def build_document_metadata(rows):
-    """
-    Build a metadata dict keyed by analysis_id describing each
-    document represented in the graph. Used for the excluded
-    documents panel and for restoration.
-    """
-    meta = {}
-    image_set_by_doc = defaultdict(set)
-    page_set_by_doc = defaultdict(set)
-
-    for row in rows:
-        analysis_id = row[0]
-        pdf_filename = row[1]
-        page_id = row[2]
-        md5 = row[6]
-        page_set_by_doc[analysis_id].add(page_id)
-        image_set_by_doc[analysis_id].add(md5)
-        if analysis_id not in meta:
-            meta[analysis_id] = {
-                "analysis_id": analysis_id,
-                "pdf_filename": pdf_filename,
-            }
-
-    for aid in meta:
-        meta[aid]["page_count"]  = len(page_set_by_doc[aid])
-        meta[aid]["image_count"] = len(image_set_by_doc[aid])
-
-    return meta
-
-
 def visualize_graph(G, image_meta, thumbnails, db_path,
                     doc_meta=None,
                     output_path="image_relationship_graph.html"):
@@ -689,10 +159,6 @@ def visualize_graph(G, image_meta, thumbnails, db_path,
     return os.path.abspath(output_path)
 
 
-# ===================================================================
-# Custom UI injection
-# ===================================================================
-
 def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
                      doc_meta=None):
     """
@@ -743,7 +209,9 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
       }
       #toolbar .legend-item {
         display: flex; align-items: center; gap: 5px;
+        cursor: pointer; padding: 2px 6px; border-radius: 3px;
       }
+      #toolbar .legend-item:hover { background: rgba(255,255,255,0.1); }
       #toolbar .legend .dot {
         display: inline-block; width: 10px; height: 10px;
         border-radius: 50%;
@@ -916,6 +384,18 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
       }
       #context-menu .menu-item:hover { background: #ED1C24; }
 
+      #legend-menu {
+        position: fixed; background: #252525;
+        border: 1px solid #3D3D3D; border-radius: 3px;
+        z-index: 2000; display: none; min-width: 200px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      }
+      #legend-menu .menu-item {
+        padding: 10px 16px; color: #F0F0F0; cursor: pointer;
+        font-family: "Segoe UI", sans-serif; font-size: 13px;
+      }
+      #legend-menu .menu-item:hover { background: #ED1C24; }
+
       .vis-tooltip {
         background-color: #252525 !important;
         border: 1px solid #3D3D3D !important;
@@ -933,10 +413,10 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     <div id="toolbar">
       <div class="title"><span class="accent">PDF</span> FORENSICS — Image Graph</div>
       <div class="legend">
-        <span class="legend-item"><span class="dot" style="background:#5DCAA5"></span>Low</span>
-        <span class="legend-item"><span class="dot" style="background:#EF9F27"></span>Mid</span>
-        <span class="legend-item"><span class="dot" style="background:#E24B4A"></span>High</span>
-        <span class="legend-item"><span class="dot ring"></span>Cross-doc</span>
+        <span class="legend-item" data-risk="low" title="Right-click for options"><span class="dot" style="background:#5DCAA5"></span>Low</span>
+        <span class="legend-item" data-risk="mid" title="Right-click for options"><span class="dot" style="background:#EF9F27"></span>Mid</span>
+        <span class="legend-item" data-risk="high" title="Right-click for options"><span class="dot" style="background:#E24B4A"></span>High</span>
+        <span class="legend-item" data-risk="crossdoc" title="Right-click for options"><span class="dot ring"></span>Cross-doc</span>
       </div>
       <div class="spacer"></div>
       <button id="exclude-all-btn">Exclude all images</button>
@@ -970,6 +450,10 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
       <div class="menu-item" id="menu-exclude">Exclude this image</div>
       <div class="menu-item" id="menu-toggle-report">Add to report</div>
       <div class="menu-item menu-doc-only" id="menu-exclude-doc">Exclude this document</div>
+    </div>
+    <div id="legend-menu">
+      <div class="menu-item" id="legend-exclude-tier">Exclude all</div>
+      <div class="menu-item" id="legend-include-tier">Include all</div>
     </div>
     """
 
@@ -1257,22 +741,21 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     }}
 
     function excludeAllImages() {{
-      // Collect all image node ids currently in the graph
-      const imageIds = [];
-      nodes.forEach(function(node) {{
-        if (nodeIsImage(node.id)) imageIds.push(node.id);
+      // Iterate IMAGE_META (the canonical list of all images) —
+      // not the live nodes DataSet. Individually-excluded images
+      // have already been removed from `nodes`, so iterating
+      // `nodes` would miss them. Iterating IMAGE_META guarantees
+      // every image ends up in the excluded list.
+      Object.keys(IMAGE_META).forEach(md5 => {{
+        excludedImages.add(md5);
       }});
-      imageIds.forEach(id => {{
-        excludedImages.add(md5FromNodeId(id));
-      }});
-      // Remove every non-image as well (since no image = no graph)
+      // Wipe the entire graph (no images = nothing to show)
       nodes.clear();
       edges.clear();
       updateExcludedPanel();
     }}
 
     function includeAllImages() {{
-      // Restore every image in IMAGE_META
       Object.keys(IMAGE_META).forEach(md5 => {{
         if (excludedImages.has(md5)) {{
           restoreImage(md5, {{
@@ -1283,6 +766,83 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
       }});
       updateExcludedPanel();
       relayoutNewNodes();
+    }}
+
+    // -----------------------------------------------------------------
+    // Risk-based bulk exclude / include
+    // -----------------------------------------------------------------
+    function excludeByRisk(tier) {{
+      // Exclude all images of a given risk tier
+      const toExclude = [];
+      Object.keys(IMAGE_META).forEach(md5 => {{
+        const meta = IMAGE_META[md5];
+        if (meta && (meta.risk_tier || "low") === tier
+            && !excludedImages.has(md5)) {{
+          toExclude.push(md5);
+        }}
+      }});
+      // Remove from graph
+      toExclude.forEach(md5 => {{
+        const nodeId = "img_" + md5;
+        if (nodes.get(nodeId)) {{
+          excludeImage(nodeId);
+        }} else {{
+          excludedImages.add(md5);
+        }}
+      }});
+      updateExcludedPanel();
+    }}
+
+    function includeByRisk(tier) {{
+      // Include all excluded images of a given risk tier
+      const toInclude = [];
+      excludedImages.forEach(md5 => {{
+        const meta = IMAGE_META[md5];
+        if (meta && (meta.risk_tier || "low") === tier) {{
+          toInclude.push(md5);
+        }}
+      }});
+      toInclude.forEach(md5 => {{
+        restoreImage(md5, {{ skipPanelUpdate: true, skipRelayout: true }});
+      }});
+      updateExcludedPanel();
+      if (toInclude.length > 0) relayoutNewNodes();
+    }}
+
+    function includeAllCrossDoc() {{
+      // Include all excluded images that are cross-document
+      const toInclude = [];
+      excludedImages.forEach(md5 => {{
+        const meta = IMAGE_META[md5];
+        if (meta && meta.is_cross_doc) {{
+          toInclude.push(md5);
+        }}
+      }});
+      toInclude.forEach(md5 => {{
+        restoreImage(md5, {{ skipPanelUpdate: true, skipRelayout: true }});
+      }});
+      updateExcludedPanel();
+      if (toInclude.length > 0) relayoutNewNodes();
+    }}
+
+    function excludeAllCrossDoc() {{
+      // Exclude all cross-document images currently in graph
+      const toExclude = [];
+      Object.keys(IMAGE_META).forEach(md5 => {{
+        const meta = IMAGE_META[md5];
+        if (meta && meta.is_cross_doc && !excludedImages.has(md5)) {{
+          toExclude.push(md5);
+        }}
+      }});
+      toExclude.forEach(md5 => {{
+        const nodeId = "img_" + md5;
+        if (nodes.get(nodeId)) {{
+          excludeImage(nodeId);
+        }} else {{
+          excludedImages.add(md5);
+        }}
+      }});
+      updateExcludedPanel();
     }}
 
     // -----------------------------------------------------------------
@@ -2174,6 +1734,7 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
 
       document.addEventListener("click", function() {{
         document.getElementById("context-menu").style.display = "none";
+        document.getElementById("legend-menu").style.display = "none";
       }});
 
       document.getElementById("menu-exclude").addEventListener("click", function(ev) {{
@@ -2259,6 +1820,57 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
         }}, 3000);
       }});
 
+      // ----- Legend right-click for bulk risk actions -----
+      let legendClickedRisk = null;
+
+      document.querySelectorAll(".legend-item").forEach(item => {{
+        item.addEventListener("contextmenu", function(ev) {{
+          ev.preventDefault();
+          ev.stopPropagation();
+          legendClickedRisk = item.getAttribute("data-risk");
+          const menu = document.getElementById("legend-menu");
+
+          // Update menu labels based on which legend dot was clicked
+          const excludeItem = document.getElementById("legend-exclude-tier");
+          const includeItem = document.getElementById("legend-include-tier");
+
+          if (legendClickedRisk === "crossdoc") {{
+            excludeItem.textContent = "Exclude all cross-doc images";
+            includeItem.textContent = "Include all cross-doc images";
+          }} else {{
+            const tierLabel = legendClickedRisk.toUpperCase();
+            excludeItem.textContent = "Exclude all " + tierLabel + " risk";
+            includeItem.textContent = "Include all " + tierLabel + " risk";
+          }}
+
+          menu.style.left = ev.pageX + "px";
+          menu.style.top = ev.pageY + "px";
+          menu.style.display = "block";
+        }});
+      }});
+
+      document.getElementById("legend-exclude-tier").addEventListener("click", function(ev) {{
+        ev.stopPropagation();
+        if (legendClickedRisk === "crossdoc") {{
+          excludeAllCrossDoc();
+        }} else if (legendClickedRisk) {{
+          excludeByRisk(legendClickedRisk);
+        }}
+        document.getElementById("legend-menu").style.display = "none";
+        legendClickedRisk = null;
+      }});
+
+      document.getElementById("legend-include-tier").addEventListener("click", function(ev) {{
+        ev.stopPropagation();
+        if (legendClickedRisk === "crossdoc") {{
+          includeAllCrossDoc();
+        }} else if (legendClickedRisk) {{
+          includeByRisk(legendClickedRisk);
+        }}
+        document.getElementById("legend-menu").style.display = "none";
+        legendClickedRisk = null;
+      }});
+
       updateExcludedPanel();
     }}
 
@@ -2290,162 +1902,3 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
 
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html)
-
-
-# ===================================================================
-# Summary
-# ===================================================================
-
-def print_summary(rows, G, thumbnail_count):
-    md5_set = {row[6] for row in rows}
-    doc_set = {row[0] for row in rows}
-    page_set = {row[2] for row in rows}
-
-    cross_doc_md5s = [
-        node for node, data in G.nodes(data=True)
-        if data.get("node_type") == "image"
-        and data.get("is_cross_doc")
-    ]
-
-    # Tally risk tiers
-    tier_counts = {"low": 0, "mid": 0, "high": 0}
-    for node, data in G.nodes(data=True):
-        if data.get("node_type") != "image":
-            continue
-        tier_counts[risk_tier(data.get("risk_score", 0))] += 1
-
-    print()
-    print("=" * 60)
-    print("Summary")
-    print("=" * 60)
-    print(f"  Unique duplicate images:  {len(md5_set)}")
-    print(f"  Documents involved:       {len(doc_set)}")
-    print(f"  Pages involved:           {len(page_set)}")
-    print(f"  Total placements:         {len(rows)}")
-    print(f"  Cross-document images:    {len(cross_doc_md5s)}")
-    print(f"  Risk tier breakdown:")
-    print(f"    HIGH (>={RISK_THRESHOLD_HIGH}):       "
-          f"{tier_counts['high']}")
-    print(f"    MID  ({RISK_THRESHOLD_MID}-{RISK_THRESHOLD_HIGH-1}):"
-          f"{'':>5}{tier_counts['mid']}")
-    print(f"    LOW  (<{RISK_THRESHOLD_MID}):        "
-          f"{tier_counts['low']}")
-    print(f"  Thumbnails embedded:      "
-          f"{thumbnail_count} / {len(md5_set)}")
-    if thumbnail_count < len(md5_set):
-        print("    (missing thumbnails = images not stored in DB)")
-
-
-# ===================================================================
-# Main
-# ===================================================================
-
-def prompt_scope():
-    print()
-    print("Select duplicate detection scope:")
-    print("  1. All placements      (same image appearing 2+ times)")
-    print("  2. Cross-page          (same image on 2+ distinct pages)")
-    print("  3. Cross-document      (same image in 2+ documents) "
-          "[most interesting]")
-    choice = input("Choice [1/2/3] (default 3): ").strip()
-    return {
-        "1": "all_placements",
-        "2": "cross_page",
-        "3": "cross_document",
-        "": "cross_document",
-    }.get(choice, "cross_document")
-
-
-def main():
-    cli_path = sys.argv[1] if len(sys.argv) > 1 else None
-    db_path = select_database(cli_path)
-    if not db_path:
-        print("No database selected. Exiting.")
-        sys.exit(1)
-
-    print(f"Database: {db_path}")
-
-    try:
-        conn = sqlite3.connect(db_path)
-        validate_database(conn)
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-    scope = prompt_scope()
-    print(f"Scope: {scope}")
-
-    print("Loading data...")
-    rows = load_data(conn, scope=scope)
-    print(f"Loaded {len(rows)} placement row(s)")
-
-    if not rows:
-        print("No duplicate images found for the selected scope.")
-        conn.close()
-        return
-
-    print("Loading image bytes...")
-    md5_set = {row[6] for row in rows}
-    image_bytes = load_image_bytes(conn, md5_set)
-    print(f"Retrieved bytes for {len(image_bytes)} unique image(s)")
-
-    print("Loading findings...")
-    findings_by_md5 = load_findings_for_md5s(conn, md5_set)
-    finding_count = sum(len(v) for v in findings_by_md5.values())
-    print(f"Loaded {finding_count} finding link(s)")
-
-    print("Generating thumbnails...")
-    thumbnails = {}
-    for md5, (blob, ext, w, h) in image_bytes.items():
-        thumb = make_thumbnail_data_uri(blob, ext, w, h)
-        if thumb:
-            thumbnails[md5] = thumb
-    print(f"Generated {len(thumbnails)} thumbnail(s)")
-
-    print("Building graph...")
-    G = build_graph(rows, thumbnails)
-
-    print("Building metadata dict...")
-    image_meta = build_image_metadata(rows, findings_by_md5)
-    doc_meta = build_document_metadata(rows)
-
-    # Choose output HTML path
-    output_path = select_output_path(db_path, conn)
-    if not output_path:
-        print("No output path. Exiting.")
-        conn.close()
-        sys.exit(1)
-
-    print(f"Output: {output_path}")
-    print("Rendering...")
-    output = visualize_graph(G, image_meta, thumbnails, db_path,
-                             doc_meta=doc_meta,
-                             output_path=output_path)
-
-    print_summary(rows, G, len(thumbnails))
-
-    print()
-    print(f"Graph written to: {output}")
-    print("Open it in your browser to interact with the graph.")
-    print()
-    print("Controls:")
-    print("  - Hover over a node: see details (images show thumbnails")
-    print("    plus risk score and findings summary)")
-    print("  - Right-click an image: exclude or add to report")
-    print("  - Right-click a document: exclude the whole document")
-    print("  - 'Excluded' button: review and restore excluded items")
-    print("  - 'Report' button: generate a printable HTML report")
-    print("  - 'Fit to screen': reset view")
-    print("  - 'Restart layout': re-run physics if things look cramped")
-    print()
-    print("Image colors:")
-    print("  GREEN  = low risk    (score 0-14)")
-    print("  YELLOW = mid risk    (score 15-34)")
-    print("  RED    = high risk   (score 35+)")
-    print("  Orange border = appears in 2+ documents")
-
-    conn.close()
-
-
-if __name__ == "__main__":
-    main()
