@@ -51,6 +51,8 @@ def main_cli():
                            help="Do not store image blobs in database")
     p_analyze.add_argument("--force", action="store_true",
                            help="Process PDFs even if already analyzed")
+    p_analyze.add_argument("--quiet", "-q", action="store_true",
+                           help="Suppress terminal output")
 
     # --- graph subcommand ---
     p_graph = sub.add_parser("graph",
@@ -127,7 +129,7 @@ def _cli_analyze(args, session, case):
     # Check for missing files
     valid = [p for p in pdfs if os.path.isfile(p)]
     missing = [p for p in pdfs if not os.path.isfile(p)]
-    if missing:
+    if missing and not args.quiet:
         print(f"Warning: {len(missing)} file(s) not found:")
         for p in missing[:10]:
             print(f"  {p}")
@@ -144,10 +146,11 @@ def _cli_analyze(args, session, case):
     db_path = args.database or session.make_db_path()
     extract_dir = args.extract_dir or session.extracted_images_dir
 
-    print(f"Case: {case}")
-    print(f"Processing {len(valid)} PDF(s)")
-    print(f"Database: {db_path}")
-    print(f"Output: {output_dir}")
+    if not args.quiet:
+        print(f"Case: {case}")
+        print(f"Processing {len(valid)} PDF(s)")
+        print(f"Database: {db_path}")
+        print(f"Output: {output_dir}")
 
     session.register_output("database", db_path)
 
@@ -156,7 +159,9 @@ def _cli_analyze(args, session, case):
         output_dir=extract_dir,
         store_images=not args.no_store_images,
         extract_to_disk=True,
-        session=session)
+        session=session,
+        quiet=args.quiet,
+        force=args.force)
 
     session.write_summary(
         stats={

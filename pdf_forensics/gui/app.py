@@ -9,12 +9,14 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from datetime import datetime
 
-from pdf_forensics import __version__, __tool_name__
+from pdf_forensics import __version__, __tool_name__, SCHEMA_REVISION
 from pdf_forensics.session import Session, load_config
 from pdf_forensics.database import (
     validate_database, init_db, check_pdf_already_analyzed,
 )
-from pdf_forensics.analysis.engine import process_pdfs, analyze_pdf
+from pdf_forensics.analysis.engine import (
+    process_pdfs, analyze_pdf, extract_prior_versions,
+)
 from pdf_forensics.gui.theme import *
 from pdf_forensics.gui.theme import apply_theme
 from pdf_forensics.gui.widgets import make_panel, stat_box
@@ -95,6 +97,68 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                           font=(FONT_FAMILY, 12, "bold"))
     case_label.pack(side="left", padx=(6, 0))
 
+    # Help button (right side, before case badge)
+    def show_about():
+        import platform as pf
+        env_lines = [
+            f"{__tool_name__} v{__version__}",
+            "",
+            f"Python: {sys.version.split()[0]}",
+            f"OS: {pf.platform()}",
+        ]
+        try:
+            import pymupdf
+            env_lines.append(f"PyMuPDF: {pymupdf.version}")
+        except Exception:
+            env_lines.append("PyMuPDF: not installed")
+        try:
+            import pikepdf
+            env_lines.append(f"pikepdf: {pikepdf.__version__}")
+        except Exception:
+            env_lines.append("pikepdf: not installed")
+        try:
+            import PIL
+            env_lines.append(f"Pillow: {PIL.__version__}")
+        except Exception:
+            env_lines.append("Pillow: not installed")
+        try:
+            import networkx
+            env_lines.append(f"networkx: {networkx.__version__}")
+        except Exception:
+            env_lines.append("networkx: not installed")
+        try:
+            import pyvis
+            env_lines.append(
+                f"pyvis: {getattr(pyvis, '__version__', 'installed')}")
+        except Exception:
+            env_lines.append("pyvis: not installed")
+
+        env_lines.append("")
+        env_lines.append(f"Schema revision: {SCHEMA_REVISION}")
+
+        if app["session"]:
+            env_lines.append(f"Case: {app['case_var'].get()}")
+            s = app["session"]
+            if s.db_dir:
+                env_lines.append(f"Output: {s.db_dir}")
+            if s.log_path:
+                env_lines.append(f"Log: {s.log_path}")
+
+        messagebox.showinfo("About", "\n".join(env_lines))
+
+    help_frame = tk.Frame(header, bg=BG_DARK)
+    help_frame.pack(side="right", padx=(0, 12), pady=14)
+    help_btn = tk.Label(
+        help_frame, text="?", bg=BG_INPUT, fg=TEXT_PRIM,
+        font=(FONT_FAMILY, 12, "bold"),
+        width=3, height=1, relief="flat", cursor="hand2")
+    help_btn.pack()
+    help_btn.bind("<Button-1>", lambda e: show_about())
+    help_btn.bind("<Enter>",
+                  lambda e: help_btn.config(bg=BG_HOVER))
+    help_btn.bind("<Leave>",
+                  lambda e: help_btn.config(bg=BG_INPUT))
+
     tk.Frame(root, bg=ACCENT, height=2).pack(fill="x")
 
     # ---------------------------------------------------------------
@@ -123,8 +187,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     frame_sizes = {
         "main":     (780, 520),
         "analysis": (1060, 720),
-        "graph":    (780, 580),
-        "reports":  (780, 720),
+        "graph":    (1060, 520),
+        "reports":  (1060, 720),
     }
 
     def center_window(w, h):
@@ -376,6 +440,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         opt_body,
         text="Store extracted images in database",
         variable=store_images_var).pack(anchor="w")
+    extract_versions_var = tk.BooleanVar(value=True)
+    ttk.Checkbutton(
+        opt_body,
+        text="Extract and process prior PDF versions",
+        variable=extract_versions_var).pack(anchor="w")
 
     # Run button at bottom of left panel
     action_row_a = tk.Frame(left_panel, bg=BG_DARK)
@@ -503,7 +572,13 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         log_to_gui(f"Database: {os.path.basename(db_val)}", "dim")
         log_to_gui("")
 
-        for i, pdf_path in enumerate(pdf_files, 1):
+        # Build a processing queue so extracted versions can be added
+        process_queue = list(pdf_files)
+        queue_idx = 0
+
+        while queue_idx < len(process_queue):
+            pdf_path = process_queue[queue_idx]
+            queue_idx += 1
             basename = os.path.basename(pdf_path)
 
             if not os.path.isfile(pdf_path):
@@ -528,7 +603,6 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             def on_page_progress(page_num, total_pages,
                                  _idx=progress_idx, _name=basename):
                 log_text.config(state="normal")
-                # Delete current progress line and rewrite it
                 log_text.delete(_idx, f"{_idx} lineend + 1 char")
                 log_text.insert(_idx,
                     f"  \u25cb {_name} — "
@@ -538,24 +612,47 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 root.update_idletasks()
 
             try:
+                # Check for duplicate before processing
+                already, dup_info = check_pdf_already_analyzed(
+                    conn, pdf_path)
+                force_this = False
+                if already:
+                    answer = messagebox.askyesno(
+                        "Duplicate PDF",
+                        f"{basename} has already been analyzed.\n\n"
+                        f"Previously analyzed as: "
+                        f"{dup_info['pdf_filename']}\n"
+                        f"Date: {dup_info['analyzed_at']}\n\n"
+                        f"Process again?")
+                    if not answer:
+                        log_text.config(state="normal")
+                        log_text.delete(progress_idx,
+                                        f"{progress_idx} lineend + 1 char")
+                        log_text.insert(progress_idx,
+                            f"  \u2298 {basename} — skipped by user\n",
+                            "skip")
+                        log_text.see("end")
+                        log_text.config(state="disabled")
+                        root.update_idletasks()
+                        continue
+                    force_this = True
+
                 summary = analyze_pdf(
                     pdf_path, db_val,
                     extract_dir=pdf_extract_dir,
                     store_images=store_images_var.get(),
                     conn=conn, session=session,
                     quiet=True,
-                    progress_callback=on_page_progress)
+                    progress_callback=on_page_progress,
+                    skip_duplicates=False,
+                    force=force_this)
 
                 # Replace progress line with final result
                 log_text.config(state="normal")
                 log_text.delete(progress_idx,
                                 f"{progress_idx} lineend + 1 char")
 
-                if summary and summary.get("skipped"):
-                    log_text.insert(progress_idx,
-                        f"  \u2298 {basename} — already in DB\n",
-                        "skip")
-                elif summary:
+                if summary:
                     imgs = summary["total_extracted"]
                     finds = summary["total_findings"]
                     total_imgs += imgs
@@ -565,6 +662,17 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                         f"  \u2713 {basename} — "
                         f"{imgs} img, {finds} findings\n",
                         "success")
+
+                    # Extract prior versions if enabled
+                    if extract_versions_var.get():
+                        version_paths = extract_prior_versions(
+                            pdf_path, out_dir, session=session)
+                        if version_paths:
+                            log_to_gui(
+                                f"    \u21b3 {len(version_paths)} prior "
+                                f"version(s) extracted, queued",
+                                "dim")
+                            process_queue.extend(version_paths)
                 else:
                     failed += 1
                     log_text.insert(progress_idx,
@@ -610,22 +718,33 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     run_btn_a.pack(fill="x")
 
     # ===================================================================
-    # GRAPH SUB-MENU FRAME
+    # GRAPH SUB-MENU FRAME (left-right split)
     # ===================================================================
     graph_frame = tk.Frame(content_area, bg=BG_DARK)
     frames["graph"] = graph_frame
 
-    graph_scroll = tk.Frame(graph_frame, bg=BG_DARK)
-    graph_scroll.pack(fill="both", expand=True, padx=20, pady=16)
-
-    back_row_g = tk.Frame(graph_scroll, bg=BG_DARK)
-    back_row_g.pack(fill="x", pady=(0, 10))
+    # Back button
+    back_row_g = tk.Frame(graph_frame, bg=BG_DARK)
+    back_row_g.pack(fill="x", padx=20, pady=(10, 6))
     ttk.Button(back_row_g, text="< Back to Main Menu",
                command=lambda: show_frame("main")).pack(side="left")
 
+    # Horizontal split
+    g_split = tk.Frame(graph_frame, bg=BG_DARK)
+    g_split.pack(fill="both", expand=True, padx=20, pady=(0, 8))
+
+    g_left = tk.Frame(g_split, bg=BG_DARK, width=420)
+    g_left.pack(side="left", fill="y", padx=(0, 10))
+    g_left.pack_propagate(False)
+
+    g_right = tk.Frame(g_split, bg=BG_DARK)
+    g_right.pack(side="left", fill="both", expand=True)
+
+    # --- LEFT: controls ---
+
     # DB picker
     graph_db_var = tk.StringVar()
-    gdb_body = make_panel(graph_scroll, "Database")
+    gdb_body = make_panel(g_left, "Database")
     gdb_row = tk.Frame(gdb_body, bg=BG_PANEL)
     gdb_row.pack(fill="x")
     ttk.Entry(gdb_row, textvariable=graph_db_var).pack(
@@ -646,7 +765,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
               style="Hint.TLabel").pack(anchor="w", pady=(6, 0))
 
     # Scope checkboxes
-    scope_body = make_panel(graph_scroll, "Scope (select one or more)")
+    scope_body = make_panel(g_left, "Scope (select one or more)")
     scope_vars = {
         "all_placements": tk.BooleanVar(value=True),
         "cross_page": tk.BooleanVar(value=True),
@@ -663,8 +782,45 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     variable=scope_vars["cross_document"]).pack(anchor="w")
 
     # Generate button
-    action_row_g = tk.Frame(graph_frame, bg=BG_DARK)
-    action_row_g.pack(fill="x", side="bottom", padx=20, pady=(0, 12))
+    action_row_g = tk.Frame(g_left, bg=BG_DARK)
+    action_row_g.pack(fill="x", side="bottom", pady=(8, 4))
+
+    # --- RIGHT: status log ---
+    g_log_outer = tk.Frame(g_right, bg=BORDER, padx=1, pady=1)
+    g_log_outer.pack(fill="both", expand=True)
+    g_log_inner = tk.Frame(g_log_outer, bg=BG_PANEL)
+    g_log_inner.pack(fill="both", expand=True)
+    ttk.Label(g_log_inner, text="GENERATION LOG",
+              style="Section.TLabel").pack(
+        anchor="w", padx=10, pady=(8, 4))
+
+    g_log_frame = tk.Frame(g_log_inner, bg=BG_PANEL)
+    g_log_frame.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+    g_log_scroll = tk.Scrollbar(g_log_frame)
+    g_log_scroll.pack(side="right", fill="y")
+    g_log_text = tk.Text(
+        g_log_frame, wrap="word", bg=BG_INPUT, fg=TEXT_PRIM,
+        insertbackground=TEXT_PRIM, highlightthickness=0,
+        borderwidth=0, font=(FONT_FAMILY, 9), padx=8, pady=6,
+        relief="flat", yscrollcommand=g_log_scroll.set)
+    g_log_text.pack(fill="both", expand=True)
+    g_log_scroll.config(command=g_log_text.yview)
+    g_log_text.tag_configure("success", foreground=SUCCESS)
+    g_log_text.tag_configure("error", foreground=ACCENT)
+    g_log_text.tag_configure("dim", foreground=TEXT_DIM)
+    g_log_text.tag_configure("bold",
+                             font=(FONT_FAMILY, 9, "bold"))
+    g_log_text.config(state="disabled")
+
+    def g_log(msg, tag=None):
+        g_log_text.config(state="normal")
+        if tag:
+            g_log_text.insert("end", msg + "\n", tag)
+        else:
+            g_log_text.insert("end", msg + "\n")
+        g_log_text.see("end")
+        g_log_text.config(state="disabled")
+        root.update_idletasks()
 
     def run_graph():
         if not HAS_GRAPH:
@@ -692,31 +848,49 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         run_btn_g.config(state="disabled")
         status_var.set("Generating graph(s)...")
         status_label.config(fg=ACCENT)
-        root.update_idletasks()
+
+        # Clear log
+        g_log_text.config(state="normal")
+        g_log_text.delete("1.0", "end")
+        g_log_text.config(state="disabled")
 
         session = app["session"]
         try:
             conn = sqlite3.connect(db)
             validate_database(conn)
 
+            g_log(f"Database: {os.path.basename(db)}", "dim")
+            g_log(f"Scopes: {', '.join(scopes)}", "dim")
+            g_log("")
+
             generated = []
             for scope in scopes:
                 session.log(f"Generating graph: scope={scope}")
+                g_log(f"  Loading data for {scope}...")
+
                 rows = load_data(conn, scope=scope)
                 if not rows:
+                    g_log(f"  \u2298 {scope} — no data", "dim")
                     session.log(f"  No data for scope {scope}")
                     continue
 
                 md5_set = {row[6] for row in rows}
+                g_log(f"  {len(rows)} placements, "
+                      f"{len(md5_set)} unique images")
+
                 image_bytes = load_image_bytes(conn, md5_set)
                 findings_by_md5 = load_findings_for_md5s(conn, md5_set)
 
+                g_log(f"  Generating thumbnails...")
+                root.update_idletasks()
                 thumbnails = {}
                 for md5, (blob, ext, w, h) in image_bytes.items():
                     thumb = make_thumbnail_data_uri(blob, ext, w, h)
                     if thumb:
                         thumbnails[md5] = thumb
 
+                g_log(f"  Building graph...")
+                root.update_idletasks()
                 G = build_graph(rows, thumbnails)
                 image_meta = build_image_metadata(rows, findings_by_md5)
                 doc_meta = build_document_metadata(rows)
@@ -726,6 +900,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 if not out_path:
                     out_path = f"graph-{scope_label}.html"
 
+                g_log(f"  Writing HTML...")
+                root.update_idletasks()
                 visualize_graph(
                     G, image_meta, thumbnails, db,
                     doc_meta=doc_meta,
@@ -734,51 +910,63 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 session.register_output("graph", out_path)
                 generated.append((scope, out_path))
                 session.log(f"  Generated: {out_path}")
+                g_log(f"  \u2713 {scope} — {os.path.basename(out_path)}",
+                      "success")
 
             conn.close()
 
+            g_log("")
             if generated:
+                g_log(f"Done. {len(generated)} graph(s) generated.",
+                      "bold")
                 status_var.set(
                     f"Done. {len(generated)} graph(s) generated.")
                 status_label.config(fg=SUCCESS)
-                msg = "Graphs generated:\n\n"
-                for scope, path in generated:
-                    msg += f"• {scope}: {os.path.basename(path)}\n"
-                msg += f"\nSaved to: {session.graph_reports_dir}"
-                messagebox.showinfo("Graphs Generated", msg)
             else:
+                g_log("No data found for selected scopes.", "dim")
                 status_var.set("No data found for selected scopes.")
                 status_label.config(fg=TEXT_SEC)
 
         except Exception as e:
             status_var.set(f"Error: {e}")
             status_label.config(fg=ACCENT)
-            messagebox.showerror("Error", f"{type(e).__name__}: {e}")
+            g_log(f"\u2717 Error: {e}", "error")
             session.log(f"Graph error: {e}", "error")
         finally:
             run_btn_g.config(state="normal")
 
     run_btn_g = ttk.Button(action_row_g, text="Generate graph(s)",
                            style="Accent.TButton", command=run_graph)
-    run_btn_g.pack(side="right")
+    run_btn_g.pack(fill="x")
 
     # ===================================================================
-    # REPORTS SUB-MENU FRAME
+    # REPORTS SUB-MENU FRAME (left-right split)
     # ===================================================================
     reports_frame = tk.Frame(content_area, bg=BG_DARK)
     frames["reports"] = reports_frame
 
-    report_scroll = tk.Frame(reports_frame, bg=BG_DARK)
-    report_scroll.pack(fill="both", expand=True, padx=20, pady=16)
-
-    back_row_r = tk.Frame(report_scroll, bg=BG_DARK)
-    back_row_r.pack(fill="x", pady=(0, 10))
+    # Back button
+    back_row_r = tk.Frame(reports_frame, bg=BG_DARK)
+    back_row_r.pack(fill="x", padx=20, pady=(10, 6))
     ttk.Button(back_row_r, text="< Back to Main Menu",
                command=lambda: show_frame("main")).pack(side="left")
 
+    # Horizontal split
+    r_split = tk.Frame(reports_frame, bg=BG_DARK)
+    r_split.pack(fill="both", expand=True, padx=20, pady=(0, 8))
+
+    r_left = tk.Frame(r_split, bg=BG_DARK, width=420)
+    r_left.pack(side="left", fill="y", padx=(0, 10))
+    r_left.pack_propagate(False)
+
+    r_right = tk.Frame(r_split, bg=BG_DARK)
+    r_right.pack(side="left", fill="both", expand=True)
+
+    # --- LEFT: controls ---
+
     # DB picker for reports
     report_db_var = tk.StringVar()
-    rdb_body = make_panel(report_scroll, "Database")
+    rdb_body = make_panel(r_left, "Database")
     rdb_row = tk.Frame(rdb_body, bg=BG_PANEL)
     rdb_row.pack(fill="x")
     ttk.Entry(rdb_row, textvariable=report_db_var).pack(
@@ -799,7 +987,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     from pdf_forensics.reports.queries import list_reports as _list_rpts
     report_list = _list_rpts()
 
-    rpt_body = make_panel(report_scroll, "Select reports")
+    rpt_body = make_panel(r_left, "Select reports")
     report_vars = {}
     for rid, rname, rdesc in report_list:
         var = tk.BooleanVar(value=True)
@@ -826,8 +1014,45 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         side="left", padx=(8, 0))
 
     # Generate button
-    action_row_r = tk.Frame(reports_frame, bg=BG_DARK)
-    action_row_r.pack(fill="x", side="bottom", padx=20, pady=(0, 12))
+    action_row_r = tk.Frame(r_left, bg=BG_DARK)
+    action_row_r.pack(fill="x", side="bottom", pady=(8, 4))
+
+    # --- RIGHT: status log ---
+    r_log_outer = tk.Frame(r_right, bg=BORDER, padx=1, pady=1)
+    r_log_outer.pack(fill="both", expand=True)
+    r_log_inner = tk.Frame(r_log_outer, bg=BG_PANEL)
+    r_log_inner.pack(fill="both", expand=True)
+    ttk.Label(r_log_inner, text="REPORT LOG",
+              style="Section.TLabel").pack(
+        anchor="w", padx=10, pady=(8, 4))
+
+    r_log_frame = tk.Frame(r_log_inner, bg=BG_PANEL)
+    r_log_frame.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+    r_log_scroll = tk.Scrollbar(r_log_frame)
+    r_log_scroll.pack(side="right", fill="y")
+    r_log_text = tk.Text(
+        r_log_frame, wrap="word", bg=BG_INPUT, fg=TEXT_PRIM,
+        insertbackground=TEXT_PRIM, highlightthickness=0,
+        borderwidth=0, font=(FONT_FAMILY, 9), padx=8, pady=6,
+        relief="flat", yscrollcommand=r_log_scroll.set)
+    r_log_text.pack(fill="both", expand=True)
+    r_log_scroll.config(command=r_log_text.yview)
+    r_log_text.tag_configure("success", foreground=SUCCESS)
+    r_log_text.tag_configure("error", foreground=ACCENT)
+    r_log_text.tag_configure("dim", foreground=TEXT_DIM)
+    r_log_text.tag_configure("bold",
+                             font=(FONT_FAMILY, 9, "bold"))
+    r_log_text.config(state="disabled")
+
+    def r_log(msg, tag=None):
+        r_log_text.config(state="normal")
+        if tag:
+            r_log_text.insert("end", msg + "\n", tag)
+        else:
+            r_log_text.insert("end", msg + "\n")
+        r_log_text.see("end")
+        r_log_text.config(state="disabled")
+        root.update_idletasks()
 
     def run_reports():
         db = report_db_var.get()
@@ -850,45 +1075,76 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         run_btn_r.config(state="disabled")
         status_var.set("Generating reports...")
         status_label.config(fg=ACCENT)
-        root.update_idletasks()
+
+        # Clear log
+        r_log_text.config(state="normal")
+        r_log_text.delete("1.0", "end")
+        r_log_text.config(state="disabled")
 
         session = app["session"]
         try:
-            from pdf_forensics.reports import generate_reports
+            from pdf_forensics.reports.queries import get_report_by_id
+            from pdf_forensics.reports.renderer import generate_report
 
             out_dir = session.reports_dir
             if not out_dir:
                 out_dir = os.path.join(
                     os.path.dirname(db), "reports")
+            os.makedirs(out_dir, exist_ok=True)
 
-            results = generate_reports(
-                db, selected, out_dir, session=session)
+            r_log(f"Database: {os.path.basename(db)}", "dim")
+            r_log(f"Output: {out_dir}", "dim")
+            r_log(f"Reports: {len(selected)}", "dim")
+            r_log("")
 
+            results = []
+            for rid in selected:
+                report_def = get_report_by_id(rid)
+                if not report_def:
+                    r_log(f"  \u2717 {rid} — unknown report ID", "error")
+                    continue
+
+                r_log(f"  Generating {report_def['name']}...")
+                root.update_idletasks()
+
+                fname = session.make_filename(
+                    f"report-{rid}", "html")
+                out_path = os.path.join(out_dir, fname)
+
+                try:
+                    row_count = generate_report(
+                        db, report_def, out_path, session=session)
+                    results.append((rid, out_path, row_count))
+                    r_log(f"  \u2713 {report_def['name']} — "
+                          f"{row_count} rows", "success")
+                except Exception as e:
+                    r_log(f"  \u2717 {report_def['name']} — {e}",
+                          "error")
+                    session.log(f"Report error ({rid}): {e}", "error")
+
+            r_log("")
             if results:
+                r_log(f"Done. {len(results)} report(s) generated.",
+                      "bold")
                 status_var.set(
                     f"Done. {len(results)} report(s) generated.")
                 status_label.config(fg=SUCCESS)
-                msg = "Reports generated:\n\n"
-                for rid, path, rows in results:
-                    msg += (f"\u2022 {rid}: {rows} rows "
-                            f"({os.path.basename(path)})\n")
-                msg += f"\nSaved to: {out_dir}"
-                messagebox.showinfo("Reports Generated", msg)
             else:
-                status_var.set("No data found for selected reports.")
+                r_log("No reports generated.", "dim")
+                status_var.set("No reports generated.")
                 status_label.config(fg=TEXT_SEC)
+
         except Exception as e:
             status_var.set(f"Error: {e}")
             status_label.config(fg=ACCENT)
-            messagebox.showerror("Error", f"{type(e).__name__}: {e}")
-            if session:
-                session.log(f"Report error: {e}", "error")
+            r_log(f"\u2717 Error: {e}", "error")
+            session.log(f"Report error: {e}", "error")
         finally:
             run_btn_r.config(state="normal")
 
     run_btn_r = ttk.Button(action_row_r, text="Generate reports",
                            style="Accent.TButton", command=run_reports)
-    run_btn_r.pack(side="right")
+    run_btn_r.pack(fill="x")
 
     # Sync report DB when analysis DB changes
     def sync_report_db(*_):

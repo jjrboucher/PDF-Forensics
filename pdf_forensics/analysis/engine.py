@@ -385,3 +385,66 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
         print(f"  {skipped} PDF(s) skipped (already in database)")
 
     return summaries
+
+
+def extract_prior_versions(pdf_path, output_dir, session=None):
+    """
+    Extract prior versions of a PDF from incremental updates.
+
+    Each %%EOF marker in the file delimits a version. The first
+    %%EOF is version 1 (original), the second is version 2, etc.
+    The full file is the final version.
+
+    Only extracts if 2+ %%EOF markers are found. Extracted files
+    are saved as {basename}_version1.pdf, {basename}_version2.pdf, etc.
+    The final version is not extracted (it's the original file).
+
+    Parameters:
+      pdf_path   : path to the PDF file
+      output_dir : directory to write extracted versions into
+      session    : optional Session for logging
+
+    Returns a list of extracted file paths (empty if no prior versions).
+    """
+    from pdf_forensics.analysis.metadata import detect_pdf_versions
+
+    versions = detect_pdf_versions(pdf_path)
+    if len(versions) <= 1:
+        return []
+
+    try:
+        with open(pdf_path, "rb") as f:
+            data = f.read()
+    except Exception as e:
+        if session:
+            session.log(f"  Could not read {pdf_path}: {e}", "error")
+        return []
+
+    basename = os.path.splitext(os.path.basename(pdf_path))[0]
+    version_dir = os.path.join(output_dir, basename + "_versions")
+    os.makedirs(version_dir, exist_ok=True)
+
+    extracted = []
+    # Extract all versions except the last (which is the full file)
+    for version_num, eof_offset in versions[:-1]:
+        # Include the %%EOF marker itself plus trailing newline
+        end_pos = eof_offset + 5  # len(b"%%EOF")
+        # Skip trailing whitespace/newlines
+        while end_pos < len(data) and data[end_pos:end_pos+1] in (
+                b"\r", b"\n", b" "):
+            end_pos += 1
+
+        version_data = data[:end_pos]
+        version_filename = f"{basename}_version{version_num}.pdf"
+        version_path = os.path.join(version_dir, version_filename)
+
+        with open(version_path, "wb") as f:
+            f.write(version_data)
+
+        extracted.append(version_path)
+        if session:
+            session.log(
+                f"  Extracted version {version_num}: "
+                f"{version_filename} ({len(version_data):,} bytes)")
+
+    return extracted
