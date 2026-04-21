@@ -77,6 +77,16 @@ def main_cli():
     p_report.add_argument("--list", action="store_true",
                           help="List available report IDs and exit")
 
+    # --- triage subcommand ---
+    p_triage = sub.add_parser("triage",
+                              help="Quick PDF triage to Excel")
+    p_triage.add_argument("pdf", nargs="*",
+                          help="PDF file(s) to triage")
+    p_triage.add_argument("-l", "--pdf-list",
+                          help="Text file with PDF paths")
+    p_triage.add_argument("-o", "--output", default=None,
+                          help="Output Excel file path")
+
     args = parser.parse_args()
 
     # No command and no --gui → launch GUI
@@ -100,6 +110,8 @@ def main_cli():
         _cli_graph(args, session)
     elif args.command == "report":
         _cli_report(args, session)
+    elif args.command == "triage":
+        _cli_triage(args, session, case)
 
     print()
     print("Processing complete.")
@@ -270,3 +282,52 @@ def _cli_report(args, session):
 
     print(f"\n{len(results)} report(s) generated.")
     session.write_summary(db_path=args.database)
+
+
+def _cli_triage(args, session, case):
+    """Handle the 'triage' CLI subcommand."""
+    from pdf_forensics.analysis.triage import run_triage
+
+    pdfs = list(args.pdf) if args.pdf else []
+
+    if args.pdf_list:
+        if not os.path.isfile(args.pdf_list):
+            print(f"Error: List file not found: {args.pdf_list}")
+            sys.exit(1)
+        with open(args.pdf_list) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    pdfs.append(line)
+
+    if not pdfs:
+        print("Error: No PDF files specified.")
+        sys.exit(1)
+
+    valid = [p for p in pdfs if os.path.isfile(p)]
+    if not valid:
+        print("Error: No valid PDF files found.")
+        sys.exit(1)
+
+    output_dir = os.path.join(os.getcwd(), case)
+    session.set_db_dir(output_dir)
+
+    xlsx_path = args.output or session.make_filename("triage", "xlsx")
+    if not os.path.isabs(xlsx_path):
+        xlsx_path = os.path.join(output_dir, xlsx_path)
+
+    print(f"Case: {case}")
+    print(f"Triaging {len(valid)} PDF(s)")
+    print(f"Output: {xlsx_path}")
+
+    def progress(idx, total, filename):
+        print(f"  [{idx}/{total}] {filename}")
+
+    processed, skipped, out = run_triage(
+        valid, xlsx_path, session=session,
+        progress_callback=progress)
+
+    print(f"\nTriage complete: {processed} processed, "
+          f"{skipped} skipped")
+    print(f"Output: {out}")
+    session.write_summary()

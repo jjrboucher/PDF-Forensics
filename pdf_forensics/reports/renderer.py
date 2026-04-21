@@ -82,6 +82,14 @@ def _render_html(title, description, columns, data, db_path,
                  row_count, sticky_cols=0):
     """Build the complete self-contained HTML string."""
 
+    # Load logo for embedding
+    logo_uri = ""
+    try:
+        from pdf_forensics.assets import get_logo_base64
+        logo_uri = get_logo_base64() or ""
+    except Exception:
+        pass
+
     def esc(val):
         return html_mod.escape(str(val)) if val else ""
 
@@ -171,7 +179,10 @@ def _render_html(title, description, columns, data, db_path,
   #header {{
     background: #252525; padding: 20px 30px;
     border-bottom: 2px solid #ED1C24;
+    display: flex; align-items: center; gap: 20px;
   }}
+  #header .logo {{ height: 48px; }}
+  #header .header-text {{ flex: 1; }}
   #header h1 {{
     font-size: 20px; font-weight: 700; color: #F0F0F0;
     margin-bottom: 4px;
@@ -270,13 +281,16 @@ def _render_html(title, description, columns, data, db_path,
 <body>
 
 <div id="header">
-  <h1>{esc(title)}</h1>
-  <div class="subtitle">
-    {__tool_name__} v{__version__} &mdash;
-    Generated {now} &mdash;
-    Database: {esc(os.path.basename(db_path))}
+  {"<img class='logo' src='" + logo_uri + "' alt='PDF Forensic Suite'>" if logo_uri else ""}
+  <div class="header-text">
+    <h1>{esc(title)}</h1>
+    <div class="subtitle">
+      {__tool_name__} v{__version__} &mdash;
+      Generated {now} &mdash;
+      Database: {esc(os.path.basename(db_path))}
+    </div>
+    <div class="description">{esc(description)}</div>
   </div>
-  <div class="description">{esc(description)}</div>
 </div>
 
 <div id="toolbar">

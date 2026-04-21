@@ -19,9 +19,13 @@ def make_thumbnail_data_uri(image_bytes, ext, width, height):
     if not image_bytes:
         return None
 
+    # Guard against zero/None dimensions
+    width = width or 0
+    height = height or 0
+
     # If image is small enough and common format, embed as-is
     if (len(image_bytes) <= THUMBNAIL_MAX_BYTES
-            and width and height
+            and width > 0 and height > 0
             and max(width, height) <= THUMBNAIL_MAX_SIZE):
         mime = f"image/{ext}" if ext in ("jpeg", "jpg", "png",
                                           "gif", "webp") else None
@@ -55,11 +59,14 @@ def make_thumbnail_data_uri(image_bytes, ext, width, height):
 
     # Resize preserving aspect ratio
     orig_w, orig_h = img.size
+    if orig_w < 1 or orig_h < 1:
+        return None
+
     max_edge = max(orig_w, orig_h)
     if max_edge > THUMBNAIL_MAX_SIZE:
         scale = THUMBNAIL_MAX_SIZE / max_edge
-        new_w = int(orig_w * scale)
-        new_h = int(orig_h * scale)
+        new_w = max(1, int(orig_w * scale))
+        new_h = max(1, int(orig_h * scale))
         img = img.resize((new_w, new_h), Image.LANCZOS)
     else:
         new_w, new_h = orig_w, orig_h

@@ -3,3 +3,4 @@ pikepdf
 Pillow
 networkx
 pyvis
+openpyxl

@@ -94,14 +94,25 @@ def select_output_path(db_path, conn,
 def visualize_graph(G, image_meta, thumbnails, db_path,
                     doc_meta=None,
                     output_path="image_relationship_graph.html"):
-    net = Network(
-        height="100vh",
-        width="100%",
-        bgcolor="#1B1B1B",
-        font_color="#F0F0F0",
-        notebook=False,
-        cdn_resources="remote",
-    )
+    # pyvis versions vary in what they accept for height/width.
+    # Try CSS units first, then pixel strings, then bare integers.
+    net = None
+    for h, w in [("100vh", "100%"), ("900px", "1200px"), (900, 1200)]:
+        try:
+            net = Network(
+                height=h, width=w,
+                bgcolor="#1B1B1B",
+                font_color="#F0F0F0",
+                notebook=False,
+                cdn_resources="remote",
+            )
+            break
+        except (ValueError, TypeError):
+            continue
+    if net is None:
+        raise RuntimeError(
+            "Could not initialize pyvis Network. "
+            "Try updating pyvis: pip install --upgrade pyvis")
     net.from_nx(G)
 
     # Physics config that stabilizes then freezes.
@@ -168,6 +179,17 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     """
     with open(html_path, "r", encoding="utf-8") as f:
         html = f.read()
+
+    # Load logo for toolbar
+    logo_html = ""
+    try:
+        from pdf_forensics.assets import get_logo_base64
+        logo_uri = get_logo_base64()
+        if logo_uri:
+            logo_html = (f'<img src="{logo_uri}" alt="" '
+                         f'style="height:28px;margin-right:8px;">')
+    except Exception:
+        pass
 
     # Build a compact JS-safe dict of image metadata + thumbnails
     js_meta = {}
@@ -409,9 +431,9 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     </style>
     """
 
-    toolbar_html = """
+    toolbar_html = f"""
     <div id="toolbar">
-      <div class="title"><span class="accent">PDF</span> FORENSICS — Image Graph</div>
+      <div class="title">{logo_html}<span class="accent">PDF</span> FORENSICS — Image Graph</div>
       <div class="legend">
         <span class="legend-item" data-risk="low" title="Right-click for options"><span class="dot" style="background:#5DCAA5"></span>Low</span>
         <span class="legend-item" data-risk="mid" title="Right-click for options"><span class="dot" style="background:#EF9F27"></span>Mid</span>

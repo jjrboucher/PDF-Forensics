@@ -17,6 +17,7 @@ from pdf_forensics.database import (
 from pdf_forensics.analysis.engine import (
     process_pdfs, analyze_pdf, extract_prior_versions,
 )
+from pdf_forensics.analysis.triage import run_triage
 from pdf_forensics.gui.theme import *
 from pdf_forensics.gui.theme import apply_theme
 from pdf_forensics.gui.widgets import make_panel, stat_box
@@ -66,19 +67,52 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # ---------------------------------------------------------------
     # Persistent header bar
     # ---------------------------------------------------------------
-    header = tk.Frame(root, bg=BG_DARK, height=80)
+    header = tk.Frame(root, bg=BG_DARK, height=96)
     header.pack(fill="x", side="top")
     header.pack_propagate(False)
 
     header_inner = tk.Frame(header, bg=BG_DARK)
-    header_inner.pack(side="left", padx=24, pady=14)
+    header_inner.pack(side="left", padx=24, pady=10)
 
-    badge = tk.Frame(header_inner, bg=ACCENT, width=52, height=52)
-    badge.pack(side="left")
-    badge.pack_propagate(False)
-    tk.Label(badge, text="PDF", bg=ACCENT, fg="#FFFFFF",
-             font=(FONT_FAMILY, 14, "bold")).place(
-        relx=0.5, rely=0.5, anchor="center")
+    # Load logo and window icon from assets
+    try:
+        from pdf_forensics.assets import get_logo_path, get_icon_path
+
+        # Window icon (red PDF square)
+        icon_path = get_icon_path()
+        if os.path.isfile(icon_path):
+            icon_img = tk.PhotoImage(file=icon_path)
+            root.iconphoto(True, icon_img)
+            app["_icon_img"] = icon_img  # prevent GC
+
+        # Header logo
+        logo_path = get_logo_path()
+        if os.path.isfile(logo_path):
+            _pil_img = __import__("PIL.Image",
+                                  fromlist=["Image"]).open(logo_path)
+            # Scale to fit header height (~60px)
+            logo_h = 72
+            scale = logo_h / _pil_img.height
+            logo_w = int(_pil_img.width * scale)
+            _pil_img = _pil_img.resize((logo_w, logo_h),
+                __import__("PIL.Image", fromlist=["Image"]).LANCZOS)
+            _pil_tk = __import__("PIL.ImageTk",
+                                 fromlist=["ImageTk"])
+            logo_photo = _pil_tk.PhotoImage(_pil_img)
+            logo_label = tk.Label(header_inner, image=logo_photo,
+                                  bg=BG_DARK)
+            logo_label.pack(side="left")
+            app["_logo_photo"] = logo_photo  # prevent GC
+        else:
+            raise FileNotFoundError
+    except Exception:
+        # Fallback: red PDF badge if assets/PIL unavailable
+        badge = tk.Frame(header_inner, bg=ACCENT, width=52, height=52)
+        badge.pack(side="left")
+        badge.pack_propagate(False)
+        tk.Label(badge, text="PDF", bg=ACCENT, fg="#FFFFFF",
+                 font=(FONT_FAMILY, 14, "bold")).place(
+            relx=0.5, rely=0.5, anchor="center")
 
     title_block = tk.Frame(header_inner, bg=BG_DARK)
     title_block.pack(side="left", padx=(14, 0))
@@ -185,10 +219,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
     # Per-frame window sizes: (width, height)
     frame_sizes = {
-        "main":     (780, 520),
-        "analysis": (1060, 720),
-        "graph":    (1060, 520),
-        "reports":  (1060, 720),
+        "main":     (780, 540),
+        "analysis": (1060, 800),
+        "graph":    (1060, 540),
+        "reports":  (1060, 740),
     }
 
     def center_window(w, h):
@@ -436,15 +470,65 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
     # Options panel
     opt_body = make_panel(left_panel, "Options")
-    ttk.Checkbutton(
+
+    triage_var = tk.BooleanVar(value=False)
+    triage_cb = ttk.Checkbutton(
+        opt_body,
+        text="Triage mode (quick scan to Excel)",
+        variable=triage_var)
+    triage_cb.pack(anchor="w", pady=(0, 6))
+
+    store_cb = ttk.Checkbutton(
         opt_body,
         text="Store extracted images in database",
-        variable=store_images_var).pack(anchor="w")
+        variable=store_images_var)
+    store_cb.pack(anchor="w")
     extract_versions_var = tk.BooleanVar(value=True)
-    ttk.Checkbutton(
+    versions_cb = ttk.Checkbutton(
         opt_body,
         text="Extract and process prior PDF versions",
-        variable=extract_versions_var).pack(anchor="w")
+        variable=extract_versions_var)
+    versions_cb.pack(anchor="w")
+    skip_duplicates_var = tk.BooleanVar(value=True)
+    skip_cb = ttk.Checkbutton(
+        opt_body,
+        text="Skip PDFs already in the database",
+        variable=skip_duplicates_var)
+    skip_cb.pack(anchor="w")
+
+    # Controls that get disabled in triage mode
+    advanced_widgets = [store_cb, versions_cb, skip_cb,
+                        db_entry]
+
+    # Remember pre-triage checkbox states
+    _pre_triage_state = {
+        "store": True,
+        "versions": True,
+        "skip": True,
+    }
+
+    def on_triage_toggle(*_):
+        is_triage = triage_var.get()
+        state = "disabled" if is_triage else "normal"
+        for w in advanced_widgets:
+            w.config(state=state)
+        if is_triage:
+            # Save current states and uncheck
+            _pre_triage_state["store"] = store_images_var.get()
+            _pre_triage_state["versions"] = extract_versions_var.get()
+            _pre_triage_state["skip"] = skip_duplicates_var.get()
+            store_images_var.set(False)
+            extract_versions_var.set(False)
+            skip_duplicates_var.set(False)
+            run_btn_a.config(text="Run triage")
+        else:
+            # Restore previous states
+            store_images_var.set(_pre_triage_state["store"])
+            extract_versions_var.set(_pre_triage_state["versions"])
+            skip_duplicates_var.set(_pre_triage_state["skip"])
+            run_btn_a.config(text="Run analysis")
+
+    triage_var.trace_add("write", on_triage_toggle)
 
     # Run button at bottom of left panel
     action_row_a = tk.Frame(left_panel, bg=BG_DARK)
@@ -526,13 +610,19 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         if not pdf_files:
             messagebox.showerror("No PDFs", "Please add PDF file(s).")
             return
-        if not db_path_var.get():
-            messagebox.showerror("No database",
-                                 "Please choose a database.")
-            return
         if not app["session"]:
             messagebox.showerror("No case",
                                  "Please set a case number first.")
+            return
+
+        # Route to triage if triage mode is on
+        if triage_var.get():
+            _run_triage_mode()
+            return
+
+        if not db_path_var.get():
+            messagebox.showerror("No database",
+                                 "Please choose a database.")
             return
 
         run_btn_a.config(state="disabled")
@@ -572,12 +662,16 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         log_to_gui(f"Database: {os.path.basename(db_val)}", "dim")
         log_to_gui("")
 
-        # Build a processing queue so extracted versions can be added
+        # Build a processing queue so extracted versions can be added.
+        # Track which entries are extracted versions so we don't
+        # cascade (extract versions from versions).
         process_queue = list(pdf_files)
+        is_extracted_version = set()  # indices of extracted versions
         queue_idx = 0
 
         while queue_idx < len(process_queue):
             pdf_path = process_queue[queue_idx]
+            this_is_version = queue_idx in is_extracted_version
             queue_idx += 1
             basename = os.path.basename(pdf_path)
 
@@ -612,30 +706,21 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 root.update_idletasks()
 
             try:
-                # Check for duplicate before processing
-                already, dup_info = check_pdf_already_analyzed(
-                    conn, pdf_path)
-                force_this = False
-                if already:
-                    answer = messagebox.askyesno(
-                        "Duplicate PDF",
-                        f"{basename} has already been analyzed.\n\n"
-                        f"Previously analyzed as: "
-                        f"{dup_info['pdf_filename']}\n"
-                        f"Date: {dup_info['analyzed_at']}\n\n"
-                        f"Process again?")
-                    if not answer:
+                # Duplicate check (checkbox-based, no dialog)
+                if skip_duplicates_var.get():
+                    already, dup_info = check_pdf_already_analyzed(
+                        conn, pdf_path)
+                    if already:
                         log_text.config(state="normal")
                         log_text.delete(progress_idx,
                                         f"{progress_idx} lineend + 1 char")
                         log_text.insert(progress_idx,
-                            f"  \u2298 {basename} — skipped by user\n",
-                            "skip")
+                            f"  \u2298 {basename} — already in DB "
+                            f"({dup_info['analyzed_at']})\n", "skip")
                         log_text.see("end")
                         log_text.config(state="disabled")
                         root.update_idletasks()
                         continue
-                    force_this = True
 
                 summary = analyze_pdf(
                     pdf_path, db_val,
@@ -645,7 +730,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     quiet=True,
                     progress_callback=on_page_progress,
                     skip_duplicates=False,
-                    force=force_this)
+                    force=True)
 
                 # Replace progress line with final result
                 log_text.config(state="normal")
@@ -663,8 +748,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                         f"{imgs} img, {finds} findings\n",
                         "success")
 
-                    # Extract prior versions if enabled
-                    if extract_versions_var.get():
+                    # Extract prior versions only from original
+                    # PDFs, not from already-extracted versions
+                    # (which are subsets of the parent file)
+                    if (extract_versions_var.get()
+                            and not this_is_version):
                         version_paths = extract_prior_versions(
                             pdf_path, out_dir, session=session)
                         if version_paths:
@@ -672,7 +760,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                                 f"    \u21b3 {len(version_paths)} prior "
                                 f"version(s) extracted, queued",
                                 "dim")
+                            start_idx = len(process_queue)
                             process_queue.extend(version_paths)
+                            for vi in range(start_idx,
+                                            len(process_queue)):
+                                is_extracted_version.add(vi)
                 else:
                     failed += 1
                     log_text.insert(progress_idx,
@@ -712,6 +804,81 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             f"{total_imgs} image(s).")
         status_label.config(fg=SUCCESS)
         run_btn_a.config(state="normal")
+
+    def _run_triage_mode():
+        """Fast triage scan producing Excel output."""
+        run_btn_a.config(state="disabled")
+        status_var.set("Running triage...")
+        status_label.config(fg=ACCENT)
+
+        log_text.config(state="normal")
+        log_text.delete("1.0", "end")
+        log_text.config(state="disabled")
+
+        session = app["session"]
+        out_dir = output_dir_var.get()
+
+        if not out_dir:
+            out_dir = session.db_dir or os.getcwd()
+            output_dir_var.set(out_dir)
+
+        xlsx_path = os.path.join(
+            out_dir,
+            session.make_filename("triage", "xlsx"))
+
+        # Reset counters
+        count_selected.set(str(len(pdf_files)))
+        count_processed.set("0")
+        count_failed.set("0")
+        count_images.set("0")
+
+        log_to_gui(f"Triage: {len(pdf_files)} PDF(s)...", "bold")
+        log_to_gui(f"Output: {xlsx_path}", "dim")
+        log_to_gui("")
+
+        try:
+            triage_count = 0
+            triage_failed = 0
+
+            def on_triage_progress(idx, total, filename):
+                nonlocal triage_count, triage_failed
+                triage_count = idx
+                count_processed.set(str(idx))
+                log_to_gui(f"  \u25cb {filename} ({idx}/{total})",
+                           "dim")
+
+            processed, skipped, out = run_triage(
+                list(pdf_files), xlsx_path,
+                session=session,
+                progress_callback=on_triage_progress)
+
+            count_processed.set(str(processed))
+            count_failed.set(str(skipped))
+
+            log_to_gui("")
+            log_to_gui(
+                f"Done: {processed} triaged, {skipped} skipped",
+                "bold")
+            if processed:
+                log_to_gui(
+                    f"\u2713 {os.path.basename(xlsx_path)}",
+                    "success")
+
+            status_var.set(
+                f"Triage done. {processed} PDF(s) -> "
+                f"{os.path.basename(xlsx_path)}")
+            status_label.config(fg=SUCCESS)
+
+        except Exception as e:
+            import traceback
+            status_var.set(f"Error: {e}")
+            status_label.config(fg=ACCENT)
+            log_to_gui(f"\u2717 Error: {e}", "error")
+            if session:
+                session.log(f"Triage error: {e}", "error")
+                session.log(traceback.format_exc(), "error")
+        finally:
+            run_btn_a.config(state="normal")
 
     run_btn_a = ttk.Button(action_row_a, text="Run analysis",
                            style="Accent.TButton", command=run_analysis)

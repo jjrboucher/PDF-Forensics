@@ -95,6 +95,8 @@ def apply_theme(style):
                     foreground=TEXT_PRIM, indicatorcolor=BG_INPUT,
                     focuscolor=ACCENT, font=FONT_BASE, padding=4)
     style.map("TCheckbutton",
-              indicatorcolor=[("selected", ACCENT),
+              indicatorcolor=[("disabled", "#2A2A2A"),
+                              ("selected", ACCENT),
                               ("active", BG_HOVER)],
+              foreground=[("disabled", "#555555")],
               background=[("active", BG_PANEL)])
