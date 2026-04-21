@@ -433,3 +433,113 @@ def check_offpage_images(page_mu, page_num, findings, label_to_info):
                 + "\n".join(f"      - {ed}" for ed in edges)
             ),
         })
+
+
+# ===================================================================
+# DPI Anomaly Detection (document-level)
+# ===================================================================
+
+DPI_STRETCH_THRESHOLD_PCT = 10   # flag if X/Y DPI differ by > 10%
+DPI_OUTLIER_SPREAD = 50          # flag outliers if DPI range > 50
+DPI_OUTLIER_DEVIATION_PCT = 30   # flag if > 30% from median
+
+
+def check_dpi_anomalies(page_data):
+    """
+    Detect DPI anomalies across the entire document.
+
+    Checks for:
+    1. Stretched images (dpi_x != dpi_y by > threshold)
+    2. Mixed-source indicators (images with very different DPIs)
+
+    Parameters:
+      page_data: {page_num: {"label_to_info": {...}, ...}}
+
+    Returns a list of finding dicts to be added to the appropriate
+    page's findings. Each has an extra "page_num" key.
+    """
+    findings = []
+
+    # Collect all DPI values across the document
+    all_dpis = []  # (page_num, label, dpi_x, dpi_y)
+    for page_num, pd in page_data.items():
+        label_to_info = pd.get("label_to_info", {})
+        for label, info in label_to_info.items():
+            dpi_x = info.get("dpi_x")
+            dpi_y = info.get("dpi_y")
+            if dpi_x and dpi_y and dpi_x > 0 and dpi_y > 0:
+                all_dpis.append((page_num, label, dpi_x, dpi_y))
+
+    if not all_dpis:
+        return findings
+
+    # Check 1: Stretched images (X/Y DPI mismatch)
+    for page_num, label, dpi_x, dpi_y in all_dpis:
+        avg_dpi = (dpi_x + dpi_y) / 2.0
+        if avg_dpi > 0:
+            diff_pct = abs(dpi_x - dpi_y) / avg_dpi * 100
+            if diff_pct > DPI_STRETCH_THRESHOLD_PCT:
+                findings.append({
+                    "page_num": page_num,
+                    "type": "DPI_ANOMALY",
+                    "image": label,
+                    "detail": (
+                        f"Image is stretched/distorted: "
+                        f"horizontal DPI={dpi_x}, "
+                        f"vertical DPI={dpi_y} "
+                        f"({diff_pct:.1f}% difference)"),
+                })
+
+    # Check 2: Mixed-source DPI outliers
+    if len(all_dpis) < 2:
+        return findings
+
+    # Use the average of X and Y DPI as the effective DPI per image
+    eff_dpis = [(pg, lbl, (dx + dy) / 2.0)
+                for pg, lbl, dx, dy in all_dpis]
+
+    dpis_only = sorted(d for _, _, d in eff_dpis)
+    dpi_min = dpis_only[0]
+    dpi_max = dpis_only[-1]
+    dpi_spread = dpi_max - dpi_min
+
+    if dpi_spread < DPI_OUTLIER_SPREAD:
+        return findings
+
+    # Compute median
+    n = len(dpis_only)
+    if n % 2 == 0:
+        median_dpi = (dpis_only[n//2 - 1] + dpis_only[n//2]) / 2.0
+    else:
+        median_dpi = dpis_only[n//2]
+
+    if median_dpi <= 0:
+        return findings
+
+    # Flag images that deviate significantly from the median
+    for page_num, label, eff_dpi in eff_dpis:
+        deviation_pct = abs(eff_dpi - median_dpi) / median_dpi * 100
+        if deviation_pct > DPI_OUTLIER_DEVIATION_PCT:
+            # Classify the source type
+            if eff_dpi < 100:
+                source_hint = "likely screenshot or web image"
+            elif eff_dpi < 200:
+                source_hint = "likely low-resolution or resized"
+            elif eff_dpi < 350:
+                source_hint = "likely standard scan or print"
+            else:
+                source_hint = "likely high-resolution photo or scan"
+
+            findings.append({
+                "page_num": page_num,
+                "type": "DPI_ANOMALY",
+                "image": label,
+                "detail": (
+                    f"Image DPI ({eff_dpi:.0f}) deviates from "
+                    f"document median ({median_dpi:.0f}) by "
+                    f"{deviation_pct:.0f}%. "
+                    f"Document DPI range: {dpi_min:.0f}–{dpi_max:.0f}. "
+                    f"Source: {source_hint}"),
+            })
+
+    return findings

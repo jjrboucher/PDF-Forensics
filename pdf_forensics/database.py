@@ -19,6 +19,7 @@ FINDING_TYPE_DEFS = {
     "EXPLICIT_CLIP": ("Explicit clipping path applied", "HIGH"),
     "OVERLAP": ("Overlapping images", "HIGH"),
     "OFFPAGE": ("Image extends beyond page boundary", "HIGH"),
+    "DPI_ANOMALY": ("Inconsistent image resolution", "HIGH"),
     "SOFT_MASK": ("Soft mask on Form XObject", "INFO"),
     "IMAGE_SMASK": ("Soft mask on Image XObject", "INFO"),
     "COMPLEX_TRANSFORM": ("Complex transform (manual review needed)", "INFO"),
@@ -169,6 +170,20 @@ def init_db(db_path, session=None):
     if "risk_score" not in image_cols:
         cur.execute(
             "ALTER TABLE images ADD COLUMN risk_score INTEGER DEFAULT 0")
+
+    # Migration: ensure DPI columns exist on images
+    if "dpi_x" not in image_cols:
+        cur.execute(
+            "ALTER TABLE images ADD COLUMN dpi_x REAL")
+    if "dpi_y" not in image_cols:
+        cur.execute(
+            "ALTER TABLE images ADD COLUMN dpi_y REAL")
+    if "display_w_pts" not in image_cols:
+        cur.execute(
+            "ALTER TABLE images ADD COLUMN display_w_pts REAL")
+    if "display_h_pts" not in image_cols:
+        cur.execute(
+            "ALTER TABLE images ADD COLUMN display_h_pts REAL")
 
     # Record schema version if this is a new database or a new revision
     cur.execute("""
@@ -369,8 +384,9 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
                     (page_id, image_data_id, label,
                      z_order, opacity, blend_mode,
                      has_smask, in_transparency_group,
-                     form_xobject_xref, risk_score)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     form_xobject_xref, risk_score,
+                     dpi_x, dpi_y, display_w_pts, display_h_pts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 page_id,
                 image_data_id,
@@ -382,6 +398,10 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
                 1 if t.get("in_transparency_group") else 0,
                 info.get("form_xref", 0),
                 risk,
+                info.get("dpi_x"),
+                info.get("dpi_y"),
+                info.get("display_w_pts"),
+                info.get("display_h_pts"),
             ))
             label_to_image_id[label] = cur.lastrowid
 

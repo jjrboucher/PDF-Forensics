@@ -220,9 +220,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # Per-frame window sizes: (width, height)
     frame_sizes = {
         "main":     (780, 540),
-        "analysis": (1060, 800),
+        "analysis": (1060, 860),
         "graph":    (1060, 540),
-        "reports":  (1060, 740),
+        "reports":  (1060, 800),
     }
 
     def center_window(w, h):
@@ -370,7 +370,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     list_container = tk.Frame(pdf_body, bg=BORDER, padx=1, pady=1)
     list_container.pack(fill="x", pady=(0, 8))
     pdf_listbox = tk.Listbox(
-        list_container, height=3,
+        list_container, height=5,
         bg=BG_INPUT, fg=TEXT_PRIM,
         selectbackground=ACCENT, selectforeground="#FFFFFF",
         highlightthickness=0, borderwidth=0,
@@ -419,14 +419,20 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             del pdf_files[idx]
             pdf_listbox.delete(idx)
 
+    def remove_all_pdfs():
+        pdf_files.clear()
+        pdf_listbox.delete(0, "end")
+
     pdf_btns = tk.Frame(pdf_body, bg=BG_PANEL)
     pdf_btns.pack(fill="x")
-    ttk.Button(pdf_btns, text="Add PDFs",
+    ttk.Button(pdf_btns, text="Add files",
                command=add_pdfs).pack(side="left")
-    ttk.Button(pdf_btns, text="Add from list",
-               command=add_pdfs_from_list).pack(side="left", padx=(8, 0))
-    ttk.Button(pdf_btns, text="Remove selected",
-               command=remove_pdfs).pack(side="left", padx=(8, 0))
+    ttk.Button(pdf_btns, text="From list",
+               command=add_pdfs_from_list).pack(side="left", padx=(6, 0))
+    ttk.Button(pdf_btns, text="Remove",
+               command=remove_pdfs).pack(side="left", padx=(6, 0))
+    ttk.Button(pdf_btns, text="Clear all",
+               command=remove_all_pdfs).pack(side="left", padx=(6, 0))
 
     # Database panel
     db_body = make_panel(left_panel, "Database")
@@ -471,7 +477,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # Options panel
     opt_body = make_panel(left_panel, "Options")
 
-    triage_var = tk.BooleanVar(value=False)
+    triage_var = tk.BooleanVar(value=True)
     triage_cb = ttk.Checkbutton(
         opt_body,
         text="Triage mode (quick scan to Excel)",
@@ -883,6 +889,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     run_btn_a = ttk.Button(action_row_a, text="Run analysis",
                            style="Accent.TButton", command=run_analysis)
     run_btn_a.pack(fill="x")
+
+    # Apply initial triage state (default is triage=True)
+    on_triage_toggle()
 
     # ===================================================================
     # GRAPH SUB-MENU FRAME (left-right split)

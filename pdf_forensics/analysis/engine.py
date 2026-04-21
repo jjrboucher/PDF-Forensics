@@ -27,6 +27,7 @@ from pdf_forensics.analysis.transparency import (
 from pdf_forensics.analysis.detectors import (
     analyze_form_xobject, check_overlapping_images,
     check_image_smasks, check_offpage_images,
+    check_dpi_anomalies,
 )
 from pdf_forensics.analysis.risk import compute_risk_scores
 
@@ -258,6 +259,22 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
 
         if progress_callback:
             progress_callback(page_num, total_pages)
+
+    # Document-level DPI anomaly detection (runs after all pages)
+    dpi_findings = check_dpi_anomalies(page_data)
+    if dpi_findings:
+        for df in dpi_findings:
+            pg = df["page_num"]
+            if pg in page_data:
+                page_data[pg]["findings"].append(df)
+                if pg in all_findings:
+                    all_findings[pg].append(df)
+                else:
+                    all_findings[pg] = [df]
+                # Recompute risk scores for affected pages
+                page_data[pg]["risk_scores"] = compute_risk_scores(
+                    page_data[pg]["findings"],
+                    page_data[pg]["label_to_info"])
 
     doc_mu.close()
     doc_pk.close()

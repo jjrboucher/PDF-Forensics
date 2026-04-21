@@ -617,6 +617,79 @@ REPORTS = [
         ],
     },
 
+    # -----------------------------------------------------------------
+    # 12. DPI / Resolution Analysis
+    # -----------------------------------------------------------------
+    {
+        "id": "dpi_analysis",
+        "name": "DPI / Resolution Analysis",
+        "description":
+            "Effective DPI of every image placement, computed from "
+            "pixel dimensions and the PDF transformation matrix. "
+            "Mixed DPIs within a document suggest images from "
+            "different sources (scanner, camera, screenshot). "
+            "Stretched images (X ≠ Y DPI) indicate manual resizing.",
+        "query": """
+            SELECT
+                a.pdf_filename       AS "Filename",
+                p.page_number        AS "Page",
+                i.label              AS "Label",
+                id_tbl.md5_hash      AS "Image MD5",
+                id_tbl.width_px      AS "Pixel W",
+                id_tbl.height_px     AS "Pixel H",
+                ROUND(i.display_w_pts, 1) AS "Display W (pts)",
+                ROUND(i.display_h_pts, 1) AS "Display H (pts)",
+                ROUND(i.display_w_pts / 72.0, 2) AS "Display W (in)",
+                ROUND(i.display_h_pts / 72.0, 2) AS "Display H (in)",
+                ROUND(i.dpi_x, 1)   AS "DPI X",
+                ROUND(i.dpi_y, 1)   AS "DPI Y",
+                CASE
+                    WHEN i.dpi_x IS NULL THEN ''
+                    WHEN ABS(i.dpi_x - i.dpi_y) >
+                         (i.dpi_x + i.dpi_y) * 0.05
+                    THEN 'STRETCHED'
+                    ELSE ''
+                END                  AS "Stretched",
+                CASE
+                    WHEN i.dpi_x IS NULL THEN ''
+                    WHEN (i.dpi_x + i.dpi_y) / 2.0 < 100
+                    THEN 'Screenshot / Web'
+                    WHEN (i.dpi_x + i.dpi_y) / 2.0 < 200
+                    THEN 'Low-res / Resized'
+                    WHEN (i.dpi_x + i.dpi_y) / 2.0 < 350
+                    THEN 'Standard scan'
+                    ELSE 'High-res photo/scan'
+                END                  AS "Likely Source",
+                i.risk_score         AS "Risk Score",
+                id_tbl.format_ext    AS "Format"
+            FROM images i
+            JOIN pages p        ON p.id = i.page_id
+            JOIN analyses a     ON a.id = p.analysis_id
+            LEFT JOIN image_data id_tbl ON id_tbl.id = i.image_data_id
+            WHERE i.dpi_x IS NOT NULL
+            ORDER BY a.pdf_filename, p.page_number, i.label
+        """,
+        "columns": [
+            {"name": "Filename",         "label": "Filename",         "col_type": "text"},
+            {"name": "Page",             "label": "Page",             "col_type": "numeric"},
+            {"name": "Label",            "label": "Label",            "col_type": "text"},
+            {"name": "Image MD5",        "label": "Image MD5",        "col_type": "hash"},
+            {"name": "Pixel W",          "label": "Pixel W",          "col_type": "numeric"},
+            {"name": "Pixel H",          "label": "Pixel H",          "col_type": "numeric"},
+            {"name": "Display W (pts)",  "label": "Display W (pts)",  "col_type": "numeric"},
+            {"name": "Display H (pts)",  "label": "Display H (pts)",  "col_type": "numeric"},
+            {"name": "Display W (in)",   "label": "Display W (in)",   "col_type": "numeric"},
+            {"name": "Display H (in)",   "label": "Display H (in)",   "col_type": "numeric"},
+            {"name": "DPI X",            "label": "DPI X",            "col_type": "numeric"},
+            {"name": "DPI Y",            "label": "DPI Y",            "col_type": "numeric"},
+            {"name": "Stretched",        "label": "Stretched",        "col_type": "text"},
+            {"name": "Likely Source",    "label": "Likely Source",    "col_type": "text"},
+            {"name": "Risk Score",       "label": "Risk Score",       "col_type": "numeric"},
+            {"name": "Format",           "label": "Format",           "col_type": "text"},
+        ],
+        "sticky_cols": 1,
+    },
+
 ]
 
 

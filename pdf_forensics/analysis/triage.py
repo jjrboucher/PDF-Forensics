@@ -53,6 +53,9 @@ def triage_pdf(pdf_path):
         "image_count": 0,
         "font_count": 0,
         "version_count": 0,
+        "dpi_min": "",
+        "dpi_max": "",
+        "dpi_mixed": "",
         "created": "",
         "modified": "",
         "author": "",
@@ -112,9 +115,11 @@ def triage_pdf(pdf_path):
             if v:
                 result["metadata"][_safe_str(k)] = _safe_str(v)
 
-        # Count images and fonts
+        # Count images and fonts, compute DPI range
+        import math
         total_images = 0
         all_fonts = set()
+        all_dpis = []
         for page_idx in range(len(doc)):
             try:
                 page = doc[page_idx]
@@ -127,11 +132,34 @@ def triage_pdf(pdf_path):
                             all_fonts.add(font_name)
                     except Exception:
                         pass
+
+                # Get DPI from image placement transforms
+                try:
+                    for img_info in page.get_image_info(xrefs=True):
+                        t = img_info.get("transform")
+                        pw = img_info.get("width", 0)
+                        ph = img_info.get("height", 0)
+                        if t and pw > 0 and ph > 0 and len(t) >= 4:
+                            a, b, c, d = t[0], t[1], t[2], t[3]
+                            disp_w = math.sqrt(a*a + b*b)
+                            disp_h = math.sqrt(c*c + d*d)
+                            if disp_w > 0.01 and disp_h > 0.01:
+                                dpi = (pw * 72.0 / disp_w
+                                       + ph * 72.0 / disp_h) / 2.0
+                                all_dpis.append(round(dpi, 1))
+                except Exception:
+                    pass
             except Exception:
                 pass
 
         result["image_count"] = total_images
         result["font_count"] = len(all_fonts)
+
+        if all_dpis:
+            result["dpi_min"] = min(all_dpis)
+            result["dpi_max"] = max(all_dpis)
+            spread = max(all_dpis) - min(all_dpis)
+            result["dpi_mixed"] = "Yes" if spread > 50 else "No"
         doc.close()
     except Exception as e:
         result["metadata"]["_error"] = _safe_str(e)
@@ -228,6 +256,7 @@ def run_triage(pdf_paths, output_path, session=None,
     triage_headers = [
         "Filename", "Path", "Size (bytes)", "Pages",
         "Images", "Fonts", "Versions (%%EOF)",
+        "DPI Min", "DPI Max", "Mixed DPI",
         "Created", "Modified", "Author", "Creator",
         "Producer", "Title", "PDF Version",
         "Encrypted", "MD5",
@@ -245,6 +274,7 @@ def run_triage(pdf_paths, output_path, session=None,
             r["filename"], r["path"], r["size_bytes"],
             r["pages"], r["image_count"], r["font_count"],
             r["version_count"],
+            r["dpi_min"], r["dpi_max"], r["dpi_mixed"],
             _safe_str(r["created"]),
             _safe_str(r["modified"]),
             _safe_str(r["author"]),
