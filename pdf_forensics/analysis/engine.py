@@ -27,7 +27,8 @@ from pdf_forensics.analysis.transparency import (
 from pdf_forensics.analysis.detectors import (
     analyze_form_xobject, check_overlapping_images,
     check_image_smasks, check_offpage_images,
-    check_dpi_anomalies,
+    check_dpi_anomalies, check_text_overlays,
+    check_content_stream_text_overlay, check_text_over_text,
 )
 from pdf_forensics.analysis.risk import compute_risk_scores
 
@@ -245,6 +246,10 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                                  label_to_info, transparency)
         check_image_smasks(page_pk, page_num, findings, label_to_info)
         check_offpage_images(page_mu, page_num, findings, label_to_info)
+        check_text_overlays(page_pk, page_mu, page_num, findings)
+        check_content_stream_text_overlay(
+            page_pk, page_mu, page_num, findings)
+        check_text_over_text(page_mu, page_num, findings)
 
         # Compute per-image risk scores from the findings on this page
         risk_scores = compute_risk_scores(findings, label_to_info)

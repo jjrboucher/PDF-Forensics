@@ -5,17 +5,18 @@ Per-image risk score computation.
 # Per-finding contribution to an image's risk score.
 # Scores accumulate (capped at 100).
 RISK_WEIGHTS = {
-    "BBOX_CROP": 30,
-    "EXPLICIT_CLIP": 30,
-    "OFFPAGE": 25,
-    "DPI_ANOMALY": 20,
-    "OVERLAP_BACK_FULL": 35,
+    "BBOX_CROP":            30,
+    "EXPLICIT_CLIP":        30,
+    "OFFPAGE":              25,
+    "DPI_ANOMALY":          20,
+    "TEXT_OVERLAY":         35,
+    "OVERLAP_BACK_FULL":    35,
     "OVERLAP_BACK_PARTIAL": 15,
-    "OVERLAP_FRONT_FULL": 20,
+    "OVERLAP_FRONT_FULL":   20,
     "OVERLAP_FRONT_PARTIAL": 8,
-    "SOFT_MASK": 5,
-    "IMAGE_SMASK": 5,
-    "COMPLEX_TRANSFORM": 5,
+    "SOFT_MASK":             5,
+    "IMAGE_SMASK":           5,
+    "COMPLEX_TRANSFORM":     5,
 }
 
 RISK_SCORE_CAP = 100
@@ -43,7 +44,7 @@ def compute_risk_scores(findings, label_to_info):
 
     for f in findings:
         ftype = f["type"]
-        image_field = f.get("image", "")
+        image_field = f.get("image") or ""
 
         if ftype == "OVERLAP" and "_overlap" in f:
             ol = f["_overlap"]

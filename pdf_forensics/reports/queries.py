@@ -690,6 +690,42 @@ REPORTS = [
         "sticky_cols": 1,
     },
 
+    # -----------------------------------------------------------------
+    # 13. Text Overlay Detection
+    # -----------------------------------------------------------------
+    {
+        "id": "text_overlay",
+        "name": "Text Overlay Detection",
+        "description":
+            "Annotations (text boxes, form fields, rectangles) placed "
+            "over existing page text with an opaque background — the "
+            "most common method for altering visible dates, amounts, "
+            "and names in a PDF without modifying the underlying "
+            "content stream.",
+        "query": """
+            SELECT
+                a.pdf_filename       AS "Filename",
+                p.page_number        AS "Page",
+                ft.code              AS "Type",
+                f.detail             AS "Detail",
+                a.pdf_md5            AS "PDF MD5"
+            FROM findings f
+            JOIN finding_types ft  ON ft.id = f.finding_type_id
+            JOIN pages p           ON p.id = f.page_id
+            JOIN analyses a        ON a.id = p.analysis_id
+            WHERE ft.code = 'TEXT_OVERLAY'
+            ORDER BY a.pdf_filename, p.page_number
+        """,
+        "columns": [
+            {"name": "Filename", "label": "Filename", "col_type": "text"},
+            {"name": "Page",     "label": "Page",     "col_type": "numeric"},
+            {"name": "Type",     "label": "Type",     "col_type": "text"},
+            {"name": "Detail",   "label": "Detail",   "col_type": "text"},
+            {"name": "PDF MD5",  "label": "PDF MD5",  "col_type": "hash"},
+        ],
+        "sticky_cols": 1,
+    },
+
 ]
 
 

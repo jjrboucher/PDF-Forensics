@@ -1,5 +1,49 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-05-29)
+
+### Text Overlay Detection
+- Added three independent text-overlay detectors, each catching a
+  different document-alteration technique:
+  - `check_text_overlays` — annotation-based overlays (FreeText,
+    Widget, Square, Redact annotations with opaque backgrounds over
+    existing page text)
+  - `check_content_stream_text_overlay` — white (or near-white)
+    rectangles painted over content in the page content stream,
+    followed by replacement text
+  - `check_text_over_text` — new text painted directly over existing
+    text with no masking rectangle (detected via per-character bounding
+    box overlap from PyMuPDF rawdict; excludes faux-bold and drop-shadow
+    rendering effects)
+- New `TEXT_OVERLAY` finding type (HIGH severity, risk weight 35)
+- New report 13: "Text Overlay Detection"
+- Findings now record a bounding box (`bbox_x0/y0/x1/y1`) and
+  `overlay_kind` to support visual reporting (schema revision 4,
+  auto-migrated)
+
+### Visual Overlay Report (new)
+- New self-contained HTML report that visually shows detected overlays
+  to a non-technical reader:
+  - Full annotated page images with each detected overlay highlighted
+    in a colour-coded box and numbered marker (red = text-over-text,
+    orange = white-box masking, blue = annotation)
+  - Per-finding detail cards with a high-resolution zoomed crop of the
+    affected region and a plain-language description
+  - Legend, intro caveats, and print-optimised CSS for browser
+    "Print to PDF"
+- Available via the GUI Reports panel ("Generate visual overlay
+  report" checkbox, on by default) and the CLI (`report --visual`)
+- Gracefully degrades to a text-only section when a source PDF cannot
+  be located
+
+### Fixes
+- Triage Excel output now saved to the `reports/` subfolder instead of
+  `extracted_images/`
+- Fixed crash ("'NoneType' object has no attribute 'split'") when
+  scoring or saving findings that are not image-specific (e.g.
+  TEXT_OVERLAY); `f.get("image")` now coerces `None` to an empty string
+  in both `analysis/risk.py` and `database.py`
+
 ## v1.0.0 (2026-04-19)
 
 ### Initial Release — Unified Package

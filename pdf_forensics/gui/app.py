@@ -222,7 +222,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         "main":     (780, 540),
         "analysis": (1060, 860),
         "graph":    (1060, 540),
-        "reports":  (1060, 800),
+        "reports":  (1060, 920),
     }
 
     def center_window(w, h):
@@ -828,8 +828,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             out_dir = session.db_dir or os.getcwd()
             output_dir_var.set(out_dir)
 
+        # Save triage Excel to the reports subfolder
+        reports_dir = session.reports_dir or os.path.join(out_dir, "reports")
+        os.makedirs(reports_dir, exist_ok=True)
         xlsx_path = os.path.join(
-            out_dir,
+            reports_dir,
             session.make_filename("triage", "xlsx"))
 
         # Reset counters
@@ -1140,6 +1143,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
     # --- LEFT: controls ---
 
+    # Generate button row — packed to the bottom FIRST so it always
+    # remains visible regardless of how many panels are stacked above.
+    action_row_r = tk.Frame(r_left, bg=BG_DARK)
+    action_row_r.pack(fill="x", side="bottom", pady=(8, 4))
+
     # DB picker for reports
     report_db_var = tk.StringVar()
     rdb_body = make_panel(r_left, "Database")
@@ -1189,9 +1197,20 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                command=select_none_reports).pack(
         side="left", padx=(8, 0))
 
-    # Generate button
-    action_row_r = tk.Frame(r_left, bg=BG_DARK)
-    action_row_r.pack(fill="x", side="bottom", pady=(8, 4))
+    # Visual overlay report option
+    visual_opts = make_panel(r_left, "Visual report")
+    visual_report_var = tk.BooleanVar(value=True)
+    ttk.Checkbutton(
+        visual_opts,
+        text="Generate visual overlay report (annotated page images)",
+        variable=visual_report_var).pack(anchor="w")
+    ttk.Label(
+        visual_opts,
+        text=("Renders flagged pages with detected text/image overlays "
+              "highlighted, for non-technical review. Requires the "
+              "source PDF(s) to be accessible."),
+        style="Hint.TLabel", wraplength=380,
+        justify="left").pack(anchor="w", pady=(2, 0))
 
     # --- RIGHT: status log ---
     r_log_outer = tk.Frame(r_right, bg=BORDER, padx=1, pady=1)
@@ -1309,6 +1328,29 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 r_log("No reports generated.", "dim")
                 status_var.set("No reports generated.")
                 status_label.config(fg=TEXT_SEC)
+
+            # Visual overlay report (optional)
+            if visual_report_var.get():
+                r_log("")
+                r_log("Generating visual overlay report...")
+                root.update_idletasks()
+                try:
+                    from pdf_forensics.reports.visual import (
+                        generate_visual_report)
+                    vfname = session.make_filename(
+                        "visual-overlays", "html")
+                    vpath = os.path.join(out_dir, vfname)
+                    n = generate_visual_report(
+                        db, vpath, session=session)
+                    if n > 0:
+                        r_log(f"  \u2713 Visual overlay report — "
+                              f"{n} finding(s)", "success")
+                    else:
+                        r_log("  No overlay findings to visualize.",
+                              "dim")
+                except Exception as e:
+                    r_log(f"  \u2717 Visual report — {e}", "error")
+                    session.log(f"Visual report error: {e}", "error")
 
         except Exception as e:
             status_var.set(f"Error: {e}")

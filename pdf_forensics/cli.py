@@ -76,6 +76,10 @@ def main_cli():
                           help="Output directory for report files")
     p_report.add_argument("--list", action="store_true",
                           help="List available report IDs and exit")
+    p_report.add_argument("--visual", action="store_true",
+                          help="Also generate the visual overlay report "
+                               "(annotated page images of detected "
+                               "text/image overlays)")
 
     # --- triage subcommand ---
     p_triage = sub.add_parser("triage",
@@ -281,6 +285,21 @@ def _cli_report(args, session):
         print(f"  {rid}: {rows} rows -> {os.path.basename(path)}")
 
     print(f"\n{len(results)} report(s) generated.")
+
+    # Visual overlay report (optional)
+    if args.visual:
+        from pdf_forensics.reports.visual import generate_visual_report
+        visual_path = os.path.join(
+            out_dir, session.make_filename("visual_overlays", "html"))
+        print(f"\nGenerating visual overlay report...")
+        n = generate_visual_report(
+            args.database, visual_path, session=session)
+        if n > 0:
+            print(f"  Visual report: {n} finding(s) -> "
+                  f"{os.path.basename(visual_path)}")
+        else:
+            print("  No overlay findings to visualize.")
+
     session.write_summary(db_path=args.database)
 
 

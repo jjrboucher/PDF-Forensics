@@ -15,15 +15,16 @@ from pdf_forensics import __version__, __tool_name__, SCHEMA_REVISION
 # ===================================================================
 
 FINDING_TYPE_DEFS = {
-    "BBOX_CROP": ("Image cropped by BBox boundary", "HIGH"),
-    "EXPLICIT_CLIP": ("Explicit clipping path applied", "HIGH"),
-    "OVERLAP": ("Overlapping images", "HIGH"),
-    "OFFPAGE": ("Image extends beyond page boundary", "HIGH"),
-    "DPI_ANOMALY": ("Inconsistent image resolution", "HIGH"),
-    "SOFT_MASK": ("Soft mask on Form XObject", "INFO"),
-    "IMAGE_SMASK": ("Soft mask on Image XObject", "INFO"),
-    "COMPLEX_TRANSFORM": ("Complex transform (manual review needed)", "INFO"),
-    "PARSE_ERROR": ("Stream parse error", "INFO"),
+    "BBOX_CROP":            ("Image cropped by BBox boundary",          "HIGH"),
+    "EXPLICIT_CLIP":        ("Explicit clipping path applied",          "HIGH"),
+    "OVERLAP":              ("Overlapping images",                      "HIGH"),
+    "OFFPAGE":              ("Image extends beyond page boundary",      "HIGH"),
+    "DPI_ANOMALY":          ("Inconsistent image resolution",           "HIGH"),
+    "TEXT_OVERLAY":         ("Annotation overlaid on page text",        "HIGH"),
+    "SOFT_MASK":            ("Soft mask on Form XObject",               "INFO"),
+    "IMAGE_SMASK":          ("Soft mask on Image XObject",              "INFO"),
+    "COMPLEX_TRANSFORM":    ("Complex transform (manual review needed)","INFO"),
+    "PARSE_ERROR":          ("Stream parse error",                      "INFO"),
 }
 
 
@@ -103,7 +104,12 @@ def init_db(db_path, session=None):
                             REFERENCES pages(id) ON DELETE CASCADE,
             finding_type_id INTEGER NOT NULL
                             REFERENCES finding_types(id),
-            detail          TEXT    NOT NULL
+            detail          TEXT    NOT NULL,
+            bbox_x0         REAL,
+            bbox_y0         REAL,
+            bbox_x1         REAL,
+            bbox_y1         REAL,
+            overlay_kind    TEXT
         );
 
         CREATE TABLE IF NOT EXISTS finding_images (
@@ -184,6 +190,17 @@ def init_db(db_path, session=None):
     if "display_h_pts" not in image_cols:
         cur.execute(
             "ALTER TABLE images ADD COLUMN display_h_pts REAL")
+
+    # Migration: ensure bbox/overlay_kind columns exist on findings
+    cur.execute("PRAGMA table_info(findings)")
+    finding_cols = {row[1] for row in cur.fetchall()}
+    for col in ("bbox_x0", "bbox_y0", "bbox_x1", "bbox_y1"):
+        if col not in finding_cols:
+            cur.execute(
+                f"ALTER TABLE findings ADD COLUMN {col} REAL")
+    if "overlay_kind" not in finding_cols:
+        cur.execute(
+            "ALTER TABLE findings ADD COLUMN overlay_kind TEXT")
 
     # Record schema version if this is a new database or a new revision
     cur.execute("""
@@ -411,13 +428,19 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
             if ft_id is None:
                 continue
 
+            bbox = f.get("bbox")
+            bx0, by0, bx1, by1 = (bbox if bbox and len(bbox) == 4
+                                  else (None, None, None, None))
             cur.execute("""
-                INSERT INTO findings (page_id, finding_type_id, detail)
-                VALUES (?, ?, ?)
-            """, (page_id, ft_id, f["detail"]))
+                INSERT INTO findings
+                    (page_id, finding_type_id, detail,
+                     bbox_x0, bbox_y0, bbox_x1, bbox_y1, overlay_kind)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (page_id, ft_id, f["detail"],
+                  bx0, by0, bx1, by1, f.get("overlay_kind")))
             finding_id = cur.lastrowid
 
-            image_str = f.get("image", "")
+            image_str = f.get("image") or ""
             labels_in_finding = [
                 lbl.strip() for lbl in image_str.split("/")
             ]
