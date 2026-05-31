@@ -10,6 +10,35 @@ from datetime import datetime, timezone
 from pdf_forensics import __version__, __tool_name__, SCHEMA_REVISION
 
 
+_md5_cache = {}
+
+
+def compute_file_md5(path, short=False):
+    """
+    Compute the MD5 of a file, cached by (path, mtime, size) so the
+    same database isn't re-hashed once per report in a batch.
+
+    Returns the hex digest, or "unavailable" on error. When short is
+    True, returns an abbreviated form for compact display.
+    """
+    try:
+        st = os.stat(path)
+        key = (os.path.abspath(path), st.st_mtime, st.st_size)
+        digest = _md5_cache.get(key)
+        if digest is None:
+            h = hashlib.md5()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    h.update(chunk)
+            digest = h.hexdigest()
+            _md5_cache[key] = digest
+    except Exception:
+        return "unavailable"
+    if short and len(digest) == 32:
+        return f"{digest[:8]}\u2026{digest[-4:]}"
+    return digest
+
+
 # ===================================================================
 # Constants
 # ===================================================================

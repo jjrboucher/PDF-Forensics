@@ -341,7 +341,8 @@ def generate_visual_report(db_path, output_path, analysis_id=None,
             session.log("No overlays could be visualized.", "warning")
         return 0
 
-    html = _assemble_html(doc_sections, db_path, total_findings)
+    html = _assemble_html(doc_sections, db_path, total_findings,
+                          session=session)
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
@@ -440,18 +441,61 @@ def _render_missing_pdf_section(fname, fpath, by_page):
     return "".join(parts)
 
 
-def _assemble_html(doc_sections, db_path, total_findings):
+def _assemble_html(doc_sections, db_path, total_findings, session=None):
     """Wrap document sections in the full HTML page with logo + legend."""
-    # Logo
-    logo_html = ""
+    from pdf_forensics import branding as _branding
+    from pdf_forensics.database import compute_file_md5
+
+    cfg = _branding.load_branding()
+    case_number = session.case_number if session else ""
+    agency_logo = _branding.get_agency_logo_data_uri(cfg)
+    info_pairs = _branding.case_info_pairs(case_number, cfg)
+    classification = _branding.classification_text(cfg)
+    foot_text = _branding.footer_text(case_number, cfg)
+    db_md5 = compute_file_md5(db_path) if db_path else ""
+
+    # Application (suite) logo for the left of the banner
+    app_logo = ""
     try:
         from pdf_forensics.assets import get_logo_base64
-        logo_uri = get_logo_base64()
-        if logo_uri:
-            logo_html = (f'<img class="logo" src="{logo_uri}" '
-                         f'alt="PDF Forensic Suite">')
+        app_logo = get_logo_base64() or ""
     except Exception:
         pass
+    app_logo_html = ""
+    if app_logo:
+        app_logo_html = (
+            f'<img class="app-logo" src="{app_logo}" '
+            f'alt="PDF Forensics Suite">')
+
+    # Case/agency info block (middle banner column)
+    info_block = ""
+    if info_pairs:
+        rows_html = "".join(
+            f'<div class="bi-row"><span class="bi-label">{_esc(lbl)}</span>'
+            f'<span class="bi-val">{_esc(val)}</span></div>'
+            for lbl, val in info_pairs)
+        info_block = f'<div class="case-info">{rows_html}</div>'
+
+    # Agency logo (right banner column)
+    agency_logo_html = ""
+    if agency_logo:
+        agency_logo_html = (
+            f'<img class="agency-logo" src="{agency_logo}" '
+            f'alt="Agency logo">')
+
+    classification_html = ""
+    if classification:
+        classification_html = (
+            f'<div id="classification">{_esc(classification)}</div>')
+
+    footer_html = ""
+    if foot_text or db_md5:
+        md5_part = (f'<span class="ft-md5">DB MD5: {_esc(db_md5)}</span>'
+                    if db_md5 else "")
+        footer_html = (
+            f'<div id="print-footer">'
+            f'<span class="ft-left">{_esc(foot_text)}</span>'
+            f'{md5_part}</div>')
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -478,14 +522,33 @@ def _assemble_html(doc_sections, db_path, total_findings):
     font-family: "Segoe UI", "SF Pro Text", "DejaVu Sans", sans-serif;
     font-size: 14px; line-height: 1.5;
   }}
+  #classification {{
+    background: #ED1C24; color: #fff; text-align: center;
+    font-size: 12px; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; padding: 5px 10px;
+  }}
   #header {{
     background: #252525; color: #F0F0F0;
-    padding: 20px 30px; border-bottom: 3px solid #ED1C24;
-    display: flex; align-items: center; gap: 20px;
+    padding: 18px 30px; border-bottom: 3px solid #ED1C24;
+    display: flex; align-items: center; gap: 24px;
   }}
-  #header .logo {{ height: 54px; }}
+  #header .app-logo {{ height: 54px; flex-shrink: 0; }}
+  #header .header-text {{ flex: 1; min-width: 0; }}
   #header h1 {{ font-size: 22px; font-weight: 700; }}
-  #header .subtitle {{ color: #A8A8A8; font-size: 13px; margin-top: 4px; }}
+  #header .subtitle {{ color: #A8A8A8; font-size: 12px; margin-top: 4px;
+    line-height: 1.5; }}
+  #header .case-info {{
+    border-left: 1px solid #444; padding-left: 24px;
+    font-size: 12px; line-height: 1.7; flex-shrink: 0; max-width: 320px;
+  }}
+  #header .case-info .bi-row {{ white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }}
+  #header .case-info .bi-label {{ color: #8A8A8A; }}
+  #header .case-info .bi-label::after {{ content: ": "; }}
+  #header .case-info .bi-val {{ color: #F0F0F0; }}
+  #header .agency-logo {{ height: 60px; max-width: 150px;
+    object-fit: contain; flex-shrink: 0; }}
+  #print-footer {{ display: none; }}
   #intro {{
     background: #fff; margin: 20px 30px; padding: 20px 24px;
     border-radius: 6px; border: 1px solid #E0E0E0;
@@ -555,7 +618,16 @@ def _assemble_html(doc_sections, db_path, total_findings):
   #footer {{ text-align: center; color: #999; font-size: 12px;
     padding: 20px; }}
   @media print {{
+    @page {{
+      margin: 1.4cm 1.2cm 1.8cm 1.2cm;
+      @bottom-right {{
+        content: "Page " counter(page) " of " counter(pages);
+        font-size: 9px; color: #777;
+      }}
+    }}
     body {{ background: #fff; }}
+    #classification {{
+      -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
     #header {{ background: #252525 !important;
       -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
     .doc-section, #intro {{ margin: 10px 0; border: none; }}
@@ -563,20 +635,31 @@ def _assemble_html(doc_sections, db_path, total_findings):
       -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
     .page-block {{ page-break-inside: avoid; }}
     .finding-card {{ page-break-inside: avoid; }}
+    #print-footer {{
+      display: flex; justify-content: space-between; align-items: center;
+      position: fixed; bottom: 0; left: 0; right: 0;
+      padding: 6px 4px; border-top: 1px solid #bbb;
+      font-size: 9px; color: #555;
+    }}
+    #print-footer .ft-md5 {{
+      font-family: "Consolas","Monaco",monospace; color: #777; }}
   }}
 </style>
 </head>
 <body>
-
+{classification_html}
 <div id="header">
-  {logo_html}
-  <div>
+  {app_logo_html}
+  <div class="header-text">
     <h1>Visual Overlay Report</h1>
     <div class="subtitle">{__tool_name__} v{__version__} &mdash;
       Generated {now} &mdash;
       Database: {_esc(os.path.basename(db_path))}</div>
   </div>
+  {info_block}
+  {agency_logo_html}
 </div>
+{footer_html}
 
 <div id="intro">
   <p class="big">{total_findings} overlay finding(s) detected across

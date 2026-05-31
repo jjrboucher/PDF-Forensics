@@ -93,7 +93,8 @@ def select_output_path(db_path, conn,
 
 def visualize_graph(G, image_meta, thumbnails, db_path,
                     doc_meta=None,
-                    output_path="image_relationship_graph.html"):
+                    output_path="image_relationship_graph.html",
+                    case_number=None):
     # pyvis versions vary in what they accept for height/width.
     # Try CSS units first, then pixel strings, then bare integers.
     net = None
@@ -165,13 +166,13 @@ def visualize_graph(G, image_meta, thumbnails, db_path,
     # Inject our custom JavaScript for right-click exclude and
     # the excluded images panel
     inject_custom_ui(output_path, image_meta, thumbnails, db_path,
-                     doc_meta=doc_meta or {})
+                     doc_meta=doc_meta or {}, case_number=case_number)
 
     return os.path.abspath(output_path)
 
 
 def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
-                     doc_meta=None):
+                     doc_meta=None, case_number=None):
     """
     Inject CSS, HTML panel, and JavaScript into the pyvis-generated
     HTML for right-click exclude, freeze physics after stabilization,
@@ -210,6 +211,24 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     meta_json = json.dumps(js_meta)
     db_name_json = json.dumps(os.path.basename(db_path))
     doc_meta_json = json.dumps(doc_meta or {})
+
+    # Branding payload for the printable report cover + footer
+    from pdf_forensics import branding as _branding
+    from pdf_forensics.database import compute_file_md5
+    from pdf_forensics import __version__ as _ver, __tool_name__ as _tn
+    _bcfg = _branding.load_branding()
+    branding_payload = {
+        "agency_logo":   _branding.get_agency_logo_data_uri(_bcfg) or "",
+        "info_pairs":    _branding.case_info_pairs(case_number, _bcfg),
+        "classification": _branding.classification_text(_bcfg),
+        "footer_text":   _branding.footer_text(case_number, _bcfg),
+        "agency_name":   (_bcfg.get("agency_name") or "").strip(),
+        "unit_name":     (_bcfg.get("unit_name") or "").strip(),
+        "case_number":   case_number or "",
+        "db_md5":        compute_file_md5(db_path) if db_path else "",
+        "tool_label":    f"{_tn} v{_ver}",
+    }
+    branding_json = json.dumps(branding_payload)
 
     css = """
     <style>
@@ -484,6 +503,7 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     const IMAGE_META = {meta_json};
     const DOC_META = {doc_meta_json};
     const DB_NAME = {db_name_json};
+    const BRANDING = {branding_json};
     const excludedImages = new Set();
     const excludedDocuments = new Set();
     const reportImages = new Set();
@@ -1363,18 +1383,105 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
       const now = new Date();
       const timestamp = now.toLocaleString();
 
+      const esc = escapeHtml;
+      let classificationHtml = "";
+      if (BRANDING.classification) {{
+        classificationHtml =
+          `<div id="classification">${{esc(BRANDING.classification)}}</div>`;
+      }}
+      let coverLogoHtml = BRANDING.agency_logo
+        ? `<img class="cover-logo" src="${{BRANDING.agency_logo}}" alt="Agency logo">`
+        : "";
+      let agencyLine = BRANDING.agency_name
+        ? `<div class="cover-agency">${{esc(BRANDING.agency_name)}}</div>` : "";
+      let unitLine = BRANDING.unit_name
+        ? `<div class="cover-unit">${{esc(BRANDING.unit_name)}}</div>` : "";
+      let metaRows = (BRANDING.info_pairs || []).map(p =>
+        `<tr><td class="k">${{esc(p[0])}}</td><td class="v">${{esc(p[1])}}</td></tr>`
+      ).join("");
+      let md5Line = BRANDING.db_md5
+        ? ` &middot; DB MD5: <span class="mono">${{esc(BRANDING.db_md5)}}</span>` : "";
+      let coverHtml = `
+  ${{classificationHtml}}
+  <div class="cover-page">
+    <div class="cover-top">
+      <div>${{agencyLine}}${{unitLine}}</div>
+      ${{coverLogoHtml}}
+    </div>
+    <div class="cover-rule"></div>
+    <div class="cover-title">PDF Forensics Report</div>
+    <div class="cover-subtitle">Image Duplication &amp; Reuse Analysis</div>
+    <table class="cover-meta"><tbody>${{metaRows}}</tbody></table>
+    <div class="cover-foot">
+      Generated ${{esc(timestamp)}} &middot; ${{esc(BRANDING.tool_label || "")}}${{md5Line}}<br>
+      Database: ${{esc(DB_NAME)}} &middot; Images in report: ${{reportImages.size}}
+    </div>
+  </div>`;
+      let footerHtml = (BRANDING.footer_text || BRANDING.db_md5)
+        ? `<div id="print-footer"><span class="ft-left">${{esc(BRANDING.footer_text)}}</span>` +
+          (BRANDING.db_md5 ? `<span class="ft-md5">DB MD5: ${{esc(BRANDING.db_md5)}}</span>` : "") +
+          `</div>`
+        : "";
+
       let html = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>PDF Forensics Report</title>
 <style>
-  @page {{ size: letter; margin: 0.75in; }}
+  @page {{
+    size: letter; margin: 0.75in;
+    @bottom-right {{
+      content: "Page " counter(page) " of " counter(pages);
+      font-size: 9px; color: #777;
+    }}
+  }}
   @media print {{
     body {{ background: #fff !important; color: #000 !important; }}
     .no-print {{ display: none !important; }}
     .report-item {{ page-break-inside: avoid; }}
+    .cover-page {{ page-break-after: always; }}
+    #classification {{
+      -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+    #print-footer {{
+      display: flex !important; justify-content: space-between;
+      align-items: center; position: fixed; bottom: 0; left: 0; right: 0;
+      padding: 6px 4px; border-top: 1px solid #bbb;
+      font-size: 9px; color: #555; background: #fff;
+    }}
+    #print-footer .ft-md5 {{
+      font-family: "Consolas","Monaco",monospace; color: #777; }}
   }}
+  #classification {{
+    background: #ED1C24; color: #fff; text-align: center;
+    font-size: 12px; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; padding: 6px 10px;
+    margin: -20px -20px 20px;
+  }}
+  #print-footer {{ display: none; }}
+  .cover-page {{
+    min-height: 80vh; display: flex; flex-direction: column;
+    padding: 10px 4px;
+  }}
+  .cover-top {{
+    display: flex; justify-content: space-between;
+    align-items: flex-start; gap: 24px;
+  }}
+  .cover-agency {{ font-size: 18px; font-weight: 700; color: #222; }}
+  .cover-unit {{ font-size: 13px; font-weight: 600; color: #ED1C24;
+    margin-top: 2px; }}
+  .cover-logo {{ max-height: 76px; max-width: 180px; object-fit: contain; }}
+  .cover-rule {{ height: 3px; background: #ED1C24; margin: 22px 0 26px; }}
+  .cover-title {{ font-size: 30px; font-weight: 700; color: #222; }}
+  .cover-subtitle {{ font-size: 14px; color: #666; margin-top: 6px; }}
+  .cover-meta {{ margin-top: 34px; border-collapse: collapse;
+    font-size: 14px; color: #333; }}
+  .cover-meta td {{ padding: 7px 22px 7px 0; vertical-align: top; }}
+  .cover-meta td.k {{ color: #888; white-space: nowrap; }}
+  .cover-meta td.v {{ font-weight: 600; }}
+  .cover-foot {{ margin-top: auto; padding-top: 22px;
+    border-top: 1px solid #ddd; font-size: 11px; color: #999; }}
+  .cover-foot .mono {{ font-family: "Consolas","Monaco",monospace; }}
   body {{
     font-family: "Segoe UI", Arial, sans-serif;
     background: #f5f5f5; color: #222;
@@ -1523,14 +1630,8 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     <span class="instruction">Use your browser's print function (Ctrl+P / ⌘P) and select "Save as PDF"</span>
     <button onclick="window.print()">Print / Save as PDF</button>
   </div>
-  <header>
-    <h1><span class="accent">PDF</span> Forensics Report</h1>
-    <div class="meta">
-      Generated: ${{escapeHtml(timestamp)}}<br>
-      Database: ${{escapeHtml(DB_NAME)}}<br>
-      Images in report: ${{reportImages.size}}
-    </div>
-  </header>
+  ${{coverHtml}}
+  ${{footerHtml}}
 `;
 
       // Summary box

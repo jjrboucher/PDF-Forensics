@@ -310,6 +310,88 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     main_btns = tk.Frame(menu_inner, bg=BG_DARK)
     main_btns.pack(fill="x", padx=40, pady=(20, 12))
 
+    def edit_branding():
+        from pdf_forensics import branding as bmod
+        cfg = bmod.load_branding()
+
+        dlg = tk.Toplevel(root)
+        dlg.title("Agency / Investigator Branding")
+        dlg.configure(bg=BG_DARK)
+        dlg.transient(root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+
+        wrap = tk.Frame(dlg, bg=BG_DARK, padx=24, pady=20)
+        wrap.pack(fill="both", expand=True)
+
+        tk.Label(wrap, text="Report Branding", bg=BG_DARK, fg=TEXT_PRIM,
+                 font=(FONT_FAMILY, 14, "bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        tk.Label(wrap,
+                 text="Shown on report banners, the graph cover page, "
+                      "and page footers.\nSaved to the application folder.",
+                 bg=BG_DARK, fg=TEXT_SEC, justify="left",
+                 font=FONT_SUBTITLE).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(0, 14))
+
+        entries = {}
+        r = 2
+        for key, label in bmod.FIELDS:
+            tk.Label(wrap, text=label, bg=BG_DARK, fg=TEXT_SEC,
+                     font=FONT_BASE).grid(
+                row=r, column=0, sticky="w", pady=4, padx=(0, 12))
+            var = tk.StringVar(value=cfg.get(key, ""))
+            ttk.Entry(wrap, textvariable=var, width=44).grid(
+                row=r, column=1, sticky="we", pady=4)
+            entries[key] = var
+            if key == "agency_logo_path":
+                def browse_logo(v=var):
+                    p = filedialog.askopenfilename(
+                        parent=dlg, title="Select agency logo",
+                        filetypes=[
+                            ("Images",
+                             "*.png *.jpg *.jpeg *.gif *.webp *.bmp"),
+                            ("All files", "*.*")])
+                    if p:
+                        v.set(p)
+                ttk.Button(wrap, text="Browse\u2026",
+                           command=browse_logo).grid(
+                    row=r, column=2, padx=(8, 0), pady=4)
+            r += 1
+
+        wrap.columnconfigure(1, weight=1)
+
+        btns = tk.Frame(wrap, bg=BG_DARK)
+        btns.grid(row=r, column=0, columnspan=3, sticky="we", pady=(18, 0))
+
+        def do_save():
+            newcfg = {k: v.get() for k, v in entries.items()}
+            path = bmod.save_branding(newcfg)
+            if path:
+                messagebox.showinfo(
+                    "Branding saved",
+                    f"Branding saved to:\n{path}", parent=dlg)
+                dlg.destroy()
+            else:
+                messagebox.showerror(
+                    "Save failed",
+                    "Could not write the branding file.", parent=dlg)
+
+        ttk.Button(btns, text="Save", style="Accent.TButton",
+                   command=do_save).pack(side="right")
+        ttk.Button(btns, text="Cancel",
+                   command=dlg.destroy).pack(side="right", padx=(0, 8))
+
+        dlg.update_idletasks()
+        try:
+            rx, ry = root.winfo_rootx(), root.winfo_rooty()
+            rw, rh = root.winfo_width(), root.winfo_height()
+            dw, dh = dlg.winfo_width(), dlg.winfo_height()
+            dlg.geometry(
+                f"+{rx + (rw - dw) // 2}+{ry + (rh - dh) // 3}")
+        except Exception:
+            pass
+
     def change_case():
         new_case = simpledialog.askstring(
             "Change Case",
@@ -337,8 +419,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
     ttk.Button(main_btns, text="Change case number",
                command=change_case).pack(side="left")
+    ttk.Button(main_btns, text="Branding / agency info",
+               command=edit_branding).pack(side="left", padx=(8, 0))
     ttk.Button(main_btns, text="Exit", style="Danger.TButton",
-               command=root.destroy).pack(side="right")
+               command=root.destroy).pack(side="right", padx=(12, 0))
 
     # ===================================================================
     # ANALYSIS SUB-MENU FRAME (left-right split)
@@ -759,8 +843,12 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     # (which are subsets of the parent file)
                     if (extract_versions_var.get()
                             and not this_is_version):
+                        versions_out = (session.pdf_versions_dir
+                                        or os.path.join(
+                                            out_dir, "pdf_versions"))
+                        os.makedirs(versions_out, exist_ok=True)
                         version_paths = extract_prior_versions(
-                            pdf_path, out_dir, session=session)
+                            pdf_path, versions_out, session=session)
                         if version_paths:
                             log_to_gui(
                                 f"    \u21b3 {len(version_paths)} prior "
@@ -1084,7 +1172,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 visualize_graph(
                     G, image_meta, thumbnails, db,
                     doc_meta=doc_meta,
-                    output_path=out_path)
+                    output_path=out_path,
+                    case_number=(session.case_number
+                                 if session else None))
 
                 session.register_output("graph", out_path)
                 generated.append((scope, out_path))

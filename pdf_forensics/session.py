@@ -9,6 +9,8 @@ Folder structure (relative to DB location):
     {db_dir}/
         {case}_forensics_{timestamp}.db
         extracted_images/
+        pdf_versions/
+            {pdfname}_versions/
         logs/
             {case}_session_{timestamp}.log
         graph_reports/
@@ -91,7 +93,6 @@ class Session:
         os.makedirs(self.logs_dir, exist_ok=True)
         os.makedirs(self.graph_reports_dir, exist_ok=True)
         os.makedirs(self.reports_dir, exist_ok=True)
-
         # Initialize the logger now that we know where to write
         if self.logger is None:
             self._init_logger()
@@ -113,6 +114,11 @@ class Session:
     @property
     def extracted_images_dir(self):
         return os.path.join(self.db_dir, "extracted_images") \
+            if self.db_dir else None
+
+    @property
+    def pdf_versions_dir(self):
+        return os.path.join(self.db_dir, "pdf_versions") \
             if self.db_dir else None
 
     def _init_logger(self):

@@ -1,5 +1,37 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-05-31)
+
+### Report Branding & Agency Information
+- New "Branding / agency info" dialog on the main menu to configure
+  the agency logo, investigator name / email / phone, agency name,
+  unit name, agency address, and an optional classification caveat
+- Settings persist to `branding.json` in the application folder
+  (falls back to the home directory if that folder is not writable)
+  and are applied automatically by both the GUI and the CLI
+- HTML reports now carry a three-column banner: report title (left),
+  case/agency information (centre), and the agency logo (right)
+- The visual overlay report uses the same banner
+- Graph reports now open with a professional cover page (agency name
+  and unit, logo, case/investigator details, and a generated-on /
+  database-integrity strip), printed as its own page
+- Optional configurable classification strip (e.g. "Law Enforcement
+  Sensitive") across the top of every report and the graph cover
+- Per-page print footer (case number, investigator, database MD5) on
+  HTML reports, the visual report, and graph reports; repeats on each
+  page in Chromium-based browsers
+- Page numbers ("Page X of Y") via the CSS `@page` margin box
+  (rendered by Firefox and PDF print engines)
+- Database MD5 shown on the graph cover and in report footers for
+  chain-of-custody
+- New cached `compute_file_md5()` helper so the evidence database is
+  hashed once per session rather than once per report
+
+### Output Folder Change
+- Extracted prior PDF versions are now written to a `pdf_versions/`
+  sub-folder (each file's versions under `{name}_versions/`) instead
+  of inside `extracted_images/`, for a clearer folder layout
+
 ## v1.0.0 — Update (2026-05-29)
 
 ### Text Overlay Detection

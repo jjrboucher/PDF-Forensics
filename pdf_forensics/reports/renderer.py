@@ -64,6 +64,7 @@ def generate_report(db_path, report_def, output_path, session=None):
         db_path=db_path,
         row_count=len(table_data),
         sticky_cols=sticky_cols,
+        session=session,
     )
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -79,19 +80,70 @@ def generate_report(db_path, report_def, output_path, session=None):
 
 
 def _render_html(title, description, columns, data, db_path,
-                 row_count, sticky_cols=0):
+                 row_count, sticky_cols=0, session=None):
     """Build the complete self-contained HTML string."""
 
-    # Load logo for embedding
-    logo_uri = ""
+    from pdf_forensics import branding as _branding
+    from pdf_forensics.database import compute_file_md5
+
+    cfg = _branding.load_branding()
+    case_number = session.case_number if session else ""
+    agency_logo = _branding.get_agency_logo_data_uri(cfg)
+    info_pairs = _branding.case_info_pairs(case_number, cfg)
+    classification = _branding.classification_text(cfg)
+    foot_text = _branding.footer_text(case_number, cfg)
+    db_md5 = compute_file_md5(db_path) if db_path else ""
+
+    # Application (suite) logo for the left of the banner
+    app_logo = ""
     try:
         from pdf_forensics.assets import get_logo_base64
-        logo_uri = get_logo_base64() or ""
+        app_logo = get_logo_base64() or ""
     except Exception:
         pass
 
     def esc(val):
         return html_mod.escape(str(val)) if val else ""
+
+    # Banner: case/agency info block (middle column)
+    info_html = ""
+    if info_pairs:
+        rows_html = "".join(
+            f'<div class="bi-row"><span class="bi-label">{esc(lbl)}</span>'
+            f'<span class="bi-val">{esc(val)}</span></div>'
+            for lbl, val in info_pairs)
+        info_html = f'<div class="case-info">{rows_html}</div>'
+
+    # Banner: agency logo (right column)
+    agency_logo_html = ""
+    if agency_logo:
+        agency_logo_html = (
+            f'<img class="agency-logo" src="{agency_logo}" '
+            f'alt="Agency logo">')
+
+    # Banner: application/suite logo (left column)
+    app_logo_html = ""
+    if app_logo:
+        app_logo_html = (
+            f'<img class="app-logo" src="{app_logo}" '
+            f'alt="PDF Forensics Suite">')
+
+    # Classification strip (top, optional)
+    classification_html = ""
+    if classification:
+        classification_html = (
+            f'<div id="classification">{esc(classification)}</div>')
+
+    # Print footer (per-page, optional)
+    footer_html = ""
+    if foot_text or db_md5:
+        md5_part = (f'<span class="ft-md5">DB MD5: {esc(db_md5)}</span>'
+                    if db_md5 else "")
+        footer_html = (
+            f'<div id="print-footer">'
+            f'<span class="ft-left">{esc(foot_text)}</span>'
+            f'{md5_part}</div>')
+
 
     # Build header row
     header_cells = []
@@ -176,22 +228,44 @@ def _render_html(title, description, columns, data, db_path,
     font-family: "Segoe UI", "SF Pro Text", "DejaVu Sans", sans-serif;
     font-size: 13px; padding: 0;
   }}
-  #header {{
-    background: #252525; padding: 20px 30px;
-    border-bottom: 2px solid #ED1C24;
-    display: flex; align-items: center; gap: 20px;
+  #classification {{
+    background: #ED1C24; color: #fff; text-align: center;
+    font-size: 12px; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; padding: 5px 10px;
   }}
-  #header .logo {{ height: 48px; }}
-  #header .header-text {{ flex: 1; }}
+  #header {{
+    background: #252525; padding: 18px 30px;
+    border-bottom: 2px solid #ED1C24;
+    display: flex; align-items: center; gap: 24px;
+  }}
+  #header .app-logo {{
+    height: 48px; flex-shrink: 0;
+  }}
+  #header .header-text {{ flex: 1; min-width: 0; }}
   #header h1 {{
-    font-size: 20px; font-weight: 700; color: #F0F0F0;
+    font-size: 19px; font-weight: 700; color: #F0F0F0;
     margin-bottom: 4px;
   }}
-  #header .subtitle {{ color: #A8A8A8; font-size: 12px; }}
+  #header .subtitle {{ color: #A8A8A8; font-size: 11px; line-height: 1.5; }}
   #header .description {{
     color: #A8A8A8; font-size: 12px; margin-top: 8px;
-    max-width: 900px;
+    max-width: 720px;
   }}
+  #header .case-info {{
+    border-left: 1px solid #3D3D3D; padding-left: 24px;
+    font-size: 11px; line-height: 1.65; flex-shrink: 0;
+    max-width: 320px;
+  }}
+  #header .case-info .bi-row {{ white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }}
+  #header .case-info .bi-label {{ color: #7A7A7A; }}
+  #header .case-info .bi-label::after {{ content: ": "; }}
+  #header .case-info .bi-val {{ color: #F0F0F0; }}
+  #header .agency-logo {{
+    height: 60px; max-width: 150px; object-fit: contain;
+    flex-shrink: 0;
+  }}
+  #print-footer {{ display: none; }}
   #toolbar {{
     background: #252525; padding: 10px 30px;
     border-bottom: 1px solid #3D3D3D;
@@ -262,10 +336,23 @@ def _render_html(title, description, columns, data, db_path,
   .num {{ font-variant-numeric: tabular-nums; }}
 {sticky_css}
   @media print {{
+    @page {{
+      margin: 1.4cm 1.2cm 1.8cm 1.2cm;
+      @bottom-right {{
+        content: "Page " counter(page) " of " counter(pages);
+        font-size: 9px; color: #777;
+      }}
+    }}
     body {{ background: #fff; color: #000; font-size: 10px; }}
+    #classification {{
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }}
     #header {{ background: #f5f5f5; border-bottom: 2px solid #333; }}
     #header h1 {{ color: #000; }}
     #header .subtitle, #header .description {{ color: #555; }}
+    #header .case-info {{ border-left: 1px solid #bbb; }}
+    #header .case-info .bi-label {{ color: #666; }}
+    #header .case-info .bi-val {{ color: #000; }}
     #toolbar {{ display: none; }}
     #table-container {{ padding: 8px; }}
     table {{ background: #fff; border: 1px solid #ccc; }}
@@ -275,23 +362,34 @@ def _render_html(title, description, columns, data, db_path,
     .hash {{ color: #555; }}
     tr.filter-row {{ display: none; }}
     .sticky-col {{ position: static !important; }}
+    #print-footer {{
+      display: flex; justify-content: space-between; align-items: center;
+      position: fixed; bottom: 0; left: 0; right: 0;
+      padding: 6px 4px; border-top: 1px solid #bbb;
+      font-size: 9px; color: #555;
+    }}
+    #print-footer .ft-md5 {{
+      font-family: "Consolas","Monaco",monospace; color: #777;
+    }}
   }}
 </style>
 </head>
 <body>
-
+{classification_html}
 <div id="header">
-  {"<img class='logo' src='" + logo_uri + "' alt='PDF Forensic Suite'>" if logo_uri else ""}
+  {app_logo_html}
   <div class="header-text">
     <h1>{esc(title)}</h1>
     <div class="subtitle">
-      {__tool_name__} v{__version__} &mdash;
-      Generated {now} &mdash;
-      Database: {esc(os.path.basename(db_path))}
+      {__tool_name__} v{__version__}<br>
+      Generated {now} &mdash; Database: {esc(os.path.basename(db_path))}
     </div>
     <div class="description">{esc(description)}</div>
   </div>
+  {info_html}
+  {agency_logo_html}
 </div>
+{footer_html}
 
 <div id="toolbar">
   <div class="stat">Rows: <strong id="visible-count">{row_count}</strong>
