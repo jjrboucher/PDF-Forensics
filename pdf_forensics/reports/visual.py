@@ -12,6 +12,16 @@ of a PDF. The report contains:
   2. Per-finding detail cards — a zoomed-in crop of each overlay region
      shown at high magnification, alongside a plain-language description.
 
+  3. Before/after reveal toggles — where an overlay's underlying content
+     is recoverable, the reader can flip between "as displayed" (overlay
+     present) and the page/region rendered with the overlay suppressed,
+     showing what is hidden beneath. Two independent modes are offered:
+     a page-level toggle (all overlays on the page suppressed at once) on
+     the full page image, and a per-finding toggle (only that one overlay
+     suppressed) on each detail card. Suppression is performed by
+     reports/reveal.py. For printed copies, both states are shown stacked
+     with captions.
+
 Highlight colours by overlay kind:
   - text_over_text : red    (#E24B4A) — new text painted over old text
   - white_box      : orange (#EF9F27) — white rectangle masking content
@@ -32,6 +42,7 @@ import html as html_mod
 from datetime import datetime
 
 from pdf_forensics import __version__, __tool_name__
+from pdf_forensics.reports import reveal as _reveal
 
 # Render resolution for full pages and crops (DPI)
 PAGE_RENDER_DPI = 144
@@ -208,6 +219,35 @@ def _crop_region_png(page, bbox, dpi, padding_pts):
     return pix.tobytes("png")
 
 
+def _render_revealed_page_png(pdf_bytes, page_index, dpi):
+    """
+    Render a full page from an in-memory revealed PDF (overlays
+    suppressed) to PNG bytes. Rendered clean, without highlight boxes,
+    so the reader sees the recovered content plainly.
+    """
+    import pymupdf
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        page = doc[page_index]
+        zoom = dpi / 72.0
+        mat = pymupdf.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        return pix.tobytes("png")
+    finally:
+        doc.close()
+
+
+def _render_revealed_crop_png(pdf_bytes, page_index, bbox, dpi, padding_pts):
+    """Render a zoomed crop of one region from a revealed PDF."""
+    import pymupdf
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        page = doc[page_index]
+        return _crop_region_png(page, bbox, dpi, padding_pts)
+    finally:
+        doc.close()
+
+
 def _b64_png(png_bytes):
     """Return a data URI for PNG bytes."""
     b64 = base64.b64encode(png_bytes).decode("ascii")
@@ -284,6 +324,11 @@ def generate_visual_report(db_path, output_path, analysis_id=None,
             if page_num < 1 or page_num > len(doc):
                 continue
             page = doc[page_num - 1]
+            page_index = page_num - 1
+            try:
+                page_height = float(page.rect.height)
+            except Exception:
+                page_height = 792.0
 
             # Assign sequential numbers to findings on this page
             boxes = []
@@ -301,32 +346,65 @@ def generate_visual_report(db_path, output_path, analysis_id=None,
             annotated = _draw_box_on_pixmap_png(page_png, boxes, zoom)
             page_uri = _b64_png(annotated)
 
-            # Detail crops per finding
+            # Page-level reveal: suppress ALL overlays on the page at once
+            # (one of the two before/after modes). Rendered clean, no boxes.
+            page_reveal_uri = None
+            page_reveal_kinds = set()
+            try:
+                rb, rinfo = _reveal.build_revealed_pdf_bytes(
+                    fpath, page_index, findings, page_height)
+                if rb:
+                    page_reveal_uri = _b64_png(
+                        _render_revealed_page_png(
+                            rb, page_index, PAGE_RENDER_DPI))
+                    page_reveal_kinds = rinfo.get("kinds", set())
+            except Exception as e:
+                if session:
+                    session.log(
+                        f"Page reveal failed (p{page_num}): {e}",
+                        "warning")
+
+            # Detail crops per finding, each with its own reveal (the
+            # second before/after mode: suppress only this flagged overlay)
             crops = []
             for fnd in findings:
+                crop_uri = None
+                reveal_uri = None
                 try:
-                    crop_png = _crop_region_png(
+                    crop_uri = _b64_png(_crop_region_png(
                         page, fnd["bbox"], CROP_RENDER_DPI,
-                        CROP_PADDING_PTS)
-                    crops.append({
-                        "number": fnd["_number"],
-                        "kind": fnd["kind"],
-                        "detail": fnd["detail"],
-                        "uri": _b64_png(crop_png),
-                    })
+                        CROP_PADDING_PTS))
                 except Exception:
-                    crops.append({
-                        "number": fnd["_number"],
-                        "kind": fnd["kind"],
-                        "detail": fnd["detail"],
-                        "uri": None,
-                    })
+                    crop_uri = None
+
+                try:
+                    rb1, rinfo1 = _reveal.build_revealed_pdf_bytes(
+                        fpath, page_index, [fnd], page_height)
+                    if rb1:
+                        reveal_uri = _b64_png(_render_revealed_crop_png(
+                            rb1, page_index, fnd["bbox"],
+                            CROP_RENDER_DPI, CROP_PADDING_PTS))
+                except Exception:
+                    reveal_uri = None
+
+                crops.append({
+                    "number": fnd["_number"],
+                    "kind": fnd["kind"],
+                    "detail": fnd["detail"],
+                    "uri": crop_uri,
+                    "reveal_uri": reveal_uri,
+                    "best_effort": fnd["kind"] == "text_over_text",
+                })
 
             page_blocks.append({
                 "page_num": page_num,
                 "page_uri": page_uri,
+                "page_reveal_uri": page_reveal_uri,
+                "page_reveal_best_effort": (
+                    "text_over_text" in page_reveal_kinds),
                 "crops": crops,
                 "count": len(findings),
+                "uid": f"{aid}-{page_num}",
             })
             total_findings += len(findings)
 
@@ -377,12 +455,54 @@ def _render_doc_section(fname, fmd5, page_blocks):
             f'overlay{"s" if pb["count"] != 1 else ""} detected)'
             f'</span></h3>')
 
-        # Full annotated page
-        parts.append('<div class="page-image-wrap">')
-        parts.append(
-            f'<img class="page-image" src="{pb["page_uri"]}" '
-            f'alt="Annotated page {pb["page_num"]}">')
-        parts.append('</div>')
+        # Full annotated page, with before/after toggle when the page's
+        # overlays are recoverable (suppress-all-on-page mode).
+        if pb.get("page_reveal_uri"):
+            sid = f'pg-{pb["uid"]}'
+            be_note = ""
+            if pb.get("page_reveal_best_effort"):
+                be_note = (
+                    '<div class="reveal-note best-effort">Reveal includes '
+                    'text-over-text reconstruction (best-effort): overlying '
+                    'text was suppressed to expose the glyphs beneath. '
+                    'Verify against the source document.</div>')
+            else:
+                be_note = (
+                    '<div class="reveal-note">The overlays were suppressed '
+                    'to reveal content that remained in the file beneath '
+                    'them.</div>')
+            parts.append('<div class="page-image-wrap">')
+            parts.append(
+                f'<div class="toggle-bar" data-stack="{sid}">'
+                f'<span class="toggle-label">View:</span>'
+                f'<button class="tg-btn active" data-stack="{sid}" '
+                f'data-mode="overlay">As displayed</button>'
+                f'<button class="tg-btn" data-stack="{sid}" '
+                f'data-mode="reveal">Overlays removed</button>'
+                f'</div>')
+            parts.append(f'<div class="img-stack" id="{sid}">')
+            parts.append(
+                f'<div class="layer layer-overlay active">'
+                f'<div class="print-cap">As displayed '
+                f'(overlays present)</div>'
+                f'<img class="page-image" src="{pb["page_uri"]}" '
+                f'alt="Annotated page {pb["page_num"]}"></div>')
+            parts.append(
+                f'<div class="layer layer-reveal">'
+                f'<div class="print-cap">Overlays removed '
+                f'(content beneath)</div>'
+                f'<img class="page-image" src="{pb["page_reveal_uri"]}" '
+                f'alt="Page {pb["page_num"]} with overlays removed">'
+                f'</div>')
+            parts.append('</div>')   # img-stack
+            parts.append(be_note)
+            parts.append('</div>')   # page-image-wrap
+        else:
+            parts.append('<div class="page-image-wrap">')
+            parts.append(
+                f'<img class="page-image" src="{pb["page_uri"]}" '
+                f'alt="Annotated page {pb["page_num"]}">')
+            parts.append('</div>')
 
         # Detail cards
         parts.append('<div class="findings-grid">')
@@ -398,7 +518,37 @@ def _render_doc_section(fname, fmd5, page_blocks):
                 f'{crop["number"]}</span>'
                 f'<span class="finding-kind">{style["label"]}</span>'
                 f'</div>')
-            if crop["uri"]:
+            # Crop region: with per-finding before/after toggle when this
+            # overlay's underlying content is recoverable.
+            if crop["uri"] and crop.get("reveal_uri"):
+                csid = f'cr-{pb["uid"]}-{crop["number"]}'
+                parts.append(
+                    f'<div class="crop-toggle" data-stack="{csid}">'
+                    f'<button class="tg-btn sm active" data-stack="{csid}" '
+                    f'data-mode="overlay">As displayed</button>'
+                    f'<button class="tg-btn sm" data-stack="{csid}" '
+                    f'data-mode="reveal">Hidden beneath</button>'
+                    f'</div>')
+                parts.append(f'<div class="img-stack crop-stack" id="{csid}">')
+                parts.append(
+                    f'<div class="layer layer-overlay active">'
+                    f'<div class="print-cap">As displayed</div>'
+                    f'<div class="crop-wrap">'
+                    f'<img class="crop-image" src="{crop["uri"]}" '
+                    f'alt="Detail {crop["number"]}"></div></div>')
+                parts.append(
+                    f'<div class="layer layer-reveal">'
+                    f'<div class="print-cap">Hidden beneath</div>'
+                    f'<div class="crop-wrap">'
+                    f'<img class="crop-image" src="{crop["reveal_uri"]}" '
+                    f'alt="Detail {crop["number"]} with overlay removed">'
+                    f'</div></div>')
+                parts.append('</div>')   # img-stack
+                if crop.get("best_effort"):
+                    parts.append(
+                        '<div class="reveal-note best-effort sm">'
+                        'Best-effort reconstruction.</div>')
+            elif crop["uri"]:
                 parts.append(
                     f'<div class="crop-wrap">'
                     f'<img class="crop-image" src="{crop["uri"]}" '
@@ -617,6 +767,27 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
   }}
   #footer {{ text-align: center; color: #999; font-size: 12px;
     padding: 20px; }}
+  /* Before/after toggle */
+  .toggle-bar {{ display: flex; align-items: center; gap: 8px;
+    margin-bottom: 12px; }}
+  .toggle-label {{ font-size: 13px; color: #666; margin-right: 2px; }}
+  .crop-toggle {{ display: flex; gap: 6px; margin-bottom: 8px; }}
+  .tg-btn {{ font: inherit; font-size: 13px; cursor: pointer;
+    border: 1px solid #C9C9C9; background: #fff; color: #333;
+    padding: 5px 14px; border-radius: 4px; transition: all .12s ease; }}
+  .tg-btn.sm {{ font-size: 12px; padding: 3px 10px; }}
+  .tg-btn:hover {{ border-color: #ED1C24; }}
+  .tg-btn.active {{ background: #252525; color: #fff;
+    border-color: #252525; font-weight: 600; }}
+  .img-stack .layer {{ display: none; }}
+  .img-stack .layer.active {{ display: block; }}
+  .print-cap {{ display: none; }}
+  .reveal-note {{ font-size: 12px; color: #666; margin-top: 8px;
+    padding: 8px 12px; background: #F0F4F8; border-radius: 4px;
+    border-left: 3px solid #4A90D9; }}
+  .reveal-note.best-effort {{ background: #FFF8EC;
+    border-left-color: #EF9F27; color: #7A5500; }}
+  .reveal-note.sm {{ font-size: 11px; padding: 5px 9px; margin-top: 6px; }}
   @media print {{
     @page {{
       margin: 1.4cm 1.2cm 1.8cm 1.2cm;
@@ -643,6 +814,12 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
     }}
     #print-footer .ft-md5 {{
       font-family: "Consolas","Monaco",monospace; color: #777; }}
+    /* In print, show both layers stacked with captions; hide toggles */
+    .toggle-bar, .crop-toggle {{ display: none !important; }}
+    .img-stack .layer {{ display: block !important; }}
+    .img-stack .layer + .layer {{ margin-top: 10px; }}
+    .print-cap {{ display: block; font-size: 11px; font-weight: 700;
+      color: #333; margin: 6px 0 4px; }}
   }}
 </style>
 </head>
@@ -684,6 +861,34 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
 <div id="footer">
   {__tool_name__} v{__version__} &mdash; Visual Overlay Report
 </div>
+
+<script>
+(function () {{
+  function setMode(stackId, mode) {{
+    var stack = document.getElementById(stackId);
+    if (!stack) return;
+    var layers = stack.querySelectorAll(".layer");
+    for (var i = 0; i < layers.length; i++) {{
+      var isOverlay = layers[i].classList.contains("layer-overlay");
+      var on = (mode === "overlay") ? isOverlay : !isOverlay;
+      layers[i].classList.toggle("active", on);
+    }}
+    var btns = document.querySelectorAll(
+      '.tg-btn[data-stack="' + stackId + '"]');
+    for (var j = 0; j < btns.length; j++) {{
+      btns[j].classList.toggle(
+        "active", btns[j].getAttribute("data-mode") === mode);
+    }}
+  }}
+  document.addEventListener("click", function (ev) {{
+    var btn = ev.target.closest ? ev.target.closest(".tg-btn") : null;
+    if (!btn) return;
+    var stackId = btn.getAttribute("data-stack");
+    var mode = btn.getAttribute("data-mode");
+    if (stackId && mode) setMode(stackId, mode);
+  }});
+}})();
+</script>
 
 </body>
 </html>"""

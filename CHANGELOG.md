@@ -1,5 +1,28 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-06-01)
+
+### Visual Overlay Report — Before/After Reveal
+- The visual overlay report can now show, for recoverable overlays, what
+  is hidden beneath them. Where the underlying content still exists in the
+  file (white-box masks, text-over-text, and opaque annotations), the page
+  is re-rendered with the overlay suppressed and offered alongside the
+  normal view via a toggle.
+- Two independent reveal modes are provided:
+  - A page-level toggle on each full page image ("As displayed" vs
+    "Overlays removed") that suppresses every overlay on that page at once.
+  - A per-finding toggle on each detail card ("As displayed" vs
+    "Hidden beneath") that suppresses only that one flagged overlay.
+- Suppression is performed at the content-stream level by the new
+  `reports/reveal.py` module, which re-parses the page content stream and
+  removes the operators that paint the overlay (the white rectangle and the
+  text drawn on top, the overlying glyphs, or the annotation), exposing the
+  original content that remained underneath. The original underlying
+  content is never modified.
+- Text-over-text reveals are labelled as best-effort reconstructions.
+- When printed, both states are shown stacked with captions so a filed PDF
+  preserves the comparison.
+
 ## v1.0.0 — Update (2026-05-31)
 
 ### Report Branding & Agency Information
