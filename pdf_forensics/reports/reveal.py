@@ -7,29 +7,38 @@ module produces a modified copy of the PDF with the overlay content
 suppressed, so the report can render "what is hidden beneath" an overlay.
 
 Three overlay kinds are handled, mirroring the detectors that produce them
-(see analysis/detectors.py):
+(see analysis/detectors.py): white_box, text_over_text, and annotation.
 
-  white_box      A white(ish) filled rectangle painted over existing
-                 content, with new text drawn on top. Reveal removes the
-                 white rectangle's paint operators and the text-show
-                 operators drawn on top inside that rectangle, exposing the
-                 original content drawn earlier in the same stream.
+Real-world alterations (e.g. those produced by PDFium-based editors) are
+frequently composited on top of the original through deeply nested Form
+XObjects. The original content stays in the base page content stream (or a
+lower layer), and each edit is layered on top as a TWO-part construct drawn
+last:
 
-  text_over_text New glyphs painted directly over original glyphs at the
-                 same position, with no masking rectangle. Reveal removes
-                 the later (overlying) text-show operators in the region,
-                 exposing the earlier (original) glyphs. Best-effort.
+  (1) a patch -- a white rectangle, or one or more small image/form patches
+      -- that hides the original glyphs, and
+  (2) forged text drawn over the patch.
 
-  annotation     An opaque annotation (FreeText / Widget / Square / Redact)
-                 placed over text. Reveal removes the matching annotation
-                 from the page's /Annots array.
+Removing only the forged text leaves the patch covering the original, so the
+reveal must remove BOTH halves together. Because both halves are emitted as
+a contiguous group of "Do" invocations (and sometimes inline operators)
+inside a small container form whose bounding box tightly frames the altered
+region, the reliable unit of suppression is that *container form invocation*,
+not the individual glyph-show operators.
 
-The recovery is non-destructive to the *original* content: the underlying
-material is exposed only because the overlay merely hid it -- it was never
-removed from the file. Operators are matched by re-parsing the content
-stream and tracking graphics state exactly as the detectors do, because the
-database stores only each finding's bounding box and kind, not stream
-offsets.
+This module therefore walks the entire content tree (page stream plus every
+nested Form XObject) in draw order, recording for each form-invocation
+("Do") site: the page-space bounding box of the invoked form, and a summary
+of what its subtree paints (overlay text, patch content, and -- critically
+-- any *legitimate* text that must not be destroyed). For each flagged
+region it then selects the tightest container whose box frames the region
+and whose subtree contains only overlay material; suppressing that container
+removes patch and forged text together and exposes the untouched original.
+
+Evidentiary safety: if no container can be found that isolates the overlay
+from legitimate co-located content, the reveal is SKIPPED for that finding
+rather than producing a misleading partial result. The caller is told which
+findings were and were not recovered so the report can label accordingly.
 
 Coordinate systems: finding bounding boxes are stored in PyMuPDF top-left
 origin coordinates. Content-stream geometry is in PDF bottom-left origin
@@ -37,35 +46,41 @@ coordinates. A finding box (mx0, my0, mx1, my1) corresponds to the PDF-space
 rectangle (mx0, H - my1, mx1, H - my0), where H is the page height in points.
 
 This module depends only on pikepdf. Rasterization of the revealed PDF is
-performed by the caller (reports/visual.py) using the same PyMuPDF path used
-for the normal page render.
+performed by the caller (reports/visual.py).
 """
 
 import io
 
 import pikepdf
-from pikepdf import Name
 
 # --- Constants kept in sync with analysis/detectors.py --------------------
-# (Defined locally rather than imported, because detectors.py imports
-#  pymupdf at module load; reveal.py is intentionally pymupdf-free so the
-#  suppression logic can be exercised independently of the renderer.)
 WHITE_THRESHOLD = 0.9            # per-channel min for a fill to be "white"
 NEAR_RECT_TOLERANCE = 15.0       # pts tolerance, text-position vs rect
 TEXT_OVERLAY_MIN_AREA_SQPTS = 4.0
 RECT_MATCH_TOLERANCE = 2.0       # pts tolerance, matching a finding rect
+REGION_TOLERANCE = 12.0          # pts tolerance, show-position vs finding box
+MAX_XOBJECT_DEPTH = 12           # guard against pathological / cyclic nesting
 
-# Annotation subtypes the annotation detector flags
+# A container form is only considered a clean overlay wrapper if it is not
+# larger than this; bigger forms are assumed to also carry legitimate
+# content and are never suppressed wholesale.
+MAX_CONTAINER_W = 260.0
+MAX_CONTAINER_H = 130.0
+# How tightly a container's box must frame the flagged region. The container
+# must not extend far beyond the region on any side.
+CONTAINER_MARGIN = 24.0
+
 _OVERLAY_ANNOT_SUBTYPES = ("/FreeText", "/Widget", "/Square", "/Redact")
-
-# Text-showing operators
 _TEXT_SHOW_OPS = ("Tj", "TJ", "'", '"')
-# Operators that paint a preceding `re`
 _RECT_FILL_OPS = ("f", "F", "B", "B*", "b", "b*")
+# Fonts used for forged text differ from the document body fonts; we treat
+# any text inside a tightly-framed small container as overlay text. The
+# detector's own analysis is what flags the region, so this module does not
+# re-classify fonts -- it only needs to ensure a container is "overlay only".
 
 
 # --------------------------------------------------------------------------
-# Graphics-state helpers (identical math to the detectors)
+# Geometry helpers
 # --------------------------------------------------------------------------
 def _transform_point(ctm, x, y):
     a, b, c, d, e, f = ctm
@@ -79,7 +94,12 @@ def _rect_to_page(ctm, rx, ry, rw, rh):
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _bbox_to_page(ctm, bb):
+    return _rect_to_page(ctm, bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1])
+
+
 def _multiply_ctm(m1, m2):
+    """Return m1 x m2 (apply m1 first, then m2)."""
     a1, b1, c1, d1, e1, f1 = m1
     a2, b2, c2, d2, e2, f2 = m2
     return (a1 * a2 + b1 * c2, a1 * b2 + b1 * d2,
@@ -88,9 +108,6 @@ def _multiply_ctm(m1, m2):
 
 
 def _instr_parts(instr):
-    """Return (operator_str, operands_list) for a parsed instruction,
-    tolerant of both ContentStreamInstruction objects and (operands, op)
-    tuples across pikepdf versions."""
     try:
         return str(instr.operator), list(instr.operands)
     except AttributeError:
@@ -109,240 +126,29 @@ def _finding_rect_to_pdf(bbox, page_height):
 
 
 def _rects_match(r1, r2, tol):
-    """True if two (x0,y0,x1,y1) rects coincide within tolerance."""
     return (abs(r1[0] - r2[0]) <= tol and abs(r1[1] - r2[1]) <= tol and
             abs(r1[2] - r2[2]) <= tol and abs(r1[3] - r2[3]) <= tol)
 
 
 def _point_in_rect(px, py, rect, tol):
     x0, y0, x1, y1 = rect
-    return (x0 - tol <= px <= x1 + tol and
-            y0 - tol <= py <= y1 + tol)
+    return (x0 - tol <= px <= x1 + tol and y0 - tol <= py <= y1 + tol)
 
 
-# --------------------------------------------------------------------------
-# Operator-index collection per overlay kind
-# --------------------------------------------------------------------------
-def _white_box_indices(ops, target_rects_pdf):
-    """
-    Return a set of operator indices to drop to suppress white-box overlays
-    whose painted rectangle matches one of target_rects_pdf (PDF space).
-    Drops the matched `re` and its fill operator, and any text-show
-    operators positioned inside the rect and drawn after it.
-    """
-    drop = set()
-
-    # Pass 1: locate white filled rectangles and their operator indices.
-    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
-    ctm_stack = []
-    fill_color = (0.0, 0.0, 0.0)
-    white_rects = []   # (x0, y0, x1, y1, re_idx, fill_idx)
-
-    for i, instr in enumerate(ops):
-        op, operands = _instr_parts(instr)
-        if op == 'q':
-            ctm_stack.append(ctm)
-        elif op == 'Q':
-            if ctm_stack:
-                ctm = ctm_stack.pop()
-        elif op == 'cm':
-            try:
-                vals = tuple(float(str(x)) for x in operands)
-                ctm = _multiply_ctm(vals, ctm)
-            except Exception:
-                pass
-        elif op == 'g':
-            try:
-                v = float(str(operands[0]))
-                fill_color = (v, v, v)
-            except Exception:
-                pass
-        elif op == 'rg':
-            try:
-                fill_color = tuple(float(str(x)) for x in operands[:3])
-            except Exception:
-                pass
-        elif op in ('sc', 'scn'):
-            try:
-                vals = [float(str(x)) for x in operands
-                        if _is_number(x)]
-                if len(vals) == 1:
-                    fill_color = (vals[0],) * 3
-                elif len(vals) >= 3:
-                    fill_color = tuple(vals[:3])
-            except Exception:
-                pass
-        elif op == 're':
-            if i + 1 < len(ops):
-                next_op = _instr_parts(ops[i + 1])[0]
-                if next_op in _RECT_FILL_OPS:
-                    if (len(fill_color) >= 3 and
-                            all(v >= WHITE_THRESHOLD
-                                for v in fill_color[:3])):
-                        try:
-                            rx, ry, rw, rh = (
-                                float(str(x)) for x in operands[:4])
-                            if abs(rw * rh) >= TEXT_OVERLAY_MIN_AREA_SQPTS:
-                                x0, y0, x1, y1 = _rect_to_page(
-                                    ctm, rx, ry, rw, rh)
-                                white_rects.append(
-                                    (x0, y0, x1, y1, i, i + 1))
-                        except Exception:
-                            pass
-
-    # Match white rects against the requested target rects.
-    matched = []   # (x0, y0, x1, y1, re_idx)
-    for (x0, y0, x1, y1, re_idx, fill_idx) in white_rects:
-        for tr in target_rects_pdf:
-            if _rects_match((x0, y0, x1, y1), tr, RECT_MATCH_TOLERANCE):
-                drop.add(re_idx)
-                drop.add(fill_idx)
-                matched.append((x0, y0, x1, y1, re_idx))
-                break
-
-    if not matched:
-        return drop
-
-    # Pass 2: drop text-show ops inside a matched rect, drawn after it.
-    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
-    ctm_stack = []
-    Tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    Tlm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    in_bt = False
-
-    for i, instr in enumerate(ops):
-        op, operands = _instr_parts(instr)
-        if op == 'q':
-            ctm_stack.append(ctm)
-        elif op == 'Q':
-            if ctm_stack:
-                ctm = ctm_stack.pop()
-        elif op == 'cm':
-            try:
-                vals = tuple(float(str(x)) for x in operands)
-                ctm = _multiply_ctm(vals, ctm)
-            except Exception:
-                pass
-        elif op == 'BT':
-            in_bt = True
-            Tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-            Tlm = list(Tm)
-        elif op == 'ET':
-            in_bt = False
-        elif in_bt and op == 'Tm':
-            try:
-                Tm = [float(str(x)) for x in operands]
-                Tlm = list(Tm)
-            except Exception:
-                pass
-        elif in_bt and op in ('Td', 'TD'):
-            try:
-                tx = float(str(operands[0]))
-                ty = float(str(operands[1]))
-                Tlm[4] += tx * Tlm[0] + ty * Tlm[2]
-                Tlm[5] += tx * Tlm[1] + ty * Tlm[3]
-                Tm = list(Tlm)
-            except Exception:
-                pass
-        elif in_bt and op == 'T*':
-            Tm = list(Tlm)
-        elif in_bt and op in _TEXT_SHOW_OPS:
-            tm_x, tm_y = Tm[4], Tm[5]
-            px, py = _transform_point(ctm, tm_x, tm_y)
-            for (rx0, ry0, rx1, ry1, re_idx) in matched:
-                if i <= re_idx:
-                    continue
-                if _point_in_rect(px, py, (rx0, ry0, rx1, ry1),
-                                  NEAR_RECT_TOLERANCE):
-                    drop.add(i)
-                    break
-
-    return drop
+def _rects_overlap(a, b, tol=0.0):
+    return not (a[2] < b[0] - tol or a[0] > b[2] + tol or
+                a[3] < b[1] - tol or a[1] > b[3] + tol)
 
 
-def _text_over_text_indices(ops, target_rects_pdf):
-    """
-    Return operator indices to drop to suppress text-over-text overlays in
-    the target regions. Within each region, text-show operators are grouped
-    by near-identical baseline position; the earliest in each group is kept
-    (the original) and later ones are dropped (the overlying glyphs).
-
-    Best-effort: relies on the common manipulation pattern of re-drawing a
-    field value at the same origin. Returns indices to drop.
-    """
-    NEAR_POS = 2.0   # pts; group shows at the "same" position
-
-    drop = set()
-    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
-    ctm_stack = []
-    Tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    Tlm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    in_bt = False
-
-    shows = []   # (op_index, px, py) for shows inside a target region
-
-    for i, instr in enumerate(ops):
-        op, operands = _instr_parts(instr)
-        if op == 'q':
-            ctm_stack.append(ctm)
-        elif op == 'Q':
-            if ctm_stack:
-                ctm = ctm_stack.pop()
-        elif op == 'cm':
-            try:
-                vals = tuple(float(str(x)) for x in operands)
-                ctm = _multiply_ctm(vals, ctm)
-            except Exception:
-                pass
-        elif op == 'BT':
-            in_bt = True
-            Tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-            Tlm = list(Tm)
-        elif op == 'ET':
-            in_bt = False
-        elif in_bt and op == 'Tm':
-            try:
-                Tm = [float(str(x)) for x in operands]
-                Tlm = list(Tm)
-            except Exception:
-                pass
-        elif in_bt and op in ('Td', 'TD'):
-            try:
-                tx = float(str(operands[0]))
-                ty = float(str(operands[1]))
-                Tlm[4] += tx * Tlm[0] + ty * Tlm[2]
-                Tlm[5] += tx * Tlm[1] + ty * Tlm[3]
-                Tm = list(Tlm)
-            except Exception:
-                pass
-        elif in_bt and op == 'T*':
-            Tm = list(Tlm)
-        elif in_bt and op in _TEXT_SHOW_OPS:
-            px, py = _transform_point(ctm, Tm[4], Tm[5])
-            for rect in target_rects_pdf:
-                if _point_in_rect(px, py, rect, NEAR_RECT_TOLERANCE):
-                    shows.append((i, px, py))
-                    break
-
-    # Group shows by near-identical position; keep earliest, drop the rest.
-    groups = []   # list of dicts {x, y, indices: [...] }
-    for (idx, px, py) in shows:
-        placed = False
-        for g in groups:
-            if abs(g["x"] - px) < NEAR_POS and abs(g["y"] - py) < NEAR_POS:
-                g["indices"].append(idx)
-                placed = True
-                break
-        if not placed:
-            groups.append({"x": px, "y": py, "indices": [idx]})
-
-    for g in groups:
-        if len(g["indices"]) > 1:
-            ordered = sorted(g["indices"])
-            for idx in ordered[1:]:   # drop all but the earliest
-                drop.add(idx)
-
-    return drop
+def _frames_region(container_bb, region, margin):
+    """True if container_bb overlaps region and does not extend more than
+    `margin` beyond the region on any side (i.e. it tightly frames it)."""
+    if not _rects_overlap(container_bb, region, 0.0):
+        return False
+    return (container_bb[0] >= region[0] - margin and
+            container_bb[1] >= region[1] - margin and
+            container_bb[2] <= region[2] + margin and
+            container_bb[3] <= region[3] + margin)
 
 
 def _is_number(x):
@@ -354,23 +160,420 @@ def _is_number(x):
 
 
 # --------------------------------------------------------------------------
+# Content-tree model
+# --------------------------------------------------------------------------
+class _Unit:
+    """A single rewritable content stream (the page, or one Form XObject)."""
+    __slots__ = ("obj", "kind", "ops", "drop", "shared")
+
+    def __init__(self, obj, kind, ops):
+        self.obj = obj
+        self.kind = kind        # "page" or "form"
+        self.ops = ops
+        self.drop = set()       # local op indices to remove
+        self.shared = False     # reached via >1 path -> do not edit
+
+
+class _DoSite:
+    """A 'Do /Form' invocation we may suppress as a whole.
+
+    parent_uid/op_idx locate the invoking operator so it can be removed.
+    page_bb is the invoked form's bounding box in page coords.
+    has_text/has_legit_text/has_paint summarize the invoked subtree.
+    """
+    __slots__ = ("parent_uid", "op_idx", "page_bb",
+                 "has_text", "has_legit_text", "has_paint")
+
+    def __init__(self, parent_uid, op_idx, page_bb):
+        self.parent_uid = parent_uid
+        self.op_idx = op_idx
+        self.page_bb = page_bb
+        self.has_text = False        # any text-show in subtree
+        self.has_legit_text = False  # text that looks like body content
+        self.has_paint = False       # any image/fill/text drawn
+
+
+def _walk_content(page):
+    """
+    Walk the page content stream and all nested Form XObjects in draw order.
+
+    Returns (units, shows, rects, do_sites):
+      units: dict id(obj) -> _Unit
+      shows: list of {unit_id, idx, order, x, y, len_chars}
+      rects: list of {unit_id, re_idx, fill_idx, order, rect}
+      do_sites: list of _DoSite (one per Do/Form invocation)
+    'order' reflects global draw order across the tree.
+    """
+    units = {}
+    shows = []
+    rects = []
+    do_sites = []
+    order = [0]
+
+    def get_unit(obj, kind):
+        oid = id(obj)
+        if oid in units:
+            units[oid].shared = True
+            return units[oid], True
+        try:
+            ops = list(pikepdf.parse_content_stream(obj))
+        except Exception:
+            ops = None
+        if ops is None:
+            return None, False
+        u = _Unit(obj, kind, ops)
+        units[oid] = u
+        return u, False
+
+    def resources_of(obj, fallback):
+        try:
+            if "/Resources" in obj:
+                return obj.Resources
+        except Exception:
+            pass
+        return fallback
+
+    def estimate_text_len(operands):
+        n = 0
+        for o in operands:
+            if isinstance(o, pikepdf.String):
+                n += len(bytes(o)) // 2 or len(bytes(o))
+            else:
+                try:
+                    for e in o:
+                        if isinstance(e, pikepdf.String):
+                            n += len(bytes(e)) // 2 or len(bytes(e))
+                except Exception:
+                    pass
+        return n
+
+    def walk(obj, kind, base_ctm, resources, depth, site):
+        """Walk one stream. `site` is the _DoSite that invoked this form
+        (None for the page), so the subtree summary can be accumulated."""
+        if depth > MAX_XOBJECT_DEPTH:
+            return
+        unit, already = get_unit(obj, kind)
+        if unit is None:
+            return
+        ops = unit.ops
+        uid = id(obj)
+
+        xobjs = None
+        try:
+            if resources is not None and "/XObject" in resources:
+                xobjs = resources.XObject
+        except Exception:
+            xobjs = None
+
+        ctm = base_ctm
+        ctm_stack = []
+        Tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        Tlm = list(Tm)
+        in_bt = False
+        fill_color = (0.0, 0.0, 0.0)
+
+        def mark_paint():
+            s = site
+            while s is not None:
+                s.has_paint = True
+                s = None  # only nearest; ancestors set via their own walks
+
+        for i, instr in enumerate(ops):
+            op, operands = _instr_parts(instr)
+            if op == 'q':
+                ctm_stack.append(ctm)
+            elif op == 'Q':
+                if ctm_stack:
+                    ctm = ctm_stack.pop()
+            elif op == 'cm':
+                try:
+                    vals = tuple(float(str(x)) for x in operands)
+                    ctm = _multiply_ctm(vals, ctm)
+                except Exception:
+                    pass
+            elif op == 'g':
+                try:
+                    v = float(str(operands[0]))
+                    fill_color = (v, v, v)
+                except Exception:
+                    pass
+            elif op == 'rg':
+                try:
+                    fill_color = tuple(float(str(x)) for x in operands[:3])
+                except Exception:
+                    pass
+            elif op in ('sc', 'scn'):
+                try:
+                    vals = [float(str(x)) for x in operands if _is_number(x)]
+                    if len(vals) == 1:
+                        fill_color = (vals[0],) * 3
+                    elif len(vals) >= 3:
+                        fill_color = tuple(vals[:3])
+                except Exception:
+                    pass
+            elif op == 'BT':
+                in_bt = True
+                Tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+                Tlm = list(Tm)
+            elif op == 'ET':
+                in_bt = False
+            elif in_bt and op == 'Tm':
+                try:
+                    Tm = [float(str(x)) for x in operands]
+                    Tlm = list(Tm)
+                except Exception:
+                    pass
+            elif in_bt and op in ('Td', 'TD'):
+                try:
+                    tx = float(str(operands[0]))
+                    ty = float(str(operands[1]))
+                    Tlm[4] += tx * Tlm[0] + ty * Tlm[2]
+                    Tlm[5] += tx * Tlm[1] + ty * Tlm[3]
+                    Tm = list(Tlm)
+                except Exception:
+                    pass
+            elif in_bt and op == 'T*':
+                Tm = list(Tlm)
+            elif in_bt and op in _TEXT_SHOW_OPS:
+                px, py = _transform_point(ctm, Tm[4], Tm[5])
+                order[0] += 1
+                nchars = estimate_text_len(operands)
+                shows.append({"unit_id": uid, "idx": i, "order": order[0],
+                              "x": px, "y": py, "len_chars": nchars})
+                if site is not None:
+                    site.has_text = True
+                    site.has_paint = True
+                    # Heuristic: a long run of characters is likely body
+                    # text, not a small forged value.
+                    if nchars >= 14:
+                        site.has_legit_text = True
+            elif op in ('Tj', 'TJ', "'", '"'):
+                # text outside BT/ET (rare) -- treat as paint/text
+                if site is not None:
+                    site.has_text = True
+                    site.has_paint = True
+            elif op == 're':
+                if i + 1 < len(ops):
+                    next_op = _instr_parts(ops[i + 1])[0]
+                    if next_op in _RECT_FILL_OPS:
+                        if site is not None:
+                            site.has_paint = True
+                        if len(fill_color) >= 3 and \
+                                all(v >= WHITE_THRESHOLD
+                                    for v in fill_color[:3]):
+                            try:
+                                rx, ry, rw, rh = (float(str(x))
+                                                  for x in operands[:4])
+                                if abs(rw * rh) >= \
+                                        TEXT_OVERLAY_MIN_AREA_SQPTS:
+                                    rect = _rect_to_page(ctm, rx, ry, rw, rh)
+                                    order[0] += 1
+                                    rects.append({"unit_id": uid,
+                                                  "re_idx": i,
+                                                  "fill_idx": i + 1,
+                                                  "order": order[0],
+                                                  "rect": rect})
+                            except Exception:
+                                pass
+            elif op in ('Do',):
+                if site is not None:
+                    site.has_paint = True
+                if xobjs is not None and operands:
+                    name = str(operands[0])
+                    try:
+                        xo = xobjs.get(name) if hasattr(xobjs, "get") \
+                            else xobjs[name]
+                    except Exception:
+                        xo = None
+                    if xo is None:
+                        continue
+                    subtype = str(xo.get("/Subtype"))
+                    if subtype == "/Form":
+                        mtx = xo.get("/Matrix")
+                        try:
+                            m = (tuple(float(x) for x in mtx) if mtx
+                                 else (1, 0, 0, 1, 0, 0))
+                        except Exception:
+                            m = (1, 0, 0, 1, 0, 0)
+                        child_ctm = _multiply_ctm(m, ctm)
+                        bb = None
+                        try:
+                            if "/BBox" in xo:
+                                raw = [float(x) for x in xo.BBox]
+                                bb = (min(raw[0], raw[2]), min(raw[1], raw[3]),
+                                      max(raw[0], raw[2]), max(raw[1], raw[3]))
+                        except Exception:
+                            bb = None
+                        page_bb = (_bbox_to_page(child_ctm, bb)
+                                   if bb else None)
+                        child_site = _DoSite(uid, i, page_bb)
+                        do_sites.append(child_site)
+                        walk(xo, "form", child_ctm,
+                             resources_of(xo, resources), depth + 1,
+                             child_site)
+                        # Bubble subtree facts up to the enclosing site so an
+                        # ancestor container is also known to contain text.
+                        if site is not None:
+                            site.has_text = site.has_text or \
+                                child_site.has_text
+                            site.has_legit_text = site.has_legit_text or \
+                                child_site.has_legit_text
+                            site.has_paint = site.has_paint or \
+                                child_site.has_paint
+                    elif subtype == "/Image":
+                        if site is not None:
+                            site.has_paint = True
+
+    walk(page, "page", (1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+         page.Resources if "/Resources" in page else None, 0, None)
+    return units, shows, rects, do_sites
+
+
+# --------------------------------------------------------------------------
+# Suppression strategy
+# --------------------------------------------------------------------------
+def _select_container_for_region(do_sites, region):
+    """
+    Choose the tightest Do-site that cleanly frames `region` and whose
+    subtree contains no legitimate (long-run) text. Returns the _DoSite or
+    None if the overlay cannot be isolated from legitimate content.
+    """
+    candidates = []
+    for s in do_sites:
+        if s.page_bb is None or not s.has_paint:
+            continue
+        w = s.page_bb[2] - s.page_bb[0]
+        h = s.page_bb[3] - s.page_bb[1]
+        if w > MAX_CONTAINER_W or h > MAX_CONTAINER_H:
+            continue
+        if not _frames_region(s.page_bb, region, CONTAINER_MARGIN):
+            continue
+        if s.has_legit_text:
+            # Contains body-length text -> not a clean overlay wrapper.
+            continue
+        candidates.append((w * h, s))
+    if not candidates:
+        return None
+    # Tightest (smallest area) container that frames the region.
+    candidates.sort(key=lambda t: t[0])
+    return candidates[0][1]
+
+
+def _collect_region_siblings(do_sites, chosen, region):
+    """
+    Given a chosen container Do-site, also collect sibling Do-sites in the
+    SAME parent unit whose boxes overlap the region. This captures the
+    patch-image forms that accompany the forged-text form within one edit
+    group. Returns a list of _DoSite to suppress (including `chosen`).
+    """
+    group = [chosen]
+    for s in do_sites:
+        if s is chosen:
+            continue
+        if s.parent_uid != chosen.parent_uid:
+            continue
+        if s.page_bb is None:
+            continue
+        if s.has_legit_text:
+            continue
+        w = s.page_bb[2] - s.page_bb[0]
+        h = s.page_bb[3] - s.page_bb[1]
+        if w > MAX_CONTAINER_W or h > MAX_CONTAINER_H:
+            continue
+        if _rects_overlap(s.page_bb, region, CONTAINER_MARGIN):
+            group.append(s)
+    return group
+
+
+# --- text_over_text / white_box decisions, now container-aware -----------
+def _decide_white_box_inline(units, shows, rects, regions, recovered_out,
+                             info_kinds):
+    """
+    Fallback for white-box overlays that are NOT wrapped in a container form
+    but drawn inline in a stream: drop the matched white rect and the text
+    painted on top of it. Only applied to regions not already recovered via
+    a container.
+
+    Evidentiary safety: a matched rect is only treated as a genuine masking
+    overlay if it is tall enough to actually cover a line of text. Thin
+    hairline fills (e.g. table/email separator rules) are NOT masks; if the
+    only thing matching a finding region is a hairline, the region is left
+    untouched (skipped) rather than risk deleting legitimate nearby text.
+    The text sweep is confined to glyphs whose baseline falls within the
+    rect's own vertical span (plus a small tolerance), never a wide band.
+    """
+    MIN_MASK_HEIGHT = 4.0   # pts; below this a fill cannot hide a glyph row
+    V_TOL = 2.0             # pts; baseline must sit inside the rect
+    for ridx, region in enumerate(regions):
+        if ridx in recovered_out:
+            continue
+        matched = [r for r in rects
+                   if _rects_match(r["rect"], region, RECT_MATCH_TOLERANCE)
+                   and (r["rect"][3] - r["rect"][1]) >= MIN_MASK_HEIGHT]
+        if not matched:
+            # Either no fill here, or only a hairline rule -> not a
+            # recoverable masking overlay. Skip (leave intact).
+            continue
+        ok = False
+        for r in matched:
+            u = units.get(r["unit_id"])
+            if u is None or u.shared:
+                continue
+            u.drop.add(r["re_idx"])
+            u.drop.add(r["fill_idx"])
+            ok = True
+        for r in matched:
+            rx0, ry0, rx1, ry1 = r["rect"]
+            for s in shows:
+                if s["order"] <= r["order"]:
+                    continue
+                if (rx0 - V_TOL <= s["x"] <= rx1 + V_TOL and
+                        ry0 - V_TOL <= s["y"] <= ry1 + V_TOL):
+                    u = units.get(s["unit_id"])
+                    if u is not None and not u.shared:
+                        u.drop.add(s["idx"])
+                        ok = True
+        if ok:
+            recovered_out.add(ridx)
+            info_kinds.add("white_box")
+
+
+def _decide_text_inline(units, shows, regions, recovered_out, info_kinds):
+    """
+    Fallback for text-over-text overlays drawn inline (not in a container):
+    within a region keep the earliest-drawn show and drop later ones. Only
+    for regions not recovered via a container.
+    """
+    for ridx, region in enumerate(regions):
+        if ridx in recovered_out:
+            continue
+        in_region = [s for s in shows
+                     if _point_in_rect(s["x"], s["y"], region,
+                                       REGION_TOLERANCE)]
+        if len(in_region) < 2:
+            continue
+        in_region.sort(key=lambda s: s["order"])
+        dropped = False
+        for s in in_region[1:]:
+            u = units.get(s["unit_id"])
+            if u is not None and not u.shared:
+                u.drop.add(s["idx"])
+                dropped = True
+        if dropped:
+            recovered_out.add(ridx)
+            info_kinds.add("text_over_text")
+
+
+# --------------------------------------------------------------------------
 # Annotation suppression
 # --------------------------------------------------------------------------
-def _suppress_annotations(page, target_rects_pdf, suppress_all):
-    """
-    Remove overlay annotations from a pikepdf page in-place.
-
-    If suppress_all is True, every overlay-type annotation is removed.
-    Otherwise only annotations whose /Rect matches a target rect are
-    removed. Returns the number of annotations removed.
-    """
+def _suppress_annotations(page, target_rects_pdf):
     try:
         annots = page.get("/Annots")
     except Exception:
         annots = None
     if not annots:
         return 0
-
     keep = []
     removed = 0
     for annot in list(annots):
@@ -378,33 +581,21 @@ def _suppress_annotations(page, target_rects_pdf, suppress_all):
             obj = annot.obj if hasattr(annot, "obj") else annot
             subtype = str(obj.get("/Subtype") or "")
             rect_raw = obj.get("/Rect")
-            is_overlay_type = subtype in _OVERLAY_ANNOT_SUBTYPES
             match = False
-            if is_overlay_type and rect_raw is not None:
-                try:
-                    coords = [float(v) for v in rect_raw]
-                    ax0, ay0 = min(coords[0], coords[2]), min(coords[1],
-                                                              coords[3])
-                    ax1, ay1 = max(coords[0], coords[2]), max(coords[1],
-                                                              coords[3])
-                    ann_rect = (ax0, ay0, ax1, ay1)
-                    if suppress_all:
+            if subtype in _OVERLAY_ANNOT_SUBTYPES and rect_raw is not None:
+                coords = [float(v) for v in rect_raw]
+                ann = (min(coords[0], coords[2]), min(coords[1], coords[3]),
+                       max(coords[0], coords[2]), max(coords[1], coords[3]))
+                for tr in target_rects_pdf:
+                    if _rects_match(ann, tr, RECT_MATCH_TOLERANCE):
                         match = True
-                    else:
-                        for tr in target_rects_pdf:
-                            if _rects_match(ann_rect, tr,
-                                            RECT_MATCH_TOLERANCE):
-                                match = True
-                                break
-                except Exception:
-                    match = False
+                        break
             if match:
                 removed += 1
             else:
                 keep.append(annot)
         except Exception:
             keep.append(annot)
-
     if removed:
         page.Annots = pikepdf.Array(keep)
     return removed
@@ -421,78 +612,126 @@ def build_revealed_pdf_bytes(src_path, page_index, findings, page_height):
     'white_box', 'text_over_text', 'annotation').
 
     Returns (pdf_bytes, info) where info is a dict:
-        {
-          "changed": bool,            # whether anything was suppressed
-          "kinds": set(...),          # kinds actually suppressed
-          "ops_dropped": int,
-          "annots_removed": int,
-        }
-    On any failure, returns (None, info_with_changed_False).
+        {"changed": bool,
+         "kinds": set(...),            # kinds actually suppressed
+         "ops_dropped": int,
+         "annots_removed": int,
+         "recovered": int,             # findings whose overlay was removed
+         "skipped": int}               # findings left intact (not isolable)
+    On failure or when nothing was suppressed, returns (None, info) with the
+    counters still populated so the caller can label the finding.
     """
-    info = {"changed": False, "kinds": set(),
-            "ops_dropped": 0, "annots_removed": 0}
+    info = {"changed": False, "kinds": set(), "ops_dropped": 0,
+            "annots_removed": 0, "recovered": 0, "skipped": 0}
 
-    # Group target rects (PDF space) by kind.
-    rects_by_kind = {"white_box": [], "text_over_text": [], "annotation": []}
-    for fnd in findings:
+    # Preserve original finding order so we can report per-finding outcomes.
+    cs_findings = []   # (orig_index, kind, pdf_rect)
+    annot_rects = []
+    for idx, fnd in enumerate(findings):
         kind = fnd.get("kind", "other")
-        if kind not in rects_by_kind:
-            continue
-        rects_by_kind[kind].append(
-            _finding_rect_to_pdf(fnd["bbox"], page_height))
+        rect = _finding_rect_to_pdf(fnd["bbox"], page_height)
+        if kind in ("white_box", "text_over_text"):
+            cs_findings.append((idx, kind, rect))
+        elif kind == "annotation":
+            annot_rects.append(rect)
 
     try:
         pdf = pikepdf.open(src_path)
     except Exception:
+        info["skipped"] = len(findings)
         return None, info
 
     try:
         if page_index < 0 or page_index >= len(pdf.pages):
             pdf.close()
+            info["skipped"] = len(findings)
             return None, info
         page = pdf.pages[page_index]
 
-        # --- Annotation suppression -------------------------------------
-        if rects_by_kind["annotation"]:
-            n = _suppress_annotations(
-                page, rects_by_kind["annotation"], suppress_all=False)
+        # --- Annotations -------------------------------------------------
+        if annot_rects:
+            n = _suppress_annotations(page, annot_rects)
             if n:
                 info["annots_removed"] += n
                 info["kinds"].add("annotation")
+                info["recovered"] += n
+            info["skipped"] += max(0, len(annot_rects) - n)
 
-        # --- Content-stream suppression ---------------------------------
-        cs_kinds = [k for k in ("white_box", "text_over_text")
-                    if rects_by_kind[k]]
-        if cs_kinds:
-            try:
-                ops = list(pikepdf.parse_content_stream(page))
-            except Exception:
-                ops = None
-            if ops:
-                drop = set()
-                if rects_by_kind["white_box"]:
-                    wb = _white_box_indices(
-                        ops, rects_by_kind["white_box"])
-                    if wb:
-                        drop |= wb
-                        info["kinds"].add("white_box")
-                if rects_by_kind["text_over_text"]:
-                    tt = _text_over_text_indices(
-                        ops, rects_by_kind["text_over_text"])
-                    if tt:
-                        drop |= tt
-                        info["kinds"].add("text_over_text")
-                if drop:
-                    kept = [instr for idx, instr in enumerate(ops)
-                            if idx not in drop]
-                    new_stream = pikepdf.unparse_content_stream(kept)
-                    # Replace the page content with a single stream.
+        # --- Content stream + nested form tree ---------------------------
+        if cs_findings:
+            units, shows, rects, do_sites = _walk_content(page)
+
+            regions = [r for (_, _, r) in cs_findings]
+
+            # Primary: container-level suppression (patch + forged text),
+            # with proper per-finding kind accounting.
+            recovered = set()
+            for ridx, (orig_idx, kind, region) in enumerate(cs_findings):
+                chosen = _select_container_for_region(do_sites, region)
+                if chosen is None:
+                    continue
+                group = _collect_region_siblings(do_sites, chosen, region)
+                ok = False
+                for site in group:
+                    u = units.get(site.parent_uid)
+                    if u is None or u.shared:
+                        continue
+                    u.drop.add(site.op_idx)
+                    ok = True
+                if ok:
+                    recovered.add(ridx)
+                    info["kinds"].add(kind)
+
+            # Fallbacks for inline (non-wrapped) overlays.
+            wb_regions = [r for (_, k, r) in cs_findings
+                          if k == "white_box"]
+            tt_regions = [r for (_, k, r) in cs_findings
+                          if k == "text_over_text"]
+            # Map region-index spaces for fallbacks
+            wb_recovered = set()
+            tt_recovered = set()
+            # Translate already-recovered global indices into per-kind lists
+            for ridx, (orig_idx, kind, region) in enumerate(cs_findings):
+                if ridx in recovered:
+                    if kind == "white_box":
+                        wb_recovered.add(wb_regions.index(region))
+                    else:
+                        tt_recovered.add(tt_regions.index(region))
+
+            _decide_white_box_inline(units, shows, rects, wb_regions,
+                                     wb_recovered, info["kinds"])
+            _decide_text_inline(units, shows, tt_regions,
+                                tt_recovered, info["kinds"])
+
+            # Recount recovered across both mechanisms.
+            recovered_total = 0
+            for ridx, (orig_idx, kind, region) in enumerate(cs_findings):
+                if kind == "white_box":
+                    if wb_regions.index(region) in wb_recovered:
+                        recovered_total += 1
+                else:
+                    if tt_regions.index(region) in tt_recovered:
+                        recovered_total += 1
+            info["recovered"] += recovered_total
+            info["skipped"] += len(cs_findings) - recovered_total
+
+            # --- Rewrite affected streams --------------------------------
+            for u in units.values():
+                if not u.drop or u.shared:
+                    continue
+                kept = [ins for j, ins in enumerate(u.ops)
+                        if j not in u.drop]
+                new_stream = pikepdf.unparse_content_stream(kept)
+                if u.kind == "page":
                     page.Contents = pdf.make_stream(new_stream)
-                    info["ops_dropped"] += len(drop)
+                else:
+                    try:
+                        u.obj.write(new_stream)
+                    except Exception:
+                        continue
+                info["ops_dropped"] += len(u.drop)
 
-        info["changed"] = bool(info["ops_dropped"] or
-                               info["annots_removed"])
-
+        info["changed"] = bool(info["ops_dropped"] or info["annots_removed"])
         if not info["changed"]:
             pdf.close()
             return None, info
@@ -506,4 +745,5 @@ def build_revealed_pdf_bytes(src_path, page_index, findings, page_height):
             pdf.close()
         except Exception:
             pass
+        info["skipped"] = len(findings)
         return None, info

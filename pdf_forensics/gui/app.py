@@ -67,7 +67,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # ---------------------------------------------------------------
     # Persistent header bar
     # ---------------------------------------------------------------
-    header = tk.Frame(root, bg=BG_DARK, height=96)
+    header = tk.Frame(root, bg=BG_DARK, height=128)
     header.pack(fill="x", side="top")
     header.pack_propagate(False)
 
@@ -121,15 +121,66 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     tk.Label(title_block, text=f"v{__version__}", bg=BG_DARK,
              fg=TEXT_DIM, font=FONT_SUBTITLE).pack(anchor="w")
 
-    # Case badge (right side of header)
+    # Case + agency/investigator identity block (right side of header).
+    # Showing these on every menu lets the operator visually confirm that
+    # the stored agency, unit, and investigator details are theirs before
+    # running anything, so reports and logs are not attributed to the wrong
+    # person.
     case_frame = tk.Frame(header, bg=BG_DARK)
-    case_frame.pack(side="right", padx=24, pady=14)
-    tk.Label(case_frame, text="CASE:", bg=BG_DARK, fg=TEXT_SEC,
+    case_frame.pack(side="right", padx=24, pady=10)
+
+    case_row = tk.Frame(case_frame, bg=BG_DARK)
+    case_row.pack(anchor="e")
+    tk.Label(case_row, text="CASE:", bg=BG_DARK, fg=TEXT_SEC,
              font=(FONT_FAMILY, 9, "bold")).pack(side="left")
-    case_label = tk.Label(case_frame, textvariable=app["case_var"],
+    case_label = tk.Label(case_row, textvariable=app["case_var"],
                           bg=BG_DARK, fg=ACCENT,
                           font=(FONT_FAMILY, 12, "bold"))
     case_label.pack(side="left", padx=(6, 0))
+
+    # Agency / unit / investigator identity lines.
+    app["agency_var"] = tk.StringVar(value="")
+    app["unit_var"] = tk.StringVar(value="")
+    app["investigator_var"] = tk.StringVar(value="")
+
+    ident_block = tk.Frame(case_frame, bg=BG_DARK)
+    ident_block.pack(anchor="e", pady=(3, 0))
+    agency_label = tk.Label(ident_block, textvariable=app["agency_var"],
+                            bg=BG_DARK, fg=TEXT_SEC,
+                            font=(FONT_FAMILY, 9), justify="right")
+    agency_label.pack(anchor="e")
+    unit_label = tk.Label(ident_block, textvariable=app["unit_var"],
+                          bg=BG_DARK, fg=TEXT_SEC,
+                          font=(FONT_FAMILY, 9), justify="right")
+    unit_label.pack(anchor="e")
+    investigator_label = tk.Label(
+        ident_block, textvariable=app["investigator_var"],
+        bg=BG_DARK, fg=TEXT_DIM,
+        font=(FONT_FAMILY, 9), justify="right")
+    investigator_label.pack(anchor="e")
+
+    def refresh_identity_header():
+        """Populate the header identity lines from branding config."""
+        try:
+            from pdf_forensics import branding as _bmod
+            cfg = _bmod.load_branding()
+        except Exception:
+            cfg = {}
+        agency = (cfg.get("agency_name") or "").strip()
+        unit = (cfg.get("unit_name") or "").strip()
+        inv = (cfg.get("investigator_name") or "").strip()
+        app["agency_var"].set(agency if agency else "Agency: not set")
+        app["unit_var"].set(unit if unit else "Unit: not set")
+        app["investigator_var"].set(
+            inv if inv else "Investigator: not set")
+        # Use a muted/alert colour when key fields are missing so the gap
+        # is noticeable rather than blending in.
+        agency_label.config(fg=TEXT_SEC if agency else "#EF9F27")
+        unit_label.config(fg=TEXT_SEC if unit else "#EF9F27")
+        investigator_label.config(fg=TEXT_DIM if inv else "#EF9F27")
+
+    app["refresh_identity_header"] = refresh_identity_header
+    refresh_identity_header()
 
     # Help button (right side, before case badge)
     def show_about():
@@ -222,7 +273,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         "main":     (780, 540),
         "analysis": (1060, 860),
         "graph":    (1060, 540),
-        "reports":  (1060, 920),
+        "reports":  (1180, 860),
     }
 
     def center_window(w, h):
@@ -368,6 +419,12 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             newcfg = {k: v.get() for k, v in entries.items()}
             path = bmod.save_branding(newcfg)
             if path:
+                # Reflect any changed agency/unit/investigator details in
+                # the header immediately.
+                try:
+                    app["refresh_identity_header"]()
+                except Exception:
+                    pass
                 messagebox.showinfo(
                     "Branding saved",
                     f"Branding saved to:\n{path}", parent=dlg)
@@ -404,8 +461,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 if not messagebox.askyesno(
                     "Switch Case",
                     f"Switching to case '{new_case}' will start "
-                    f"a new session.\n\nAny case-wide counters "
-                    f"will reset, and a new log file will be "
+                    f"a new session.\n\nYou will be asked to choose an "
+                    f"output folder for the new case (you may pick an "
+                    f"existing folder or create a new one). Any case-wide "
+                    f"counters will reset, and a new log file will be "
                     f"created.\n\nContinue?"):
                     return
                 app["session"].write_summary(
@@ -415,7 +474,16 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 pdf_listbox.delete(0, "end")
             except Exception:
                 pass
-            setup_session(new_case)
+            # A new case must not silently inherit the previous case's
+            # folder or database: reset the DB path so a fresh one is
+            # derived from the newly chosen output folder.
+            db_path_var.set("pdf_forensics.db")
+            # Clear the processing log window — this is a new case.
+            try:
+                clear_log()
+            except Exception:
+                pass
+            setup_session(new_case, always_prompt_dir=True)
 
     ttk.Button(main_btns, text="Change case number",
                command=change_case).pack(side="left")
@@ -690,6 +758,12 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         log_text.see("end")
         log_text.config(state="disabled")
         root.update_idletasks()
+
+    def clear_log():
+        """Empty the processing log window (e.g. when starting a new case)."""
+        log_text.config(state="normal")
+        log_text.delete("1.0", "end")
+        log_text.config(state="disabled")
 
     def update_counters():
         count_selected.set(str(len(pdf_files)))
@@ -1224,7 +1298,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     r_split = tk.Frame(reports_frame, bg=BG_DARK)
     r_split.pack(fill="both", expand=True, padx=20, pady=(0, 8))
 
-    r_left = tk.Frame(r_split, bg=BG_DARK, width=420)
+    r_left = tk.Frame(r_split, bg=BG_DARK, width=560)
     r_left.pack(side="left", fill="y", padx=(0, 10))
     r_left.pack_propagate(False)
 
@@ -1263,11 +1337,26 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
     rpt_body = make_panel(r_left, "Select reports")
     report_vars = {}
-    for rid, rname, rdesc in report_list:
+
+    # Two-column grid so a long list of reports stays fully visible on
+    # smaller (laptop) screens without the panel running off the bottom.
+    rpt_grid = tk.Frame(rpt_body, bg=BG_PANEL)
+    rpt_grid.pack(fill="x")
+    rpt_grid.grid_columnconfigure(0, weight=1, uniform="rptcol")
+    rpt_grid.grid_columnconfigure(1, weight=1, uniform="rptcol")
+
+    # Balance the columns: left column takes the first half (rounded up),
+    # so when the count is odd the left column is the longer one.
+    _n = len(report_list)
+    _rows_per_col = (_n + 1) // 2
+    for _i, (rid, rname, rdesc) in enumerate(report_list):
         var = tk.BooleanVar(value=True)
         report_vars[rid] = var
-        ttk.Checkbutton(rpt_body, text=rname,
-                        variable=var).pack(anchor="w")
+        col = 0 if _i < _rows_per_col else 1
+        row = _i if _i < _rows_per_col else _i - _rows_per_col
+        ttk.Checkbutton(rpt_grid, text=rname,
+                        variable=var).grid(
+            row=row, column=col, sticky="w", padx=(0, 10), pady=1)
 
     # Select all / none buttons
     rpt_btns = tk.Frame(rpt_body, bg=BG_PANEL)
@@ -1464,8 +1553,14 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # ===================================================================
     # CASE NUMBER PROMPT ON STARTUP
     # ===================================================================
-    def setup_session(case):
-        """Create a session and pre-populate path fields."""
+    def setup_session(case, always_prompt_dir=False):
+        """Create a session and pre-populate path fields.
+
+        When always_prompt_dir is True (e.g. when the user changes the
+        case number), the output directory chooser is always shown so the
+        user explicitly confirms where this new case is saved, instead of
+        silently reusing the previous case's folder and database.
+        """
         session = Session(case)
         app["session"] = session
         app["case_var"].set(case)
@@ -1477,16 +1572,21 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             and current_db != "pdf_forensics.db"
             and os.path.isfile(current_db))
 
-        if user_selected_db:
+        if user_selected_db and not always_prompt_dir:
             # Use the existing DB's directory as the base
             base_dir = os.path.dirname(os.path.abspath(current_db))
         else:
-            # Ask for base output directory
+            # Ask for base output directory. The user may pick an existing
+            # folder or create a new one.
             base_dir = filedialog.askdirectory(
                 title=f"Select output directory for case: {case}",
                 mustexist=False)
             if not base_dir:
                 base_dir = os.path.join(os.getcwd(), case)
+            # A freshly chosen directory means we are no longer bound to a
+            # previously selected database; let the session derive its own.
+            if always_prompt_dir:
+                user_selected_db = False
 
         session.set_db_dir(base_dir)
 

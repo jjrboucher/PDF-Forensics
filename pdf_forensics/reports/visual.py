@@ -19,8 +19,10 @@ of a PDF. The report contains:
      a page-level toggle (all overlays on the page suppressed at once) on
      the full page image, and a per-finding toggle (only that one overlay
      suppressed) on each detail card. Suppression is performed by
-     reports/reveal.py. For printed copies, both states are shown stacked
-     with captions.
+     reports/reveal.py. Where the underlying content cannot be cleanly
+     recovered, the reveal is skipped for that finding and the card is
+     labelled accordingly, rather than showing a misleading partial result.
+     For printed copies, both states are shown stacked with captions.
 
 Highlight colours by overlay kind:
   - text_over_text : red    (#E24B4A) — new text painted over old text
@@ -349,15 +351,17 @@ def generate_visual_report(db_path, output_path, analysis_id=None,
             # Page-level reveal: suppress ALL overlays on the page at once
             # (one of the two before/after modes). Rendered clean, no boxes.
             page_reveal_uri = None
-            page_reveal_kinds = set()
+            page_reveal_recovered = 0
+            page_reveal_skipped = 0
             try:
                 rb, rinfo = _reveal.build_revealed_pdf_bytes(
                     fpath, page_index, findings, page_height)
-                if rb:
+                page_reveal_recovered = rinfo.get("recovered", 0)
+                page_reveal_skipped = rinfo.get("skipped", 0)
+                if rb and page_reveal_recovered >= 1:
                     page_reveal_uri = _b64_png(
                         _render_revealed_page_png(
                             rb, page_index, PAGE_RENDER_DPI))
-                    page_reveal_kinds = rinfo.get("kinds", set())
             except Exception as e:
                 if session:
                     session.log(
@@ -370,6 +374,7 @@ def generate_visual_report(db_path, output_path, analysis_id=None,
             for fnd in findings:
                 crop_uri = None
                 reveal_uri = None
+                reveal_skipped = False
                 try:
                     crop_uri = _b64_png(_crop_region_png(
                         page, fnd["bbox"], CROP_RENDER_DPI,
@@ -380,12 +385,20 @@ def generate_visual_report(db_path, output_path, analysis_id=None,
                 try:
                     rb1, rinfo1 = _reveal.build_revealed_pdf_bytes(
                         fpath, page_index, [fnd], page_height)
-                    if rb1:
+                    # Only surface a reveal if the overlay was actually
+                    # recovered. If the underlying content could not be
+                    # cleanly isolated, the reveal is skipped and the card
+                    # is labelled accordingly rather than showing a
+                    # misleading partial result.
+                    if rb1 and rinfo1.get("recovered", 0) >= 1:
                         reveal_uri = _b64_png(_render_revealed_crop_png(
                             rb1, page_index, fnd["bbox"],
                             CROP_RENDER_DPI, CROP_PADDING_PTS))
+                    else:
+                        reveal_skipped = True
                 except Exception:
                     reveal_uri = None
+                    reveal_skipped = True
 
                 crops.append({
                     "number": fnd["_number"],
@@ -393,6 +406,7 @@ def generate_visual_report(db_path, output_path, analysis_id=None,
                     "detail": fnd["detail"],
                     "uri": crop_uri,
                     "reveal_uri": reveal_uri,
+                    "reveal_skipped": reveal_skipped,
                     "best_effort": fnd["kind"] == "text_over_text",
                 })
 
@@ -400,8 +414,8 @@ def generate_visual_report(db_path, output_path, analysis_id=None,
                 "page_num": page_num,
                 "page_uri": page_uri,
                 "page_reveal_uri": page_reveal_uri,
-                "page_reveal_best_effort": (
-                    "text_over_text" in page_reveal_kinds),
+                "page_reveal_recovered": page_reveal_recovered,
+                "page_reveal_skipped": page_reveal_skipped,
                 "crops": crops,
                 "count": len(findings),
                 "uid": f"{aid}-{page_num}",
@@ -459,13 +473,17 @@ def _render_doc_section(fname, fmd5, page_blocks):
         # overlays are recoverable (suppress-all-on-page mode).
         if pb.get("page_reveal_uri"):
             sid = f'pg-{pb["uid"]}'
-            be_note = ""
-            if pb.get("page_reveal_best_effort"):
+            skipped = pb.get("page_reveal_skipped", 0)
+            if skipped:
                 be_note = (
-                    '<div class="reveal-note best-effort">Reveal includes '
-                    'text-over-text reconstruction (best-effort): overlying '
-                    'text was suppressed to expose the glyphs beneath. '
-                    'Verify against the source document.</div>')
+                    '<div class="reveal-note">The overlays were suppressed '
+                    'to reveal the content beneath them. Note: '
+                    f'{skipped} detected overlay'
+                    f'{"s" if skipped != 1 else ""} on this page could not '
+                    'be cleanly recovered and '
+                    f'{"are" if skipped != 1 else "is"} therefore still '
+                    'present in this view; see the corresponding detail '
+                    'card(s) below.</div>')
             else:
                 be_note = (
                     '<div class="reveal-note">The overlays were suppressed '
@@ -544,15 +562,19 @@ def _render_doc_section(fname, fmd5, page_blocks):
                     f'alt="Detail {crop["number"]} with overlay removed">'
                     f'</div></div>')
                 parts.append('</div>')   # img-stack
-                if crop.get("best_effort"):
-                    parts.append(
-                        '<div class="reveal-note best-effort sm">'
-                        'Best-effort reconstruction.</div>')
             elif crop["uri"]:
                 parts.append(
                     f'<div class="crop-wrap">'
                     f'<img class="crop-image" src="{crop["uri"]}" '
                     f'alt="Detail {crop["number"]}"></div>')
+                if crop.get("reveal_skipped"):
+                    parts.append(
+                        '<div class="reveal-note sm">'
+                        'Underlying content could not be cleanly recovered '
+                        'for this region, so no before/after reveal is '
+                        'shown. The detection above still stands; examine '
+                        'the source file directly to confirm what lies '
+                        'beneath.</div>')
             parts.append(
                 f'<div class="finding-detail">'
                 f'{_esc(crop["detail"])}</div>')

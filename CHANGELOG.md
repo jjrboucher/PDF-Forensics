@@ -1,25 +1,52 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-06-01b)
+
+### Menu / GUI refinements
+- Changing the case number now always prompts for an output folder (the
+  user may pick an existing folder or create a new one), instead of
+  silently reusing the previous case's folder and database. The processing
+  log window is also cleared, since a new case begins a fresh session.
+- The header on every menu now shows the agency name, unit name, and
+  investigator name alongside the case number, so the operator can confirm
+  at a glance that the stored identity details are theirs before running
+  anything. Missing fields are shown in amber as a prompt to set them, and
+  the header updates immediately after branding is edited.
+- The "Select reports" list is now laid out in two columns so the full
+  list (and the controls beneath it) stays visible on smaller laptop
+  screens.
+
 ## v1.0.0 — Update (2026-06-01)
 
 ### Visual Overlay Report — Before/After Reveal
-- The visual overlay report can now show, for recoverable overlays, what
-  is hidden beneath them. Where the underlying content still exists in the
-  file (white-box masks, text-over-text, and opaque annotations), the page
-  is re-rendered with the overlay suppressed and offered alongside the
-  normal view via a toggle.
+- The visual overlay report can now show, for recoverable overlays, what is
+  hidden beneath them. The page (or an individual region) is re-rendered
+  with the overlay suppressed and offered alongside the normal view via a
+  toggle.
 - Two independent reveal modes are provided:
   - A page-level toggle on each full page image ("As displayed" vs
-    "Overlays removed") that suppresses every overlay on that page at once.
+    "Overlays removed") that suppresses every recoverable overlay on the
+    page at once.
   - A per-finding toggle on each detail card ("As displayed" vs
     "Hidden beneath") that suppresses only that one flagged overlay.
-- Suppression is performed at the content-stream level by the new
-  `reports/reveal.py` module, which re-parses the page content stream and
-  removes the operators that paint the overlay (the white rectangle and the
-  text drawn on top, the overlying glyphs, or the annotation), exposing the
-  original content that remained underneath. The original underlying
-  content is never modified.
-- Text-over-text reveals are labelled as best-effort reconstructions.
+- Suppression is performed by the new `reports/reveal.py` module. It handles
+  the common real-world case (e.g. PDFium-edited files) where an alteration
+  is composited on top of the original through deeply nested Form XObjects
+  as a TWO-part construct: a patch (a white rectangle, or one or more
+  vector/image patch forms) that hides the original glyphs, plus forged text
+  drawn over the patch. The module walks the entire content tree (page
+  stream and every nested form) in draw order, then for each flagged region
+  suppresses the whole edit group — patch and forged text together — at the
+  container level, exposing the untouched original beneath. Simpler inline
+  overlays (a masking rectangle drawn directly in a stream, or text painted
+  over text without nesting) are handled as a fallback. The original
+  underlying content is never modified.
+- Evidentiary safety: if the underlying content for a region cannot be
+  cleanly isolated from legitimate co-located content, the reveal is SKIPPED
+  for that finding rather than shown partially. No toggle is offered for
+  such findings and the detail card is labelled accordingly; the detection
+  itself still stands. Hairline fills that the detector flags as "white box"
+  but that mask no text (e.g. separator rules) are likewise skipped.
 - When printed, both states are shown stacked with captions so a filed PDF
   preserves the comparison.
 
