@@ -138,7 +138,10 @@ def init_db(db_path, session=None):
             bbox_y0         REAL,
             bbox_x1         REAL,
             bbox_y1         REAL,
-            overlay_kind    TEXT
+            overlay_kind    TEXT,
+            obj_num         INTEGER,
+            obj_gen         INTEGER,
+            obj_locator     TEXT
         );
 
         CREATE TABLE IF NOT EXISTS finding_images (
@@ -191,6 +194,20 @@ def init_db(db_path, session=None):
             key            TEXT    NOT NULL,
             value          TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS comments (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id   INTEGER NOT NULL
+                          REFERENCES analyses(id) ON DELETE CASCADE,
+            page_number   INTEGER,
+            annot_subtype TEXT,
+            author        TEXT,
+            contents      TEXT,
+            created_date  TEXT,
+            modified_date TEXT,
+            obj_num       INTEGER,
+            obj_gen       INTEGER
+        );
     """)
 
     for code, (label, severity) in FINDING_TYPE_DEFS.items():
@@ -230,6 +247,33 @@ def init_db(db_path, session=None):
     if "overlay_kind" not in finding_cols:
         cur.execute(
             "ALTER TABLE findings ADD COLUMN overlay_kind TEXT")
+    # Migration: object/stream locator columns on findings (rev 5)
+    if "obj_num" not in finding_cols:
+        cur.execute(
+            "ALTER TABLE findings ADD COLUMN obj_num INTEGER")
+    if "obj_gen" not in finding_cols:
+        cur.execute(
+            "ALTER TABLE findings ADD COLUMN obj_gen INTEGER")
+    if "obj_locator" not in finding_cols:
+        cur.execute(
+            "ALTER TABLE findings ADD COLUMN obj_locator TEXT")
+
+    # Migration: comments table (rev 5)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS comments (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id   INTEGER NOT NULL
+                          REFERENCES analyses(id) ON DELETE CASCADE,
+            page_number   INTEGER,
+            annot_subtype TEXT,
+            author        TEXT,
+            contents      TEXT,
+            created_date  TEXT,
+            modified_date TEXT,
+            obj_num       INTEGER,
+            obj_gen       INTEGER
+        )
+    """)
 
     # Record schema version if this is a new database or a new revision
     cur.execute("""
@@ -305,7 +349,7 @@ def check_pdf_already_analyzed(conn, pdf_path):
 
 def save_to_db(conn, pdf_path, total_pages, page_data,
                pdf_metadata=None, pdf_versions=None,
-               store_images=True):
+               store_images=True, comments=None):
     """Write all analysis results to the SQLite database."""
     from pdf_forensics.analysis.metadata import extract_image_metadata
     cur = conn.cursor()
@@ -347,6 +391,27 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
                     (analysis_id, version_number, eof_offset)
                 VALUES (?, ?, ?)
             """, (analysis_id, version_num, offset))
+
+    # Insert PDF comments / annotation notes
+    if comments:
+        for c in comments:
+            cur.execute("""
+                INSERT INTO comments
+                    (analysis_id, page_number, annot_subtype, author,
+                     contents, created_date, modified_date,
+                     obj_num, obj_gen)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                analysis_id,
+                c.get("page_number"),
+                c.get("annot_subtype"),
+                c.get("author"),
+                c.get("contents"),
+                c.get("created_date"),
+                c.get("modified_date"),
+                c.get("obj_num"),
+                c.get("obj_gen"),
+            ))
 
     ft_ids = {}
     for code in FINDING_TYPE_DEFS:
@@ -463,10 +528,13 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
             cur.execute("""
                 INSERT INTO findings
                     (page_id, finding_type_id, detail,
-                     bbox_x0, bbox_y0, bbox_x1, bbox_y1, overlay_kind)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     bbox_x0, bbox_y0, bbox_x1, bbox_y1, overlay_kind,
+                     obj_num, obj_gen, obj_locator)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (page_id, ft_id, f["detail"],
-                  bx0, by0, bx1, by1, f.get("overlay_kind")))
+                  bx0, by0, bx1, by1, f.get("overlay_kind"),
+                  f.get("obj_num"), f.get("obj_gen"),
+                  f.get("obj_locator")))
             finding_id = cur.lastrowid
 
             image_str = f.get("image") or ""

@@ -249,7 +249,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
         check_text_overlays(page_pk, page_mu, page_num, findings)
         check_content_stream_text_overlay(
             page_pk, page_mu, page_num, findings)
-        check_text_over_text(page_mu, page_num, findings)
+        check_text_over_text(page_mu, page_num, findings, page_pk=page_pk)
 
         # Compute per-image risk scores from the findings on this page
         risk_scores = compute_risk_scores(findings, label_to_info)
@@ -281,6 +281,13 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                     page_data[pg]["findings"],
                     page_data[pg]["label_to_info"])
 
+    # Extract reviewer comments / markup annotations before closing.
+    try:
+        from pdf_forensics.analysis.comments import extract_comments
+        pdf_comments = extract_comments(doc_pk)
+    except Exception:
+        pdf_comments = []
+
     doc_mu.close()
     doc_pk.close()
 
@@ -290,7 +297,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     save_to_db(conn, pdf_path, total_pages, page_data,
                pdf_metadata=pdf_metadata,
                pdf_versions=pdf_versions,
-               store_images=store_images)
+               store_images=store_images,
+               comments=pdf_comments)
     if own_conn:
         conn.close()
 

@@ -209,6 +209,7 @@ def run_triage(pdf_paths, output_path, session=None,
 
     results = []
     skipped = 0
+    all_comments = []   # flat list across all triaged PDFs
 
     for i, pdf_path in enumerate(pdf_paths):
         if progress_callback:
@@ -219,6 +220,23 @@ def run_triage(pdf_paths, output_path, session=None,
             triage = triage_pdf(pdf_path)
             if triage:
                 results.append(triage)
+                # Extract reviewer comments / markup annotations
+                try:
+                    import pikepdf
+                    from pdf_forensics.analysis.comments import (
+                        extract_comments)
+                    with pikepdf.open(pdf_path) as _cpdf:
+                        for c in extract_comments(_cpdf):
+                            c = dict(c)
+                            c["filename"] = triage["filename"]
+                            c["path"] = triage["path"]
+                            all_comments.append(c)
+                except Exception as e:
+                    if session:
+                        session.log(
+                            f"  Could not extract comments from "
+                            f"{os.path.basename(pdf_path)}: {e}",
+                            "warning")
                 if session:
                     session.log(
                         f"  Triaged: {os.path.basename(pdf_path)} "
@@ -350,10 +368,64 @@ def run_triage(pdf_paths, output_path, session=None,
         col_letter = get_column_letter(col_idx)
         ws2.column_dimensions[col_letter].width = max_len + 3
 
-    ws2.freeze_panes = "C2"
+    ws2.freeze_panes = "B2"
     if meta_headers:
         last_col = get_column_letter(len(meta_headers))
         ws2.auto_filter.ref = f"A1:{last_col}{len(results) + 1}"
+
+    # --- Sheet 3: comments (only if any comments were found) ---
+    if all_comments:
+        ws3 = wb.create_sheet("comments")
+        comment_headers = [
+            "Filename", "Path", "Page", "Type", "Author",
+            "Date/Time", "Created", "Modified", "Comment", "Object",
+        ]
+        for col, hdr in enumerate(comment_headers, 1):
+            cell = ws3.cell(row=1, column=col, value=hdr)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+            cell.border = border
+
+        for row_idx, c in enumerate(all_comments, 2):
+            obj = ""
+            if c.get("obj_num") is not None:
+                obj = f"{c['obj_num']} {c.get('obj_gen', 0)} R"
+            # Date/Time prefers the modification date, falling back to
+            # creation date, matching the requested single date column.
+            dt = c.get("modified_date") or c.get("created_date") or ""
+            row_vals = [
+                c.get("filename", ""),
+                c.get("path", ""),
+                c.get("page_number", ""),
+                c.get("annot_subtype", ""),
+                c.get("author", ""),
+                dt,
+                c.get("created_date", ""),
+                c.get("modified_date", ""),
+                c.get("contents", ""),
+                obj,
+            ]
+            for col, val in enumerate(row_vals, 1):
+                cell = ws3.cell(row=row_idx, column=col,
+                                value=_safe_str(val))
+                cell.font = cell_font
+                cell.border = border
+
+        # Auto-fit comment columns
+        for col_idx in range(1, len(comment_headers) + 1):
+            hdr = comment_headers[col_idx - 1]
+            max_len = len(hdr)
+            for row_idx in range(2, len(all_comments) + 2):
+                val = str(ws3.cell(row=row_idx, column=col_idx).value
+                          or "")
+                max_len = max(max_len, min(len(val), 60))
+            ws3.column_dimensions[
+                get_column_letter(col_idx)].width = max_len + 3
+
+        ws3.freeze_panes = "B2"
+        last_col = get_column_letter(len(comment_headers))
+        ws3.auto_filter.ref = f"A1:{last_col}{len(all_comments) + 1}"
 
     # Save
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -362,6 +434,9 @@ def run_triage(pdf_paths, output_path, session=None,
     if session:
         session.log(f"Triage complete: {len(results)} PDFs -> "
                     f"{output_path}")
+        if all_comments:
+            session.log(f"  {len(all_comments)} comment(s) extracted "
+                        f"to the 'comments' worksheet.")
         session.register_output("triage", output_path)
 
     return len(results), skipped, output_path

@@ -339,6 +339,7 @@ REPORTS = [
                 COALESCE(
                     GROUP_CONCAT(DISTINCT i.label), ''
                 )                    AS "Images",
+                COALESCE(f.obj_locator, '') AS "Object / Stream",
                 a.pdf_md5            AS "PDF MD5"
             FROM findings f
             JOIN finding_types ft  ON ft.id = f.finding_type_id
@@ -356,6 +357,7 @@ REPORTS = [
             {"name": "Severity",  "label": "Severity",  "col_type": "text"},
             {"name": "Detail",    "label": "Detail",    "col_type": "text"},
             {"name": "Images",    "label": "Images",    "col_type": "text"},
+            {"name": "Object / Stream", "label": "Object / Stream (for validation)", "col_type": "text"},
             {"name": "PDF MD5",   "label": "PDF MD5",   "col_type": "hash"},
         ],
         "sticky_cols": 1,
@@ -708,6 +710,7 @@ REPORTS = [
                 p.page_number        AS "Page",
                 ft.code              AS "Type",
                 f.detail             AS "Detail",
+                COALESCE(f.obj_locator, '') AS "Object / Stream",
                 a.pdf_md5            AS "PDF MD5"
             FROM findings f
             JOIN finding_types ft  ON ft.id = f.finding_type_id
@@ -721,7 +724,56 @@ REPORTS = [
             {"name": "Page",     "label": "Page",     "col_type": "numeric"},
             {"name": "Type",     "label": "Type",     "col_type": "text"},
             {"name": "Detail",   "label": "Detail",   "col_type": "text"},
+            {"name": "Object / Stream", "label": "Object / Stream (for validation)", "col_type": "text"},
             {"name": "PDF MD5",  "label": "PDF MD5",  "col_type": "hash"},
+        ],
+        "sticky_cols": 1,
+    },
+
+    # -----------------------------------------------------------------
+    # 14. Document Comments
+    # -----------------------------------------------------------------
+    {
+        "id": "document_comments",
+        "name": "Document Comments",
+        "description":
+            "Reviewer comments and markup annotations (sticky notes, "
+            "text boxes, highlights, etc.) embedded in the analyzed "
+            "documents, with author, timestamps, and the PDF object "
+            "number for validation.",
+        "query": """
+            SELECT
+                a.pdf_filename       AS "Filename",
+                a.pdf_path           AS "Path",
+                c.page_number        AS "Page",
+                c.annot_subtype      AS "Type",
+                c.author             AS "Author",
+                c.contents           AS "Comment",
+                COALESCE(c.modified_date, c.created_date) AS "Date/Time",
+                c.created_date       AS "Created",
+                c.modified_date      AS "Modified",
+                CASE
+                    WHEN c.obj_num IS NOT NULL
+                    THEN c.obj_num || ' ' || COALESCE(c.obj_gen, 0) || ' R'
+                    ELSE ''
+                END                  AS "Object",
+                a.pdf_md5            AS "PDF MD5"
+            FROM comments c
+            JOIN analyses a ON a.id = c.analysis_id
+            ORDER BY a.pdf_filename, c.page_number, c.id
+        """,
+        "columns": [
+            {"name": "Filename",  "label": "Filename",  "col_type": "text"},
+            {"name": "Path",      "label": "Path",      "col_type": "text"},
+            {"name": "Page",      "label": "Page",      "col_type": "numeric"},
+            {"name": "Type",      "label": "Type",      "col_type": "text"},
+            {"name": "Author",    "label": "Author",    "col_type": "text"},
+            {"name": "Comment",   "label": "Comment",   "col_type": "text"},
+            {"name": "Date/Time", "label": "Date/Time", "col_type": "date"},
+            {"name": "Created",   "label": "Created",   "col_type": "date"},
+            {"name": "Modified",  "label": "Modified",  "col_type": "date"},
+            {"name": "Object",    "label": "Object (for validation)", "col_type": "text"},
+            {"name": "PDF MD5",   "label": "PDF MD5",   "col_type": "hash"},
         ],
         "sticky_cols": 1,
     },

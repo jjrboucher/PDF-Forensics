@@ -146,6 +146,23 @@ class Session:
         self.logger.info("=" * 70)
         self.logger.info(f"{__tool_name__} v{__version__}")
         self.logger.info(f"Case: {self.case_number}")
+        # Agency / investigator identity (from branding config) so the log
+        # records who ran the analysis and under what authority.
+        try:
+            from pdf_forensics import branding as _bmod
+            _cfg = _bmod.load_branding()
+            _agency = (_cfg.get("agency_name") or "").strip()
+            _unit = (_cfg.get("unit_name") or "").strip()
+            _inv = (_cfg.get("investigator_name") or "").strip()
+            _email = (_cfg.get("investigator_email") or "").strip()
+            self.logger.info(f"Agency: {_agency or '(not set)'}")
+            self.logger.info(f"Unit: {_unit or '(not set)'}")
+            _inv_line = _inv or "(not set)"
+            if _email:
+                _inv_line += f" <{_email}>"
+            self.logger.info(f"Investigator: {_inv_line}")
+        except Exception:
+            pass
         self.logger.info(f"Session started: {self.timestamp}")
         self.logger.info(f"Host: {platform.node()}")
         self.logger.info(f"OS: {platform.platform()}")
@@ -260,6 +277,21 @@ class Session:
         self.logger.info("SESSION SUMMARY")
         self.logger.info("=" * 70)
         self.logger.info(f"Case:     {self.case_number}")
+        try:
+            from pdf_forensics import branding as _bmod
+            _cfg = _bmod.load_branding()
+            _agency = (_cfg.get("agency_name") or "").strip()
+            _unit = (_cfg.get("unit_name") or "").strip()
+            _inv = (_cfg.get("investigator_name") or "").strip()
+            _email = (_cfg.get("investigator_email") or "").strip()
+            self.logger.info(f"Agency:   {_agency or '(not set)'}")
+            self.logger.info(f"Unit:     {_unit or '(not set)'}")
+            _inv_line = _inv or "(not set)"
+            if _email:
+                _inv_line += f" <{_email}>"
+            self.logger.info(f"Investigator: {_inv_line}")
+        except Exception:
+            pass
         self.logger.info(
             f"Started:  {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info(

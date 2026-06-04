@@ -14,6 +14,59 @@ OFFPAGE_THRESHOLD_PTS = 1.0
 HIDDEN_THRESHOLD_PTS = 0.5
 
 
+def _page_content_locator(page_pk):
+    """
+    Build a human-readable locator for a page's content stream(s),
+    listing the PDF object number(s) of the /Contents stream(s) so a
+    forensic examiner can open them in peepdf / qpdf / mutool and validate
+    a content-stream overlay finding. Returns a string, or None on failure.
+
+    A page's /Contents may be a single stream object or an array of stream
+    objects (the rendered content is their concatenation); both are
+    reported.
+    """
+    try:
+        contents = page_pk.get("/Contents")
+    except Exception:
+        contents = None
+    if contents is None:
+        return None
+
+    objs = []
+    try:
+        if isinstance(contents, pikepdf.Array):
+            for item in contents:
+                try:
+                    objs.append(item.objgen)
+                except Exception:
+                    pass
+        else:
+            objs.append(contents.objgen)
+    except Exception:
+        return None
+
+    if not objs:
+        return None
+
+    refs = ", ".join(f"{n} {g} R" for (n, g) in objs)
+    if len(objs) > 1:
+        return (f"Page content stream array (objects {refs}); "
+                f"overlay operators are in the concatenated stream")
+    return f"Page content stream object {refs}"
+
+
+def _page_content_objgen(page_pk):
+    """Return (obj_num, obj_gen) of the first /Contents stream, or
+    (None, None). Used to populate the structured locator columns."""
+    try:
+        contents = page_pk.get("/Contents")
+        if isinstance(contents, pikepdf.Array):
+            return contents[0].objgen
+        return contents.objgen
+    except Exception:
+        return (None, None)
+
+
 def analyze_form_xobject(form_xobj, xobj_name, page_num, findings,
                          image_labels):
     """Analyze a Form XObject for image cropping/clipping/offset."""
@@ -781,12 +834,26 @@ def check_text_overlays(page_pk, page_mu, page_num, findings):
             if annot_contents:
                 detail += f" Annotation text: \"{annot_contents}\"."
 
+            obj_num = obj_gen = None
+            locator = None
+            try:
+                ref = (annot_ref if hasattr(annot_ref, "objgen")
+                       else annot_obj)
+                obj_num, obj_gen = ref.objgen
+                locator = (f"Annotation object {obj_num} {obj_gen} R "
+                           f"(/Subtype {subtype})")
+            except Exception:
+                pass
+
             findings.append({
                 "type":   "TEXT_OVERLAY",
                 "detail": detail,
                 "image":  None,   # not image-specific
                 "bbox":   annot_mu_rect,   # (x0,y0,x1,y1) top-left origin
                 "overlay_kind": "annotation",
+                "obj_num": obj_num,
+                "obj_gen": obj_gen,
+                "obj_locator": locator,
             })
             added += 1
 
@@ -824,6 +891,9 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num, findings):
     NEAR_RECT_TOLERANCE = 15.0  # points tolerance for position match
 
     added = 0
+
+    cs_locator = _page_content_locator(page_pk)
+    cs_objnum, cs_objgen = _page_content_objgen(page_pk)
 
     try:
         ops = list(pikepdf.parse_content_stream(page_pk))
@@ -1013,6 +1083,9 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num, findings):
                                 "image":  None,
                                 "bbox":   (mu_x0, mu_y0, mu_x1, mu_y1),
                                 "overlay_kind": "white_box",
+                                "obj_num": cs_objnum,
+                                "obj_gen": cs_objgen,
+                                "obj_locator": cs_locator,
                             })
                             flagged_rects.add(ri)
                             added += 1
@@ -1023,7 +1096,7 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num, findings):
     return added
 
 
-def check_text_over_text(page_mu, page_num, findings):
+def check_text_over_text(page_mu, page_num, findings, page_pk=None):
     """
     Detect text drawn directly on top of other text (text-over-text
     overlay) — a manipulation method that does not use a covering
@@ -1054,6 +1127,15 @@ def check_text_over_text(page_mu, page_num, findings):
     NEAR_IDENTICAL_PTS = 1.5
 
     added = 0
+
+    cs_locator = _page_content_locator(page_pk) if page_pk is not None \
+        else None
+    if cs_locator:
+        cs_locator = (cs_locator +
+                      " (overlying glyphs may be nested in a Form XObject "
+                      "drawn by this stream)")
+    cs_objnum, cs_objgen = (_page_content_objgen(page_pk)
+                            if page_pk is not None else (None, None))
 
     try:
         raw = page_mu.get_text("rawdict")
@@ -1233,6 +1315,9 @@ def check_text_over_text(page_mu, page_num, findings):
             "image":  None,
             "bbox":   (cl_x0, cl_y0, cl_x1, cl_y1),
             "overlay_kind": "text_over_text",
+            "obj_num": cs_objnum,
+            "obj_gen": cs_objgen,
+            "obj_locator": cs_locator,
         })
         added += 1
 

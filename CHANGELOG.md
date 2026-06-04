@@ -1,5 +1,35 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-06-04)
+
+### Comments, identity logging, validation locators (schema rev 5)
+- Log files now record the agency name, unit name, and investigator
+  (name and email) from the branding config alongside the case number,
+  in both the session header and the closing summary.
+- Excel triage workbook: the "pdf-metadata" sheet is now frozen at B2 so
+  it matches the "pdf-triage" sheet (header row + filename column).
+- Excel triage workbook: a new "comments" worksheet lists reviewer
+  comments / markup annotations extracted from the examined PDFs, with
+  columns Filename, Path, Page, Type, Author, Date/Time, Created,
+  Modified, Comment, and Object (the PDF object number, for validation).
+  Frozen at B2. The sheet is omitted entirely if no comments are found in
+  any examined PDF.
+- New "Document Comments" HTML report listing the same extracted comments.
+- The Text Overlay Detection and Manipulation Detail reports now include an
+  "Object / Stream (for validation)" column identifying where the flagged
+  overlay lives: the annotation object number for annotation overlays, or
+  the page content-stream object number (with a note that the overlying
+  glyphs may be nested in a Form XObject) for content-stream overlays. An
+  examiner can use this to validate findings in peepdf / qpdf / mutool.
+
+### Database schema — revision 5
+- Added a `comments` table (page, subtype, author, contents, creation and
+  modification dates, object/generation number), linked to `analyses`.
+- Added `obj_num`, `obj_gen`, and `obj_locator` columns to `findings` to
+  record where each overlay finding can be validated in the source file.
+- Existing rev-4 databases are migrated automatically (new columns and the
+  comments table are added in place).
+
 ## v1.0.0 — Update (2026-06-01b)
 
 ### Menu / GUI refinements
