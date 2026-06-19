@@ -10,7 +10,7 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 from datetime import datetime
 
 from pdf_forensics import __version__, __tool_name__, SCHEMA_REVISION
-from pdf_forensics.session import Session, load_config
+from pdf_forensics.session import Session, load_config, save_config
 from pdf_forensics.database import (
     validate_database, init_db, check_pdf_already_analyzed,
 )
@@ -185,42 +185,79 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # Help button (right side, before case badge)
     def show_about():
         import platform as pf
+        from pdf_forensics import disclaimers as _disc
+
+        dlg = tk.Toplevel(root)
+        dlg.title(f"About \u2014 {__tool_name__}")
+        dlg.configure(bg=BG_DARK)
+        dlg.transient(root)
+        dlg.geometry("680x620")
+        dlg.minsize(560, 460)
+
+        # Title
+        tk.Label(dlg, text=f"{__tool_name__} v{__version__}",
+                 bg=BG_DARK, fg=TEXT_PRIM,
+                 font=(FONT_FAMILY, 15, "bold")).pack(
+                     anchor="w", padx=20, pady=(18, 2))
+
+        # Scrollable body
+        body = tk.Frame(dlg, bg=BG_DARK)
+        body.pack(fill="both", expand=True, padx=20, pady=(6, 6))
+        canvas = tk.Canvas(body, bg=BG_DARK, highlightthickness=0)
+        scroll = ttk.Scrollbar(body, orient="vertical",
+                               command=canvas.yview)
+        inner = tk.Frame(canvas, bg=BG_DARK)
+        inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        def _wrap_label(parent, text, **kw):
+            lbl = tk.Label(parent, text=text, bg=BG_DARK, justify="left",
+                           anchor="w", wraplength=600, **kw)
+            lbl.pack(anchor="w", fill="x", pady=2)
+            return lbl
+
+        # Authorship / contact
+        _wrap_label(inner, "Author / Contact",
+                    fg=ACCENT, font=(FONT_FAMILY, 11, "bold"))
+        _wrap_label(inner, _disc.AUTHORSHIP_BLOCK,
+                    fg=TEXT_SEC, font=FONT_SUBTITLE)
+
+        tk.Frame(inner, bg=BORDER, height=1).pack(
+            fill="x", pady=(12, 10))
+
+        # Full disclaimer
+        _wrap_label(inner, _disc.FULL_DISCLAIMER_TITLE,
+                    fg=ACCENT, font=(FONT_FAMILY, 11, "bold"))
+        _wrap_label(inner, _disc.FULL_DISCLAIMER,
+                    fg=TEXT_PRIM, font=FONT_SUBTITLE)
+
+        tk.Frame(inner, bg=BORDER, height=1).pack(
+            fill="x", pady=(12, 10))
+
+        # Environment / diagnostics (kept from the original About)
+        _wrap_label(inner, "Environment",
+                    fg=ACCENT, font=(FONT_FAMILY, 11, "bold"))
         env_lines = [
-            f"{__tool_name__} v{__version__}",
-            "",
             f"Python: {sys.version.split()[0]}",
             f"OS: {pf.platform()}",
         ]
-        try:
-            import pymupdf
-            env_lines.append(f"PyMuPDF: {pymupdf.version}")
-        except Exception:
-            env_lines.append("PyMuPDF: not installed")
-        try:
-            import pikepdf
-            env_lines.append(f"pikepdf: {pikepdf.__version__}")
-        except Exception:
-            env_lines.append("pikepdf: not installed")
-        try:
-            import PIL
-            env_lines.append(f"Pillow: {PIL.__version__}")
-        except Exception:
-            env_lines.append("Pillow: not installed")
-        try:
-            import networkx
-            env_lines.append(f"networkx: {networkx.__version__}")
-        except Exception:
-            env_lines.append("networkx: not installed")
-        try:
-            import pyvis
-            env_lines.append(
-                f"pyvis: {getattr(pyvis, '__version__', 'installed')}")
-        except Exception:
-            env_lines.append("pyvis: not installed")
-
-        env_lines.append("")
+        for mod_name, attr in (("pymupdf", "version"),
+                               ("pikepdf", "__version__"),
+                               ("PIL", "__version__"),
+                               ("networkx", "__version__"),
+                               ("pyvis", "__version__")):
+            try:
+                m = __import__(mod_name)
+                ver = getattr(m, attr, "installed")
+                env_lines.append(f"{mod_name}: {ver}")
+            except Exception:
+                env_lines.append(f"{mod_name}: not installed")
         env_lines.append(f"Schema revision: {SCHEMA_REVISION}")
-
         if app["session"]:
             env_lines.append(f"Case: {app['case_var'].get()}")
             s = app["session"]
@@ -228,8 +265,22 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 env_lines.append(f"Output: {s.db_dir}")
             if s.log_path:
                 env_lines.append(f"Log: {s.log_path}")
+        _wrap_label(inner, "\n".join(env_lines),
+                    fg=TEXT_SEC, font=FONT_SUBTITLE)
 
-        messagebox.showinfo("About", "\n".join(env_lines))
+        # Close button
+        btn_row = tk.Frame(dlg, bg=BG_DARK)
+        btn_row.pack(fill="x", padx=20, pady=(4, 16))
+        ttk.Button(btn_row, text="Close",
+                   command=dlg.destroy).pack(side="right")
+
+        dlg.update_idletasks()
+        try:
+            x = root.winfo_x() + (root.winfo_width() - dlg.winfo_width()) // 2
+            y = root.winfo_y() + 60
+            dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
 
     help_frame = tk.Frame(header, bg=BG_DARK)
     help_frame.pack(side="right", padx=(0, 12), pady=14)
@@ -262,6 +313,18 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                             bg=BG_PANEL, fg=TEXT_SEC,
                             font=FONT_SUBTITLE, anchor="w")
     status_label.pack(side="left", padx=14, fill="y")
+
+    # Permanent disclaimer reminder (right side of the status bar). The full
+    # text is shown once as a blocking acknowledgment on first launch; this
+    # line is the lightweight, always-present reminder thereafter.
+    from pdf_forensics import disclaimers as _disc_mod
+    disclaimer_status = tk.Label(
+        status_frame, text=_disc_mod.FOOTER_REMINDER,
+        bg=BG_PANEL, fg=TEXT_DIM, font=FONT_SUBTITLE, anchor="e",
+        cursor="hand2")
+    disclaimer_status.pack(side="right", padx=14, fill="y")
+    # Clicking the reminder opens the full disclaimer in About.
+    disclaimer_status.bind("<Button-1>", lambda e: show_about())
 
     # ---------------------------------------------------------------
     # Frame switching
@@ -1620,11 +1683,96 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
         setup_session(case.strip())
 
+    def show_first_run_acknowledgment(on_done):
+        """On the first ever launch, show the full short-form disclaimer as a
+        blocking dialog the user must acknowledge to proceed. On every launch
+        thereafter this is skipped (the permanent status-bar reminder and the
+        About dialog carry the disclaimer forward). Calls on_done() when the
+        user may proceed."""
+        from pdf_forensics import disclaimers as _disc
+        cfg = load_config()
+        if cfg.get("disclaimer_acknowledged"):
+            on_done()
+            return
+
+        dlg = tk.Toplevel(root)
+        dlg.title("Disclaimer \u2014 Please Read")
+        dlg.configure(bg=BG_DARK)
+        dlg.transient(root)
+        dlg.grab_set()   # modal / blocking
+        dlg.protocol("WM_DELETE_WINDOW", lambda: None)  # must acknowledge
+
+        tk.Label(dlg, text="USE AT YOUR OWN RISK",
+                 bg=BG_DARK, fg=ACCENT,
+                 font=(FONT_FAMILY, 14, "bold")).pack(
+                     anchor="w", padx=24, pady=(22, 8))
+
+        msg = tk.Label(dlg, text=_disc.SHORT_DISCLAIMER, bg=BG_DARK,
+                       fg=TEXT_PRIM, justify="left", anchor="w",
+                       wraplength=560, font=FONT_SUBTITLE)
+        msg.pack(anchor="w", padx=24, pady=(0, 12))
+
+        tk.Label(dlg,
+                 text="The full disclaimer is always available under "
+                      "Help \u2192 About.",
+                 bg=BG_DARK, fg=TEXT_SEC, justify="left", anchor="w",
+                 wraplength=560, font=FONT_SUBTITLE).pack(
+                     anchor="w", padx=24, pady=(0, 14))
+
+        ack_var = tk.BooleanVar(value=False)
+        ack = ttk.Checkbutton(
+            dlg,
+            text="I have read and understand this disclaimer.",
+            variable=ack_var)
+        ack.pack(anchor="w", padx=24, pady=(0, 14))
+
+        btn_row = tk.Frame(dlg, bg=BG_DARK)
+        btn_row.pack(fill="x", padx=24, pady=(0, 18))
+
+        def proceed():
+            cfg2 = load_config()
+            cfg2["disclaimer_acknowledged"] = True
+            save_config(cfg2)
+            dlg.grab_release()
+            dlg.destroy()
+            on_done()
+
+        def do_exit():
+            dlg.grab_release()
+            dlg.destroy()
+            root.destroy()
+
+        proceed_btn = ttk.Button(btn_row, text="I Agree \u2014 Continue",
+                                 style="Accent.TButton",
+                                 command=proceed, state="disabled")
+        proceed_btn.pack(side="right")
+        ttk.Button(btn_row, text="Exit",
+                   style="Danger.TButton",
+                   command=do_exit).pack(side="right", padx=(0, 8))
+
+        def _toggle(*_):
+            proceed_btn.config(
+                state="normal" if ack_var.get() else "disabled")
+        ack_var.trace_add("write", _toggle)
+
+        dlg.update_idletasks()
+        try:
+            w, h = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+            x = root.winfo_x() + (root.winfo_width() - w) // 2
+            y = root.winfo_y() + (root.winfo_height() - h) // 3
+            dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+        dlg.wait_window()
+
     # ===================================================================
     # LAUNCH
     # ===================================================================
     show_frame("main")
-    root.after(100, prompt_case_number)
+    # First-run disclaimer acknowledgment, then the case-number prompt.
+    root.after(
+        100,
+        lambda: show_first_run_acknowledgment(prompt_case_number))
     root.mainloop()
 
     # Write session summary on exit

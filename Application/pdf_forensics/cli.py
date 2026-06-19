@@ -104,6 +104,21 @@ def main_cli():
         launch_app(initial_case=args.case)
         return
 
+    # CLI mode: surface the short disclaimer once at the start of the run so
+    # headless / automated users see it too (the GUI shows it as a first-run
+    # acknowledgment). Printed to stderr so it never pollutes redirected
+    # stdout, and suppressed in --quiet mode and for the report listing.
+    _quiet = bool(getattr(args, "quiet", False))
+    _listing = bool(getattr(args, "list", False))
+    if not _quiet and not _listing:
+        from pdf_forensics import disclaimers as _disc
+        import textwrap as _tw
+        sys.stderr.write(
+            "\n" + "=" * 70 + "\n")
+        sys.stderr.write(
+            _tw.fill(_disc.SHORT_DISCLAIMER, width=70) + "\n")
+        sys.stderr.write("=" * 70 + "\n\n")
+
     # CLI mode: set up session
     case = args.case or f"CLI_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     session = Session(case)

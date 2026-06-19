@@ -1,5 +1,29 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-06-19)
+
+### Licensing, authorship, and disclaimers (release prep)
+- Added the Apache License 2.0 full text as `LICENSE` at the repository
+  root, and a standard `NOTICE` file identifying the application, copyright
+  holder, and year.
+- Added `README.md` at the repository root with project description,
+  install/usage instructions, an Apache 2.0 license badge/section, a link
+  to `LICENSE`/`NOTICE`, the medium-form disclaimer, and the author/contact
+  block.
+- New `pdf_forensics/disclaimers.py` holds the approved, verbatim
+  disclaimer and authorship text shared across the suite.
+- GUI: on first launch the short disclaimer is shown as a blocking
+  acknowledgment the user must accept to proceed; the acknowledgment is
+  remembered, and on every launch thereafter a permanent reminder line
+  ("Use at your own risk — see About for full disclaimer") appears in the
+  status bar and opens the full disclaimer when clicked.
+- GUI: the Help → About dialog now shows the full disclaimer and the
+  author / contact / repository / license information, with the environment
+  diagnostics retained below it (now a scrollable dialog).
+- CLI: a short disclaimer banner is printed to stderr at the start of a
+  command run (suppressed for `--version`, `--help`, `--quiet`, and the
+  report `--list` listing) so headless users see it too.
+
 ## v1.0.0 — Update (2026-06-04)
 
 ### Comments, identity logging, validation locators (schema rev 5)
