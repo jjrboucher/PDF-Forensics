@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lab: PDF Internals &mdash; PDF Forensics Course</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+</head>
+<body data-mod="mod01" data-page="lab">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="../reference/index.html">Reference</a><a href="../license/index.html">License</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<a href="../module_01/index.html" class="sidebar-item active" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<div class="sidebar-sub">
+<a href="index.html">Overview</a>
+<a href="lesson_structure.html">Lesson: PDF Structure</a>
+<a href="lab.html">Lab: Navigating Objects</a>
+<a href="quiz.html">Knowledge Check</a>
+</div>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<a href="../module_04/index.html" class="sidebar-item" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<a href="../module_05/index.html" class="sidebar-item" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<a href="../module_06/index.html" class="sidebar-item" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+</div>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><a href="index.html">Module 01</a><span class="sep">&#x203A;</span><span>Lab</span></div><div class="page-header"><div class="module-badge">Module 01 &middot; Lab</div><h1>Lab: Navigating PDF Objects</h1><p class="subtitle">Work through each exercise in order using peepdf, qpdf, and mutool. Record what you find as you go &mdash; you will need your findings to answer the questions in the Model Answers section at the bottom.</p></div><div class="lab-file-panel"><div class="lab-file-icon">&#x1F4C4;</div><div class="lab-file-info"><div class="lab-file-title">lab01_structure.pdf</div><div class="lab-file-sub">Lab file for this module</div><div class="lab-file-meta"><span class="lab-file-meta-item"><span class="key">MD5</span><span class="val">5440841e16b52738b7bdc352fda1bb1e</span></span><span class="lab-file-meta-item"><span class="key">Pages</span><span class="val">2 pages</span></span></div><div style="margin-bottom:12px"><span class="badge badge-high" style="margin:2px">Clean Structure</span></div><div class="lab-file-actions"><a href="../sample_pdfs/lab01_structure.pdf" download class="btn btn-primary btn-sm">&#x2B07; Download Lab File</a><button onclick="navigator.clipboard.writeText('5440841e16b52738b7bdc352fda1bb1e')" class="btn btn-secondary btn-sm">&#x1F4CB; Copy MD5</button></div></div></div><div class="callout callout-info"><div class="callout-icon">&#x2139;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Before You Begin</div><p>Open a terminal and navigate to the folder containing <code>lab01_structure.pdf</code>. Keep a notepad document or paper beside you and write down the answers as you discover them &mdash; each exercise builds on the one before it. This is a clean file with no manipulation artifacts; the goal here is to become comfortable navigating the structure of a normal PDF before you encounter manipulated ones in later modules.</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 1 &mdash; Verify the File</h2><p>Before examining any file, always hash it and confirm it matches the expected value. This establishes that your copy is intact and gives you a defensible record if the file is ever questioned. Run the command below and compare the output to the MD5 shown in the file panel above.</p><div class="tool-tabs" data-tabgroup="ex1"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; hash the file</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>Get-FileHash -Algorithm MD5 lab01_structure.pdf
+# Expected: 5440841e16b52738b7bdc352fda1bb1e
+
+# If the hashes match, your copy is intact. Record the result in your notes.</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; hash the file</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>md5sum lab01_structure.pdf
+# Expected: 5440841e16b52738b7bdc352fda1bb1e
+
+# If the hashes match, your copy is intact. Record the result in your notes.</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p><strong>&#x2610; Q1 answer:</strong> The MD5 matches &mdash; note this in your case log along with today's date and the tool version (<code>Get-FileHash</code> / <code>md5sum</code>).</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 2 &mdash; Inspect the File with peepdf</h2><p>Launch peepdf in interactive mode and run four commands in sequence. Each one reveals a different layer of the file structure. Read the output carefully after each command before moving to the next &mdash; you are looking for specific values that answer the questions below.</p><div class="tool-tabs" data-tabgroup="ex2"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; peepdf interactive session</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>peepdf -i lab01_structure.pdf
+
+# Command 1: file summary
+pdf> info
+# Look for: PDF version, number of objects, encryption status
+# Record: the version string and object count
+
+# Command 2: list all objects
+pdf> objects
+# Look for: each object number and its type (/Catalog, /Pages, /Page, /XObject, etc.)
+# Record: the object numbers for the Catalog, the Pages tree, and any Image objects
+
+# Command 3: show the document hierarchy
+pdf> tree
+# Look for: the chain Catalog -> Pages -> Page -> Contents/Resources
+# Record: which object numbers appear at each level
+
+# Command 4: display all metadata
+pdf> metadata
+# Look for: Creator, Producer, CreationDate, ModDate
+# Record: all four values exactly as shown
+
+pdf> exit</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; peepdf interactive session</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>peepdf -i lab01_structure.pdf
+
+# Command 1: file summary
+pdf> info
+# Look for: PDF version, number of objects, encryption status
+# Record: the version string and object count
+
+# Command 2: list all objects
+pdf> objects
+# Look for: each object number and its type
+# Record: object numbers for Catalog, Pages tree, and any Image objects
+
+# Command 3: document hierarchy
+pdf> tree
+# Look for: Catalog -> Pages -> Page -> Contents/Resources chain
+
+# Command 4: metadata
+pdf> metadata
+# Look for: Creator, Producer, CreationDate, ModDate
+# Record: all four values
+
+pdf> exit</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record from Exercise 2</div><p><strong>&#x2610; Q2 answer:</strong> From <code>info</code> &mdash; note the PDF version and object count.<br><strong>&#x2610; Q5 answer:</strong> From <code>tree</code> or <code>objects</code> &mdash; find the /Pages object and note its <code>/Count</code> value (this is the page count).<br><strong>&#x2610; For Exercise 3:</strong> from <code>objects</code>, note the object number of the <code>/Page</code> dictionary (you will use it in the next step).</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 3 &mdash; Read a Specific Object</h2><p>From Exercise 2 you noted the object number of the first <code>/Page</code> dictionary. Now retrieve that object directly and read its keys. This is the same command you will use in every later module to independently verify any finding the forensics application reports: look up the object number from the report, run this command, read the raw data.</p><div class="tool-tabs" data-tabgroup="ex3"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; inspect the Page object</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Replace PAGE_OBJ_NUM with the object number you recorded in Exercise 2
+# (the number next to /Page in the objects list)
+
+# Method A: in peepdf
+peepdf -i lab01_structure.pdf
+pdf> object PAGE_OBJ_NUM
+pdf> exit
+
+# Method B: with qpdf (no interactive session needed)
+qpdf --show-object=PAGE_OBJ_NUM lab01_structure.pdf
+
+# Look for these keys in the output:
+# /Type /Page          <- confirms this is a page object
+# /MediaBox [...]      <- the page dimensions in points
+# /Contents N 0 R      <- object number of the content stream (record this)
+# /Resources N 0 R     <- object number of the resources dictionary (record this)</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; inspect the Page object</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Replace PAGE_OBJ_NUM with the number from Exercise 2
+
+# Method A: in peepdf
+peepdf -i lab01_structure.pdf
+pdf> object PAGE_OBJ_NUM
+pdf> exit
+
+# Method B: with qpdf
+qpdf --show-object=PAGE_OBJ_NUM lab01_structure.pdf
+
+# Look for:
+# /Type /Page
+# /MediaBox [...]      <- page dimensions
+# /Contents N 0 R      <- record this object number
+# /Resources N 0 R     <- record this object number</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record from Exercise 3</div><p><strong>&#x2610; For Exercise 4:</strong> note the object number next to <code>/Contents</code> in the Page dictionary output. This is the content stream you will decode in the next step.<br><strong>&#x2610; For Exercise 4:</strong> also note the object number next to <code>/Resources</code> &mdash; this is where the image XObject reference lives.</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 4 &mdash; Decode the Content Stream</h2><p>The <code>/Contents</code> object you identified in Exercise 3 holds the page drawing instructions in a FlateDecode-compressed stream. Use qpdf to decompress and print it. This is how you will examine content streams in every subsequent module when looking for text overlay operators (<code>1 1 1 rg re f</code>), image placement (<code>cm Do</code>), and text blocks (<code>BT ... ET</code>).</p><div class="tool-tabs" data-tabgroup="ex4"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; decode the content stream</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Replace CONTENTS_OBJ_NUM with the /Contents object number from Exercise 3
+
+qpdf --show-object=CONTENTS_OBJ_NUM --filtered-stream-data lab01_structure.pdf
+
+# The output will be the raw PDF drawing operators. Look for:
+# BT ... ET           <- text block (everything between is a text drawing instruction)
+# /F1 12 Tf           <- set font F1 at 12 points
+# 72 700 Td           <- move text cursor to position (72, 700)
+# (some text) Tj      <- render the string
+# q ... cm ... Do Q   <- image placement block
+
+# Redirect to a file for easier reading:
+qpdf --show-object=CONTENTS_OBJ_NUM --filtered-stream-data lab01_structure.pdf > stream_decoded.txt
+notepad stream_decoded.txt</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; decode the content stream</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Replace CONTENTS_OBJ_NUM with the /Contents object number from Exercise 3
+
+qpdf --show-object=CONTENTS_OBJ_NUM --filtered-stream-data lab01_structure.pdf
+
+# Look for:
+# BT ... ET           <- text block
+# q ... cm ... Do Q   <- image placement
+
+# Filter for just the key operators:
+qpdf --show-object=CONTENTS_OBJ_NUM --filtered-stream-data lab01_structure.pdf \
+  | grep -E '(BT|ET|^q$|^Q$|cm|Do)'
+
+# Save to file for easier reading:
+qpdf --show-object=CONTENTS_OBJ_NUM --filtered-stream-data lab01_structure.pdf > stream_decoded.txt
+cat stream_decoded.txt</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record from Exercise 4</div><p><strong>&#x2610; For Exercise 5:</strong> in the image placement block (<code>q ... cm ... Do Q</code>), note the name of the XObject being invoked (e.g. <code>/Im0</code>). Then look up that name in the <code>/Resources</code> dictionary (use <code>qpdf --show-object=RESOURCES_OBJ_NUM lab01_structure.pdf</code> or <code>pdf&gt; object RESOURCES_OBJ_NUM</code> in peepdf) to find the Image XObject's object number.</p><p><strong>&#x2610; Q3 answer:</strong> once you have the Image XObject object number, run <code>qpdf --show-object=IMAGE_OBJ_NUM lab01_structure.pdf</code> and read the <code>/Filter</code> value.</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 5 &mdash; Extract the Embedded Image</h2><p>mutool extracts every embedded image from a PDF to individual files in the current directory. This bypasses all display-level clipping (BBox, CropBox, off-page placement) and gives you the raw pixel data exactly as stored in the file. In later modules this is how you will reveal content that is invisible in a PDF viewer.</p><div class="tool-tabs" data-tabgroup="ex5"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; extract and verify the image</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Extract all embedded images:
+mutool extract lab01_structure.pdf
+
+# mutool will report the filenames it created (e.g. img-0001.jpg)
+# List what was extracted:
+Get-ChildItem img-*.jpg
+
+# Hash the extracted image and compare to the expected value:
+Get-FileHash -Algorithm MD5 img-*.jpg
+# Expected MD5: a61237da1ef601b7019bc2218871cbb5
+
+# Open the image to see its contents:
+Invoke-Item img-*.jpg</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; extract and verify the image</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Extract all embedded images:
+mutool extract lab01_structure.pdf
+
+# List what was extracted:
+ls -lh img-*.jpg
+
+# Hash and compare:
+md5sum img-*.jpg
+# Expected MD5: a61237da1ef601b7019bc2218871cbb5
+
+# Open the image:
+xdg-open img-*.jpg   # Linux
+open img-*.jpg       # macOS</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record from Exercise 5</div><p><strong>&#x2610; Q4 answer:</strong> the MD5 of the extracted image file. It should match <code>a61237da1ef601b7019bc2218871cbb5</code>. If it does not, re-download the lab file and repeat from Exercise 1.</p></div></div><div class="callout callout-forensic"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">Completion Check</div><p>Before moving to the model answers, confirm you have recorded:</p><ul><li>The file MD5 and verification result (Exercise 1)</li><li>The PDF version, object count, and page count (Exercise 2)</li><li>The object numbers for the Catalog, Pages, Page, Contents, Resources, and Image XObject (Exercises 2&ndash;4)</li><li>The /Filter value on the Image XObject (Exercise 4)</li><li>The MD5 of the extracted image file (Exercise 5)</li></ul><p>This is a clean file with no manipulation artifacts. The goal of this lab is not to find anything suspicious, but to build the navigation habit you will rely on in every subsequent module.</p></div></div><h2 class="section-title"><span class="icon">&#x1F4DD;</span> Model Answers</h2><p>Try each question from your own notes first, then reveal to check.</p><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q1: Does the file MD5 match the expected value?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">Yes &mdash; the expected MD5 is <code>5440841e16b52738b7bdc352fda1bb1e</code>. If yours does not match, re-download the lab file from the panel above.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q2: What PDF version is declared in the header, and how many objects does the file contain?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">Run <code>pdf&gt; info</code> in peepdf. The header declares <strong>PDF 1.7</strong> (<code>%PDF-1.7</code>). The object count is shown as <em>Objects</em> in the info output. Record the exact number you see &mdash; it will match the number of entries in the xref table minus the one free-object entry (entry 0 65535 f).</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q3: What is the /Filter on the image stream, and what does it mean?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem"><code>/DCTDecode</code> &mdash; this is JPEG compression. You can confirm this by running <code>qpdf --show-object=IMAGE_OBJ_NUM lab01_structure.pdf</code> and reading the <code>/Filter</code> key. DCTDecode is the most common filter for photographic colour images in PDF.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q4: What is the MD5 of the extracted image file?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem"><code>a61237da1ef601b7019bc2218871cbb5</code> &mdash; produced by mutool extract and verified with Get-FileHash / md5sum. This hash identifies the exact pixel data stored in the PDF, independent of how it is displayed.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q5: How many pages does the /Pages object's /Count entry declare?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem"><strong>2</strong> &mdash; visible in the <code>pdf&gt; tree</code> output or by running <code>qpdf --show-object=PAGES_OBJ_NUM lab01_structure.pdf</code> and reading <code>/Count 2</code>.</div></div><div class="page-nav"><a href="lesson_structure.html" class="btn btn-secondary">&larr; Lesson</a><div class="page-nav-info">Module 01 &middot; Lab</div><a href="quiz.html" class="btn btn-primary">Knowledge Check &rarr;</a></div></main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>

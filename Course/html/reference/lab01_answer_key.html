@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lab 01 Answer Key &mdash; PDF Structure</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<style>.mono{font-family:var(--font-mono);font-size:0.82rem;word-break:break-all}</style>
+</head>
+<body data-mod="reference" data-page="answer_key_01">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="index.html">Reference</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<a href="../module_01/index.html" class="sidebar-item" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<a href="../module_04/index.html" class="sidebar-item" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<a href="../module_05/index.html" class="sidebar-item" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<a href="../module_06/index.html" class="sidebar-item" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+</div>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><a href="index.html">Reference</a><span class="sep">&#x203A;</span><span>Lab 01 Answer Key</span></div>
+
+<div class="page-header"><div class="module-badge">&#x1F511; Answer Key</div>
+<h1>Lab 01 &mdash; PDF Structure</h1>
+<p class="subtitle">Use this to self-check your work after attempting the lab. A machine-readable JSON version of this same data is also available in the Reference section.</p></div>
+
+<div class="finding-card"><div class="finding-header"><span style="flex:1;font-weight:700;color:var(--navy)">&#x1F4C4; Lab File Overview</span></div><div class="finding-body"><div class="finding-detail-grid"><div class="key">Lab File</div><div class="val"><span class="mono">lab01_structure.pdf</span></div><div class="key">MD5</div><div class="val"><span class="mono">5440841e16b52738b7bdc352fda1bb1e</span></div><div class="key">Pages</div><div class="val">2</div><div class="key">PDF Version</div><div class="val"><span class="mono">1.7</span></div></div></div></div><h2 class="section-title"><span class="icon">&#x1F4DD;</span> Lab Exercises &mdash; Questions &amp; Answers</h2><div class="callout callout-info" style="margin-bottom:14px"><div class="callout-icon">&#x2753;</div><div class="callout-body"><div class="callout-title">Question 1</div><p>What PDF version is declared in the file header?</p><p style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"><strong>Answer:</strong> PDF 1.7 (%PDF-1.7)</p></div></div><div class="callout callout-info" style="margin-bottom:14px"><div class="callout-icon">&#x2753;</div><div class="callout-body"><div class="callout-title">Question 2</div><p>How many indirect objects does the file contain?</p><p style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"><strong>Answer:</strong> Count lines in xref table minus the free-object entry (entry 0 65535 f)</p></div></div><div class="callout callout-info" style="margin-bottom:14px"><div class="callout-icon">&#x2753;</div><div class="callout-body"><div class="callout-title">Question 3</div><p>What is the /Filter on the page-2 image stream?</p><p style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"><strong>Answer:</strong> /DCTDecode (JPEG compression)</p></div></div><div class="callout callout-info" style="margin-bottom:14px"><div class="callout-icon">&#x2753;</div><div class="callout-body"><div class="callout-title">Question 4</div><p>What is the MD5 of the embedded image?</p><p style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"><strong>Answer:</strong> a61237da1ef601b7019bc2218871cbb5</p></div></div><div class="callout callout-info" style="margin-bottom:14px"><div class="callout-icon">&#x2753;</div><div class="callout-body"><div class="callout-title">Question 5</div><p>How many pages does the /Pages object&#x27;s /Count entry declare?</p><p style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"><strong>Answer:</strong> 2</p></div></div>
+
+<div class="page-nav"><a href="index.html" class="btn btn-secondary">&larr; Reference</a><div class="page-nav-info">Lab 01 Answer Key</div><a href="../module_01/index.html" class="btn btn-primary">Module 01 &rarr;</a></div>
+</main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lab: Version Extraction &mdash; PDF Forensics Course</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+</head>
+<body data-mod="mod03" data-page="lab">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="../reference/index.html">Reference</a><a href="../license/index.html">License</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<a href="../module_01/index.html" class="sidebar-item" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item active" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<div class="sidebar-sub">
+<a href="index.html">Overview</a>
+<a href="lesson_incremental.html">Lesson: Updates</a>
+<a href="lab.html">Lab: Version Extraction</a>
+<a href="quiz.html">Knowledge Check</a>
+</div>
+<a href="../module_04/index.html" class="sidebar-item" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<a href="../module_05/index.html" class="sidebar-item" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<a href="../module_06/index.html" class="sidebar-item" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+</div>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><a href="index.html">Module 03</a><span class="sep">&#x203A;</span><span>Lab</span></div><div class="page-header"><div class="module-badge">Module 03 &middot; Lab</div><h1>Lab: Extracting an Edit History</h1><p class="subtitle">Work through each exercise in order, recording your findings as you go. You will use what you find here to answer the knowledge check questions.</p></div><div class="lab-file-panel"><div class="lab-file-icon">&#x1F4C4;</div><div class="lab-file-info"><div class="lab-file-title">lab03_incremental.pdf</div><div class="lab-file-sub">Lab file for this module</div><div class="lab-file-meta"><span class="lab-file-meta-item"><span class="key">MD5</span><span class="val">57fe4a57a80043fa8654cf7be9ea8603</span></span><span class="lab-file-meta-item"><span class="key">Pages</span><span class="val">1 page</span></span></div><div style="margin-bottom:12px"><span class="badge badge-high" style="margin:2px">3x %%EOF</span><span class="badge badge-high" style="margin:2px">2 Annotations</span></div><div class="lab-file-actions"><a href="../sample_pdfs/lab03_incremental.pdf" download class="btn btn-primary btn-sm">&#x2B07; Download Lab File</a><button onclick="navigator.clipboard.writeText(&#39;57fe4a57a80043fa8654cf7be9ea8603&#39;)" class="btn btn-secondary btn-sm">&#x1F4CB; Copy MD5</button></div></div></div><div class="callout callout-forensic"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">Scenario</div><p>You have received a copy of an employment contract. The subject claims the salary was always <strong>$95,000</strong> and the start date was always <strong>7 April 2025</strong>. Your task is to use incremental update analysis to determine the <em>original</em> values and establish when and how they were changed.</p></div></div><div class="callout callout-info"><div class="callout-icon">&#x2139;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Before You Begin</div><p>Open a terminal in the folder containing <code>lab03_incremental.pdf</code>. You will be creating a new file (<code>lab03_v1.pdf</code>) during this lab. Keep notes with space for: EOF count, byte offsets of each EOF, V1 MD5, Producer for each version, and the original salary and start date.</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 1 &mdash; Count %%EOF Markers and Find Their Byte Offsets</h2><p>The number of %%EOF markers tells you how many save operations the file has undergone. Run both commands: the first gives you the count, the second gives you the exact byte offset of each one &mdash; you will need those offsets in Exercise 2.</p><div class="tool-tabs" data-tabgroup="m03ex1"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; count and locate %%EOF markers</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Count total EOF markers:
+python -c "d=open('lab03_incremental.pdf','rb').read(); print(d.count(b'%%EOF'),'%%EOF markers')"
+
+# Get the byte offset of each (you need these for Exercise 2):
+python -c "
+d=open('lab03_incremental.pdf','rb').read()
+pos=0; i=1
+while True:
+    idx=d.find(b'%%EOF',pos)
+    if idx==-1: break
+    print(f'Version {i} EOF at byte {idx}')
+    i+=1; pos=idx+5
+"</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; count and locate %%EOF markers</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Count total EOF markers:
+grep -c '%%EOF' lab03_incremental.pdf
+
+# Get byte offsets:
+python3 -c "
+d=open('lab03_incremental.pdf','rb').read()
+pos=0; i=1
+while True:
+    idx=d.find(b'%%EOF',pos)
+    if idx==-1: break
+    print(f'Version {i} EOF at byte {idx}')
+    i+=1; pos=idx+5
+"</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>Total %%EOF count</strong> (answers Q1 &mdash; number of incremental updates = count minus 1)</li><li><strong>Version 1 EOF byte offset</strong>: _____ (you will use this in Exercise 2)</li><li><strong>Version 2 EOF byte offset</strong>: _____</li><li><strong>Version 3 EOF byte offset</strong>: _____</li></ul></div></div><button class="reveal-answer-btn" style="padding:8px 16px;background:var(--blue);color:white;border:none;border-radius:var(--radius);cursor:pointer;margin-top:8px">&#x1F441; Reveal expected offsets</button><div style="display:none;margin-top:12px"><div style="padding:14px;background:var(--green-bg);border-left:4px solid var(--green);border-radius:var(--radius)">Version 1 EOF at byte <strong>1143</strong><br>Version 2 EOF at byte <strong>1911</strong><br>Version 3 EOF at byte <strong>2690</strong></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 2 &mdash; Extract Version 1 and Verify Its Contents</h2><p>Copy all bytes from offset 0 up to and including the first %%EOF to create a standalone file representing the document as it existed before any edits. Open it in a PDF viewer to see the original content &mdash; this is the evidence that contradicts the subject's claim.</p><div class="tool-tabs" data-tabgroup="m03ex2"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; extract Version 1</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Extract Version 1:
+python -c "
+d=open('lab03_incremental.pdf','rb').read()
+eof1=d.find(b'%%EOF')+5  # +5 to include the %%EOF bytes themselves
+open('lab03_v1.pdf','wb').write(d[:eof1])
+print(f'Extracted {eof1} bytes to lab03_v1.pdf')
+"
+
+# Verify the extracted file's integrity:
+Get-FileHash -Algorithm MD5 lab03_v1.pdf
+# Expected: 056b9bd1b4368afd95cf01dd83ceccde
+
+# Open it in your PDF viewer to see the original values:
+Invoke-Item lab03_v1.pdf</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; extract Version 1</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Extract Version 1:
+python3 -c "
+d=open('lab03_incremental.pdf','rb').read()
+eof1=d.find(b'%%EOF')+5
+open('lab03_v1.pdf','wb').write(d[:eof1])
+print(f'Extracted {eof1} bytes to lab03_v1.pdf')
+"
+
+# Verify:
+md5sum lab03_v1.pdf
+# Expected: 056b9bd1b4368afd95cf01dd83ceccde
+
+# Open to view original content:
+xdg-open lab03_v1.pdf  # Linux
+open lab03_v1.pdf      # macOS</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>lab03_v1.pdf MD5</strong> matches expected value: 056b9bd1b4368afd95cf01dd83ceccde</li><li><strong>Original salary</strong> as shown in lab03_v1.pdf (answers Q2)</li><li><strong>Original start date</strong> as shown in lab03_v1.pdf</li></ul></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What you should see</div><p>Opening <code>lab03_v1.pdf</code> should reveal: <strong>Salary: $85,000</strong> and <strong>Start Date: Monday, 3 March 2025</strong>. These are the original values preserved in Version 1 of the document &mdash; the versions the subject claims never existed.</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 3 &mdash; Inspect the Modification Annotations</h2><p>The changes were made by adding FreeText annotations on top of the original text. Use peepdf to find and read them. Each annotation has a /CreationDate that tells you when the edit was made &mdash; a timestamp that is separate from the document dates.</p><div class="tool-tabs" data-tabgroup="m03ex3"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; find and read annotations</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>peepdf -i lab03_incremental.pdf
+
+# Step 1: list all annotation objects
+pdf> search /Annot
+# Note the object numbers shown
+
+# Step 2: read each annotation object
+pdf> object FIRST_ANNOT_OBJ_NUM
+# In the output, look for and record:
+#   /Subtype    <- the type of annotation (FreeText, etc.)
+#   /Rect       <- the position on the page [x1 y1 x2 y2]
+#   /Contents   <- the replacement text the annotation displays
+#   /CreationDate <- when this annotation was added
+#   /MK /BG     <- background colour ([1 1 1] = opaque white)
+
+pdf> object SECOND_ANNOT_OBJ_NUM
+# Repeat for each annotation found
+pdf> exit</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; find and read annotations</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>peepdf -i lab03_incremental.pdf
+pdf> search /Annot
+# Note all annotation object numbers
+
+pdf> object FIRST_ANNOT_OBJ_NUM
+# Record: /Subtype, /Contents, /CreationDate, /Rect
+
+pdf> object SECOND_ANNOT_OBJ_NUM
+pdf> exit</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>Annotation 1 /Contents</strong>: what replacement text does it display?</li><li><strong>Annotation 1 /CreationDate</strong>: when was it added?</li><li><strong>Annotation 2 /Contents</strong>: what replacement text does it display?</li><li><strong>Annotation 2 /CreationDate</strong>: when was it added?</li><li><strong>/MK /BG value</strong>: is it [1 1 1] (opaque white, covering original)?</li></ul></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 4 &mdash; Compare Producer Fields Across Versions</h2><p>The /Producer field in each version's trailer reveals which application wrote that version. A Producer change between versions tells you a different application opened and resaved the file. This answers Q4 in the knowledge check.</p><div class="tool-tabs" data-tabgroup="m03ex4"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; Producer comparison</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Version 1 Producer (from the file you extracted in Exercise 2):
+peepdf -i lab03_v1.pdf
+pdf> metadata
+# Look for: /Producer
+# Record the exact string
+pdf> exit
+
+# Current version (V3) Producer:
+exiftool lab03_incremental.pdf | findstr Producer
+# Compare the two values</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; Producer comparison</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Version 1 Producer:
+peepdf -i lab03_v1.pdf
+pdf> metadata
+# Record /Producer value
+pdf> exit
+
+# Current (V3) Producer:
+exiftool lab03_incremental.pdf | grep Producer</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>Version 1 Producer</strong>: _____ (the original authoring application)</li><li><strong>Version 3 Producer</strong>: _____ (the application that made the edits)</li><li>These two values answer Q4 of the knowledge check</li></ul></div></div><div class="callout callout-forensic"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">What the evidence shows</div><p>Version 1 (Producer: <strong>Microsoft Word 2019</strong>) is the original contract, created legitimately in Word. Versions 2 and 3 (Producer: <strong>Adobe Acrobat Reader DC 23.0</strong>) show that someone subsequently opened the file in Acrobat Reader and used the Fill &amp; Sign annotation tool to overlay new values on the salary and start date fields. The original values &mdash; $85,000 and 3 March 2025 &mdash; are preserved intact in the bytes of Version 1, still present in the current file at byte offsets 0 through 1143.</p></div></div><h2 class="section-title"><span class="icon">&#x1F4DD;</span> Knowledge Check Preparation</h2><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q1: A PDF file contains 3 %%EOF markers. How many incremental updates does this indicate?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem"><strong>2 incremental updates.</strong> Number of updates = %%EOF count minus 1. The first %%EOF ends the original creation; each subsequent %%EOF ends one incremental save. Three %%EOF markers = original + 2 saves.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q2: When extracting Version 1, what bytes do you copy?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">All bytes from offset 0 up to and including the first %%EOF. In Python: <code>d[:d.find(b'%%EOF')+5]</code>. The +5 includes all five bytes of the %%EOF string itself. Copying less than this (stopping before %%EOF) produces an incomplete file that some viewers will reject.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q3: What does the /Prev entry in an incremental update trailer do?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">It stores the byte offset of the <em>previous</em> version's xref table. This creates a chain of /Prev pointers that allows any PDF reader &mdash; and any forensic examiner &mdash; to walk backwards through every version of the document. To read V2's trailer, jump to the V3 xref table and read its /Prev entry; that gives you the offset of the V2 xref, whose /Prev gives you V1's xref.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q4: V1 Producer is 'Microsoft Word 2019' and V2 Producer is 'Adobe Acrobat Reader DC 23.0'. What does this indicate?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">The document was originally created in Microsoft Word (V1). Someone subsequently opened the file in Adobe Acrobat Reader and saved it, producing V2 (and V3). Adobe Acrobat Reader's Fill &amp; Sign feature was used to add the annotation overlays that changed the salary and start date values.</div></div><div class="page-nav"><a href="lesson_incremental.html" class="btn btn-secondary">&larr; Lesson</a><div class="page-nav-info">Module 03 &middot; Lab</div><a href="quiz.html" class="btn btn-primary">Knowledge Check &rarr;</a></div></main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>

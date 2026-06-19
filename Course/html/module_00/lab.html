@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lab: Environment Setup &mdash; PDF Forensics Course</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+</head>
+<body data-mod="mod00" data-page="lab">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="../reference/index.html">Reference</a><a href="../license/index.html">License</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item active" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<div class="sidebar-sub">
+<a href="index.html">Overview</a>
+<a href="lab.html">Lab: Environment Setup</a>
+</div>
+<a href="../module_01/index.html" class="sidebar-item" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<a href="../module_04/index.html" class="sidebar-item" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<a href="../module_05/index.html" class="sidebar-item" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<a href="../module_06/index.html" class="sidebar-item" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+</div>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><a href="index.html">Module 00</a><span class="sep">&#x203A;</span><span>Lab</span></div><div class="page-header"><div class="module-badge">Module 00 &middot; Lab</div><h1>Lab: Environment Setup &amp; First Hash</h1><p class="subtitle">Install your tools, configure your PATH so each one is callable from any terminal, then verify everything works before moving to Module 01.</p></div><div class="lab-file-panel"><div class="lab-file-icon">&#x1F4C4;</div><div class="lab-file-info"><div class="lab-file-title">Course Lab Files Package</div><div class="lab-file-sub">Lab file for this module</div><div class="lab-file-meta"><span class="lab-file-meta-item"><span class="key">MD5</span><span class="val">See reference/manifest.json for individual MD5s</span></span><span class="lab-file-meta-item"><span class="key">Pages</span><span class="val">7 PDFs</span></span></div><div style="margin-bottom:12px"><span class="badge badge-high" style="margin:2px">All Modules</span></div><div class="lab-file-actions"><a href="../sample_pdfs/" download class="btn btn-primary btn-sm">&#x2B07; Download Lab File</a><button onclick="navigator.clipboard.writeText(&#39;See reference/manifest.json for individual MD5s&#39;)" class="btn btn-secondary btn-sm">&#x1F4CB; Copy MD5</button></div></div></div><h2 class="section-title"><span class="icon">1&#xFE0F;&#x20E3;</span> Step 1 &mdash; Install Tools and Configure PATH</h2><p>Each tool must be added to your system PATH environment variable before it can be run by name from any terminal location. Complete every sub-step below <strong>before moving on to Step 2</strong> &mdash; Step 3's verification commands will fail otherwise.</p><div class="tool-tabs" data-tabgroup="m00ex1"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; verify Python and install peepdf</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>python --version
+
+pip install peepdf-3
+peepdf -i  # opens interactive shell -- type 'exit' to leave it</code></pre></div><h3 class="subsection-title">qpdf</h3><p>Download and run the installer from <a href="https://qpdf.sourceforge.io" target="_blank">qpdf.sourceforge.io</a>. By default it installs to a version-specific folder under Program Files. At the time of writing, qpdf 12.3.2 installs to:</p><div class="pre-wrap"><div class="pre-header"><span class="pre-label">qpdf install location (version number will vary)</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>C:\Program Files\qpdf 12.3.2\bin\</code></pre></div><p>Add that exact <code>\bin</code> folder to your system PATH:</p><ol><li>Press the Windows key, type <strong>environment variables</strong>, and open <em>"Edit the system environment variables"</em></li><li>Click <strong>Environment Variables...</strong></li><li>Under <strong>System variables</strong> (or <strong>User variables</strong>), select <strong>Path</strong> and click <strong>Edit...</strong></li><li>Click <strong>New</strong> and paste the qpdf <code>bin</code> path shown above (adjust the version number to match what you installed)</li><li>Click <strong>OK</strong> on every dialog to save</li><li><strong>Open a brand-new terminal window</strong> &mdash; PATH changes do not apply to terminals already open</li></ol><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; verify qpdf is on PATH</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>qpdf --version</code></pre></div><h3 class="subsection-title">mutool (MuPDF)</h3><div class="callout callout-warning"><div class="callout-icon">&#x26A0;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Prerequisite: Visual Studio</div><p>Building mutool from source on Windows requires <strong>Visual Studio</strong> installed (the free Community edition is sufficient, with the &ldquo;Desktop development with C++&rdquo; workload). Install Visual Studio before continuing if you do not already have it.</p></div></div><ol><li>Download the source release from <a href="https://mupdf.com/releases" target="_blank">mupdf.com/releases</a></li><li>Extract the downloaded archive to a convenient location, e.g. <code>C:\Tools\</code></li><li>Navigate to <code>.\mupdf-1.27.2-source\platform\win32\</code> (the exact folder name depends on the version you downloaded) and double-click <code>mupdf.sln</code> to open it in Visual Studio</li><li>In Visual Studio, press <strong>Ctrl+Shift+B</strong> to build the solution</li><li>Once the build completes, the executable will be located at:</li></ol><div class="pre-wrap"><div class="pre-header"><span class="pre-label">mutool build output location (path will vary by version)</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>.\mupdf-1.27.2-source\platform\win32\x64\Debug\</code></pre></div><p>Add that <code>Debug</code> folder (containing <code>mutool.exe</code>) to your system PATH using the same Environment Variables steps described above for qpdf. Open a new terminal afterward.</p><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; verify mutool is on PATH</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>mutool --version</code></pre></div><h3 class="subsection-title">ExifTool</h3><div class="callout callout-warning"><div class="callout-icon">&#x26A0;&#xFE0F;</div><div class="callout-body"><div class="callout-title">The executable is not named exiftool.exe by default</div><p>The file you download from <a href="https://exiftool.org" target="_blank">exiftool.org</a> is named <code>exiftool(-k).exe</code>. The <code>(-k)</code> suffix is intentional: it makes double-clicking the file pause and wait for a keypress, which is how the developer designed it for non-technical users testing it via drag-and-drop. For command-line use, you have two options:</p></div></div><ol><li><strong>Recommended:</strong> rename <code>exiftool(-k).exe</code> to <code>exiftool.exe</code> after extracting it. This lets you use the plain command <code>exiftool</code> everywhere in this course exactly as written.</li><li><strong>Alternative:</strong> leave the filename as-is and type the full name including the parentheses every time, e.g. <code>exiftool(-k).exe lab01_structure.pdf</code>. This is more error-prone and not recommended &mdash; every command example in this course uses the plain <code>exiftool</code> name.</li></ol><p>After extracting (and optionally renaming) the executable, add the folder containing it to your system PATH using the same Environment Variables steps shown above for qpdf. Open a new terminal afterward.</p><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; verify ExifTool is on PATH</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>exiftool -ver</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; install all tools (Debian / Ubuntu / WSL)</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>python3 --version
+
+pip3 install peepdf-3
+sudo apt install qpdf mupdf-tools libimage-exiftool-perl
+
+# Verify all four are installed and on PATH automatically:
+qpdf --version && mutool --version && exiftool -ver && peepdf -i</code></pre></div><p>Package manager installs on Linux place each tool's executable directly on PATH automatically &mdash; no manual PATH editing is required.</p></div><h2 class="section-title"><span class="icon">2&#xFE0F;&#x20E3;</span> Step 2 &mdash; Hash the Lab Files</h2><div class="tool-tabs" data-tabgroup="m00ex2"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; hash all lab files</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>Get-ChildItem lab0*.pdf | ForEach-Object {
+    $md5 = (Get-FileHash $_.Name -Algorithm MD5).Hash
+    $sha = (Get-FileHash $_.Name -Algorithm SHA256).Hash
+    Write-Host "$($_.Name)";
+    Write-Host "  MD5:    $md5"
+    Write-Host "  SHA256: $sha"
+}</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; hash all lab files</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>for f in lab0*.pdf; do
+    echo "$f"
+    echo "  MD5:    $(md5sum $f | cut -d' ' -f1)"
+    echo "  SHA256: $(sha256sum $f | cut -d' ' -f1)"
+done</code></pre></div></div><div class="callout callout-warning"><div class="callout-icon">&#x26A0;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Chain of Custody</div><p>In a real investigation, hash the <em>original exhibit</em> before copying it. Record: the tool name and version, the date and time, the file name and path, and both MD5 and SHA-256 values. Notes must be contemporaneous.</p></div></div><h2 class="section-title"><span class="icon">3&#xFE0F;&#x20E3;</span> Step 3 &mdash; Quick Tool Verification</h2><p>If Step 1 was completed correctly, every command below should run from any folder without errors. If a command is not recognised, double-check that you opened a <strong>new</strong> terminal window after editing PATH, and that the path you added points to the folder containing the <code>.exe</code> file (not the file itself).</p><div class="tool-tabs" data-tabgroup="m00ex3"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Windows &mdash; verification commands</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Run against lab01_structure.pdf:
+
+# 1. peepdf
+peepdf -i lab01_structure.pdf
+# At prompt: objects
+# Then: exit
+
+# 2. qpdf structure
+qpdf --json lab01_structure.pdf | python -m json.tool | findstr type
+
+# 3. mutool page info
+mutool info lab01_structure.pdf
+
+# 4. ExifTool metadata
+exiftool lab01_structure.pdf</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Linux &mdash; verification commands</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Run against lab01_structure.pdf:
+peepdf -i lab01_structure.pdf
+# At prompt: objects
+# Then: exit
+
+qpdf --json lab01_structure.pdf | python3 -m json.tool | grep type
+mutool info lab01_structure.pdf
+exiftool lab01_structure.pdf</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">Completion Check</div><p>You should see: peepdf shows an object count; qpdf shows JSON structure; mutool shows page dimensions; exiftool shows Creator and Producer fields. All four tools producing output without errors means your environment is ready.</p></div></div><div class="page-nav"><a href="index.html" class="btn btn-secondary">&larr; Overview</a><div class="page-nav-info">Module 00 Complete</div><a href="../module_01/index.html" class="btn btn-primary">Module 01: PDF Internals &rarr;</a></div></main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>

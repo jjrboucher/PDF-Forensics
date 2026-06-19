@@ -1,0 +1,82 @@
+{
+  "lab": "05",
+  "title": "Text Overlay Detection",
+  "file": "lab05_textoverlay.pdf",
+  "md5": "d28ca040172c8abb1499a59bb265d229",
+  "pages": 3,
+  "findings": [
+    {
+      "id": "OVL-01",
+      "type": "TEXT_OVERLAY",
+      "subtype": "annotation",
+      "overlay_kind": "annotation",
+      "severity": "HIGH",
+      "risk_weight": 35,
+      "page": 1,
+      "annotation_subtype": "/FreeText",
+      "annotation_object": "7",
+      "annotation_rect": "[68, 648, 320, 668]",
+      "annotation_contents": "Date: Wednesday, 19 March 2025",
+      "covered_text": "Date: Saturday, 15 March 2025",
+      "background": "/MK /BG [1 1 1]  (opaque white)",
+      "created": "D:20250320091500+00'00'",
+      "verification_peepdf": "pdf> object 7  \u2192 inspect /Rect, /Contents, /MK",
+      "verification_qpdf": "qpdf --show-object=7 lab05_textoverlay.pdf"
+    },
+    {
+      "id": "OVL-02",
+      "type": "TEXT_OVERLAY",
+      "subtype": "white_box",
+      "overlay_kind": "white_box",
+      "severity": "HIGH",
+      "risk_weight": 35,
+      "page": 2,
+      "description": "White rectangle (1 1 1 rg  68 630 120 16 re  f) covers 'Total: $8,200'. Replacement text 'Total: $12,450' drawn at y=636.",
+      "original_value": "$8,200",
+      "replacement_value": "$12,450",
+      "white_rect": "[68, 630, 188, 646] (x, y, x+w, y+h)",
+      "operator_sequence": "1 1 1 rg \u2192 68 630 120 16 re \u2192 f \u2192 BT...Total: $12,450...ET",
+      "content_stream_obj": "see /Contents on page 2",
+      "verification": "Decode page 2 content stream and search for '1 1 1 rg' followed by 're' and 'f'"
+    },
+    {
+      "id": "OVL-03",
+      "type": "TEXT_OVERLAY",
+      "subtype": "text_over_text",
+      "overlay_kind": "text_over_text",
+      "severity": "HIGH",
+      "risk_weight": 35,
+      "page": 3,
+      "description": "Glyph sequence 'Wed' drawn at (155, 656), directly on top of 'Sat' at same coordinates in prior text block.",
+      "original_word": "Sat",
+      "replacement_word": "Wed",
+      "coordinates": "(155, 656)",
+      "detection_note": "No white rectangle. Detected by per-character bounding box overlap analysis (PyMuPDF rawdict). Both 'S'/'W', 'a'/'e', 't'/'d' character pairs have >0.8 overlap ratio.",
+      "full_original_line": "Travel Date: Sat 08 Feb 2025",
+      "full_modified_line": "Travel Date: Wed 08 Feb 2025 (as rendered)",
+      "verification": "Decode page 3 content stream \u2014 find two BT...ET blocks with overlapping text coordinates"
+    }
+  ],
+  "exercises": [
+    {
+      "q": "On page 1, what is the object number of the FreeText annotation?",
+      "a": "7 (verify with: qpdf --json lab05_textoverlay.pdf | grep Annots)"
+    },
+    {
+      "q": "On page 1, what date does the annotation display, and what date does the underlying text contain?",
+      "a": "Annotation shows: Wednesday, 19 March 2025. Underlying text: Saturday, 15 March 2025"
+    },
+    {
+      "q": "On page 2, write the operator sequence that creates the white-box overlay.",
+      "a": "1 1 1 rg  (set fill colour white)  \u2192  68 630 120 16 re  (define rectangle)  \u2192  f  (fill)"
+    },
+    {
+      "q": "On page 3, how would you confirm the text-over-text manipulation using qpdf?",
+      "a": "qpdf --filtered-stream-data --show-object=<page3_contents_obj> lab05_textoverlay.pdf \u2192 look for two BT blocks with identical Td coordinates but different text"
+    },
+    {
+      "q": "Which of the three overlay types is hardest to detect visually in a PDF viewer, and why?",
+      "a": "Text-over-text (page 3) \u2014 no white rectangle, no annotation visible in the Annotations panel; only the replacement glyph is visible at that position."
+    }
+  ]
+}

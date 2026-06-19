@@ -1,0 +1,56 @@
+{
+  "lab": "02",
+  "title": "Document Metadata Artifacts",
+  "file": "lab02_metadata.pdf",
+  "md5": "d2199d83e50edbdde67b4d5940b665b7",
+  "pages": 1,
+  "anomalies": [
+    {
+      "id": "META-01",
+      "type": "Creator/Producer mismatch with claimed origin",
+      "info_dict_creator": "Mozilla/5.0 ... Chrome/124.0.0.0 ...",
+      "info_dict_producer": "Skia/PDF m124",
+      "xmp_creator_tool": "Microsoft Word 2019",
+      "xmp_producer": "Microsoft Word 2019",
+      "significance": "Info dictionary reveals Chrome browser print-to-PDF; XMP claims MS Word. Document was NOT created by Microsoft Word.",
+      "peepdf_command": "pdf> metadata",
+      "qpdf_command": "qpdf --json lab02_metadata.pdf | python3 -m json.tool | grep -A2 '\"Creator\"'"
+    },
+    {
+      "id": "META-02",
+      "type": "ModDate earlier than CreationDate (impossible)",
+      "info_dict_creation": "D:20250301120000+00'00'  (2025-03-01 12:00 UTC)",
+      "info_dict_moddate": "D:20250215083000+00'00'  (2025-02-15 08:30 UTC)",
+      "significance": "A ModDate that precedes the CreationDate is structurally impossible and is a reliable indicator of manual metadata editing.",
+      "peepdf_command": "pdf> metadata"
+    },
+    {
+      "id": "META-03",
+      "type": "Info dictionary / XMP stream mismatch",
+      "info_dict_producer": "Skia/PDF m124",
+      "xmp_producer": "Microsoft Word 2019",
+      "info_dict_moddate": "D:20250215083000+00'00'",
+      "xmp_modify_date": "2025-03-01T12:00:00Z",
+      "significance": "Info dict and XMP record different producing software and different modification dates. Both cannot be correct. The Info dict was likely edited manually after creation.",
+      "iso_reference": "ISO 32000-2:2020 \u00a714.3 \u2014 both sources should be consistent in a legitimately produced PDF."
+    }
+  ],
+  "exercises": [
+    {
+      "q": "What does the Creator field reveal about the true origin of this document?",
+      "a": "Creator = Chrome user-agent string. Document was printed to PDF using Google Chrome, not Microsoft Word."
+    },
+    {
+      "q": "Which metadata source (Info dict or XMP) is more likely to be authentic, and why?",
+      "a": "The XMP was injected after initial creation. The Info dict retains the original Chrome/Skia values. Info dict is more likely original; XMP was modified to fabricate a Word origin."
+    },
+    {
+      "q": "Is the ModDate value valid? What does it indicate?",
+      "a": "No. ModDate (Feb 15) precedes CreationDate (Mar 1) \u2014 impossible in a normally produced file. Strong indicator of manual hex editing of metadata."
+    },
+    {
+      "q": "Write the peepdf3 command to display all metadata fields.",
+      "a": "peepdf -i lab02_metadata.pdf   then at prompt:   pdf> metadata"
+    }
+  ]
+}

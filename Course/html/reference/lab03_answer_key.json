@@ -1,0 +1,76 @@
+{
+  "lab": "03",
+  "title": "Incremental Updates and Prior Versions",
+  "file": "lab03_incremental.pdf",
+  "md5": "57fe4a57a80043fa8654cf7be9ea8603",
+  "pages": 1,
+  "eof_count": 3,
+  "eof_offsets": [
+    1143,
+    1911,
+    2690
+  ],
+  "incremental_updates": 2,
+  "version_history": [
+    {
+      "version": 1,
+      "eof_offset": 1143,
+      "producer": "Microsoft Word 2019",
+      "creation_date": "D:20250303090000+00'00'",
+      "mod_date": "D:20250303090000+00'00'",
+      "content": "Original contract. Salary: $85,000. Start Date: 3 March 2025.",
+      "md5_at_this_version": "056b9bd1b4368afd95cf01dd83ceccde",
+      "note_on_annot_obj": "Salary annotation object: 8"
+    },
+    {
+      "version": 2,
+      "eof_offset": 1911,
+      "producer": "Adobe Acrobat Reader DC 23.0",
+      "mod_date": "D:20250310143000+00'00'",
+      "change": "FreeText annotation added over Salary line \u2014 changes '$85,000' to '$95,000'",
+      "annotation_rect": "[140, 618, 280, 636]",
+      "annotation_contents": "$95,000 per annum",
+      "md5_at_this_version": "6c4a40a67ab413ae373ba17d53b0eba7",
+      "note_on_annot_obj": "Start date annotation object: 9"
+    },
+    {
+      "version": 3,
+      "eof_offset": 2690,
+      "producer": "Adobe Acrobat Reader DC 23.0",
+      "mod_date": "D:20250318092000+00'00'",
+      "change": "Second FreeText annotation added over Start Date \u2014 changes '3 March 2025' to '7 April 2025'",
+      "annotation_rect": "[140, 658, 310, 676]",
+      "annotation_contents": "Monday, 7 April 2025"
+    }
+  ],
+  "detection_commands": {
+    "count_eof_linux": "grep -c '%%EOF' lab03_incremental.pdf",
+    "count_eof_windows": "powershell -c \"(Get-Content -Raw lab03_incremental.pdf | Select-String '%%EOF' -AllMatches).Matches.Count\"",
+    "count_eof_python": "python3 -c \"d=open('lab03_incremental.pdf','rb').read(); print(d.count(b'%%EOF'), 'EOF markers')\"",
+    "get_eof_offsets": "python3 -c \"d=open('lab03_incremental.pdf','rb').read(); [print(f'Version {i+1} EOF at byte {d.find(b\\\"%%EOF\\\",pos)}') for i,(pos) in enumerate([0]+[d.find(b\\\"%%EOF\\\",p)+5 for p in [d.find(b\\\"%%EOF\\\")]])]\"",
+    "peepdf_versions": "pdf> info  (shows modification dates per version)",
+    "extract_prior_v1": "python3 -c \"d=open('lab03_incremental.pdf','rb').read(); open('version1.pdf','wb').write(d[:d.find(b'%%EOF')+5])\""
+  },
+  "exercises": [
+    {
+      "q": "How many %%EOF markers does the file contain?",
+      "a": "1 (indicating 0 incremental updates)"
+    },
+    {
+      "q": "What was the original salary value in Version 1?",
+      "a": "$85,000 per annum (visible in extracted Version 1)"
+    },
+    {
+      "q": "What Producer wrote the incremental updates?",
+      "a": "Adobe Acrobat Reader DC 23.0 (Version 1 was Microsoft Word 2019)"
+    },
+    {
+      "q": "What content does the Version 2 FreeText annotation cover?",
+      "a": "The salary line \u2014 overlays '$95,000 per annum' over the original '$85,000'"
+    },
+    {
+      "q": "Extract Version 1 to a separate file and verify its MD5.",
+      "a": "Expected MD5: 963f3e0081a05a61dd4ba4f013bf4bab"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson: EXIF & GPS &mdash; PDF Forensics Course</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+</head>
+<body data-mod="mod06" data-page="lesson_exif">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="../reference/index.html">Reference</a><a href="../license/index.html">License</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<a href="../module_01/index.html" class="sidebar-item" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<a href="../module_04/index.html" class="sidebar-item" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<a href="../module_05/index.html" class="sidebar-item" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<a href="../module_06/index.html" class="sidebar-item active" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<div class="sidebar-sub">
+<a href="index.html">Overview</a>
+<a href="lesson_exif.html">Lesson: EXIF &amp; GPS</a>
+<a href="lab.html">Lab: EXIF Analysis</a>
+<a href="quiz.html">Knowledge Check</a>
+</div>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+</div>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><a href="index.html">Module 06</a><span class="sep">&#x203A;</span><span>Lesson</span></div>
+<div class="page-header"><div class="module-badge">Module 06 &middot; Lesson</div><h1>EXIF &amp; GPS: The Camera&#39;s Story</h1></div><h2 class="section-title" id="s-exif"><span class="icon">&#x1F4F7;</span> 1. What is EXIF?</h2><p>EXIF (Exchangeable Image File Format, JEITA CP-3451C) is metadata embedded inside JPEG and TIFF image files. When an image is embedded in a PDF, its EXIF data travels with it intact.</p><div class="table-wrap"><table><thead><tr><th>EXIF Tag</th><th>Field Name</th><th>Forensic Use</th></tr></thead><tbody><tr><td><code>0x010F</code></td><td>Make</td><td>Camera/scanner manufacturer &mdash; should be consistent across a scanned document</td></tr><tr><td><code>0x0110</code></td><td>Model</td><td>Specific device model &mdash; distinguishes scanner from smartphone from DSLR</td></tr><tr><td><code>0x0131</code></td><td>Software</td><td>Processing software &mdash; "Adobe Photoshop" on a raw scan is a red flag</td></tr><tr><td><code>0x9003</code></td><td>DateTimeOriginal</td><td>Original capture timestamp &mdash; more reliable than DateTime</td></tr><tr><td><code>0x8825</code></td><td>GPSInfo</td><td>Sub-IFD containing latitude, longitude, altitude, GPS timestamp</td></tr></tbody></table></div><div class="callout callout-warning"><div class="callout-icon">&#x26A0;&#xFE0F;</div><div class="callout-body"><div class="callout-title">EXIF Caveats</div><p>EXIF data <em>can</em> be edited by image editing software. GPS coordinates do not guarantee the image was captured at that location. Always corroborate EXIF evidence with other sources. However, the <em>absence</em> of EXIF editing traces (consistent with the stated capture scenario) is itself a positive authenticity indicator.</p></div></div><h2 class="section-title" id="s-gps"><span class="icon">&#x1F30D;</span> 2. GPS Coordinates</h2><div class="pre-wrap"><div class="pre-header"><span class="pre-label">GPS Coordinate Conversion</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># GPS stored as degrees/minutes/seconds:
+GPSLatitude:  48 deg 51' 23.76" N
+GPSLongitude:  2 deg 21'  7.92" E
+
+# Convert to decimal degrees:
+Lat_DD  = 48 + 51/60 + 23.76/3600 = 48.8566 N
+Lon_DD  =  2 + 21/60 +  7.92/3600 =  2.3522 E
+
+# This resolves to: Paris, France
+# Verify: https://maps.google.com?q=48.8566,2.3522</code></pre></div><h2 class="section-title" id="s-mixed"><span class="icon">&#x1F4F1;</span> 3. Mixed Camera Detection</h2><p>In a legitimately scanned document, all pages are scanned by the same device. EXIF Make and Model should be uniform.</p><div class="table-wrap"><table><thead><tr><th>Make / Model</th><th>Device Type</th><th>Forensic Significance</th></tr></thead><tbody><tr><td>Canon imageRUNNER</td><td>Office scanner</td><td>Expected for a scanned document</td></tr><tr><td>SAMSUNG SM-G991B</td><td>Samsung Galaxy smartphone</td><td>Photograph taken on a phone &mdash; not a scanner</td></tr><tr><td>Apple iPhone 15 Pro</td><td>iPhone</td><td>Photograph taken on a phone &mdash; not a scanner</td></tr><tr><td>FUJIFILM X-T5</td><td>Mirrorless camera</td><td>Photograph taken on a camera &mdash; not a scanner</td></tr></tbody></table></div><h2 class="section-title" id="s-comments"><span class="icon">&#x1F4AC;</span> 4. Reviewer Annotations</h2><p>Reviewer annotations (sticky notes, highlights, FreeText comments) are stored in the <code>/Annots</code> array on each page. Key fields:</p><div class="table-wrap"><table><thead><tr><th>Field</th><th>PDF Key</th><th>Note</th></tr></thead><tbody><tr><td>Author</td><td><code>/T</code></td><td>Free-text &mdash; the OS username of the annotating user. Not verified, can be faked.</td></tr><tr><td>Contents</td><td><code>/Contents</code></td><td>The comment text &mdash; often contains contextual information</td></tr><tr><td>Created</td><td><code>/CreationDate</code></td><td>When the annotation was created</td></tr></tbody></table></div><div class="page-nav"><a href="index.html" class="btn btn-secondary">&larr; Module Overview</a><div class="page-nav-info">Module 06 &middot; Lesson</div><a href="lab.html" class="btn btn-primary">Lab: EXIF Analysis &rarr;</a></div>
+</main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>

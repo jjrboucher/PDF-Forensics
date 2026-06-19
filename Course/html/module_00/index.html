@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Setup & Orientation &mdash; PDF Forensics Course</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+</head>
+<body data-mod="mod00" data-page="index">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="../reference/index.html">Reference</a><a href="../license/index.html">License</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item active" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<div class="sidebar-sub">
+<a href="index.html">Overview</a>
+<a href="lab.html">Lab: Environment Setup</a>
+</div>
+<a href="../module_01/index.html" class="sidebar-item" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<a href="../module_04/index.html" class="sidebar-item" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<a href="../module_05/index.html" class="sidebar-item" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<a href="../module_06/index.html" class="sidebar-item" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+</div>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><span>Module 00</span></div>
+<div class="page-header"><div class="module-badge">Module 00</div><h1>Setup &amp; Orientation</h1><p class="subtitle">Install your toolset, verify your environment, and establish your baseline workflow before beginning PDF analysis.</p><div class="header-meta"><span class="header-meta-item"><span class="icon">&#x23F1;</span> 20 minutes</span><span class="header-meta-item"><span class="icon">&#x1F9EA;</span> 1 Lab Exercise</span></div></div><h2 class="section-title"><span class="icon">&#x1F3AF;</span> Learning Objectives</h2><ol><li>Install and verify all required tools on Windows and Linux</li><li>Hash a PDF file and record the value correctly for case documentation</li><li>Navigate to a PDF file from the command line and perform basic inspection</li><li>Launch the PDF Forensics Application and load a case folder</li></ol><h2 class="section-title"><span class="icon">&#x1F6E0;</span> Required Tools</h2><div class="table-wrap"><table><thead><tr><th>Tool</th><th>Purpose</th><th>Install</th></tr></thead><tbody><tr><td><strong>Python 3.10+</strong></td><td>Runtime for peepdf and PDF scripts</td><td><code>python.org/downloads</code> or <code>apt install python3</code></td></tr><tr><td><strong>peepdf</strong></td><td>Interactive PDF object inspector</td><td><code>pip install peepdf-3</code></td></tr><tr><td><strong>qpdf</strong></td><td>Stream extraction, object inspection</td><td><code>qpdf.sourceforge.io</code> or <code>apt install qpdf</code></td></tr><tr><td><strong>mutool</strong></td><td>Image extraction, object display</td><td>Build from source via Visual Studio (Windows &mdash; see Lab Step 1) or <code>apt install mupdf-tools</code> (Linux)</td></tr><tr><td><strong>ExifTool</strong></td><td>EXIF/GPS metadata extraction</td><td><code>exiftool.org</code> (Windows: rename downloaded file &mdash; see Lab Step 1) or <code>apt install libimage-exiftool-perl</code> (Linux)</td></tr><tr><td><strong>Hex editor</strong></td><td>Raw byte inspection</td><td>HxD (Windows) or xxd (Linux)</td></tr></tbody></table></div><div class="callout callout-info"><div class="callout-icon">&#x2139;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Note on peepdf</div><p>This course uses <strong>peepdf</strong>, the Python 3 port of the original peepdf tool. The correct install command is <code>pip install peepdf-3</code> (with a hyphen). Launch with: <code>peepdf &lt;file.pdf&gt;</code> or <code>peepdf -i &lt;file.pdf&gt;</code>.</p></div></div><div class="callout callout-warning"><div class="callout-icon">&#x26A0;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Windows Users &mdash; PATH Configuration Required</div><p>None of qpdf, mutool, or ExifTool are usable from a Windows terminal until their install locations are added to your system PATH environment variable. This is not optional &mdash; every command in this course assumes these tools resolve by name (<code>qpdf</code>, <code>mutool</code>, <code>exiftool</code>) from any folder. The full step-by-step PATH setup for each tool, including building mutool from source, is covered in <strong>Step 1 of the lab</strong> below. Complete that setup before attempting Step 3 (tool verification).</p><p>If you prefer not to configure PATH manually, <strong>Windows Subsystem for Linux (WSL)</strong> is an alternative: all tools install with a single <code>sudo apt install</code> command and PATH is configured automatically. This requires basic familiarity with the Linux command line.</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Forensic Workflow Principle</h2><ol><li><strong>Hash first.</strong> Record SHA-256 and MD5 of every source file before analysis.</li><li><strong>Work on copies.</strong> Never analyse the original exhibit directly.</li><li><strong>Document every command.</strong> Record exact commands, tool version, and output.</li><li><strong>Record tool versions.</strong> Examiners must be able to reproduce findings.</li></ol><div class="page-nav"><span></span><div class="page-nav-info">Module 00 of 7</div><a href="lab.html" class="btn btn-primary">Lab: Environment Setup &rarr;</a></div>
+</main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lab: EXIF Analysis &mdash; PDF Forensics Course</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+</head>
+<body data-mod="mod06" data-page="lab">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="../reference/index.html">Reference</a><a href="../license/index.html">License</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<a href="../module_01/index.html" class="sidebar-item" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<a href="../module_04/index.html" class="sidebar-item" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<a href="../module_05/index.html" class="sidebar-item" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<a href="../module_06/index.html" class="sidebar-item active" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<div class="sidebar-sub">
+<a href="index.html">Overview</a>
+<a href="lesson_exif.html">Lesson: EXIF &amp; GPS</a>
+<a href="lab.html">Lab: EXIF Analysis</a>
+<a href="quiz.html">Knowledge Check</a>
+</div>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+</div>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><a href="index.html">Module 06</a><span class="sep">&#x203A;</span><span>Lab</span></div><div class="page-header"><div class="module-badge">Module 06 &middot; Lab</div><h1>Lab: Camera Provenance &amp; GPS Analysis</h1><p class="subtitle">Extract and interpret EXIF metadata from three embedded images, then locate and read the reviewer annotations left in the document.</p></div><div class="lab-file-panel"><div class="lab-file-icon">&#x1F4C4;</div><div class="lab-file-info"><div class="lab-file-title">lab06_exif_comments.pdf</div><div class="lab-file-sub">Lab file for this module</div><div class="lab-file-meta"><span class="lab-file-meta-item"><span class="key">MD5</span><span class="val">4430ead9f72e5d2fbfe1d80b6b3b1aa9</span></span><span class="lab-file-meta-item"><span class="key">Pages</span><span class="val">3 pages</span></span></div><div style="margin-bottom:12px"><span class="badge badge-high" style="margin:2px">GPS</span><span class="badge badge-high" style="margin:2px">Mixed Camera</span><span class="badge badge-high" style="margin:2px">Annotations</span></div><div class="lab-file-actions"><a href="../sample_pdfs/lab06_exif_comments.pdf" download class="btn btn-primary btn-sm">&#x2B07; Download Lab File</a><button onclick="navigator.clipboard.writeText(&#39;4430ead9f72e5d2fbfe1d80b6b3b1aa9&#39;)" class="btn btn-secondary btn-sm">&#x1F4CB; Copy MD5</button></div></div></div><div class="callout callout-forensic"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">Scenario</div><p>You have received a three-page site inspection report. The submitting party claims all photographs were captured at the <strong>company's London office</strong> using the <strong>office Canon scanner</strong> on <strong>10&ndash;15 November 2025</strong>. Your task is to verify or refute this claim using EXIF metadata analysis.</p></div></div><div class="callout callout-info"><div class="callout-icon">&#x2139;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Before You Begin</div><p>Open a terminal in the folder containing <code>lab06_exif_comments.pdf</code>. You will first extract images to separate files, then run ExifTool on each. Prepare a table in your notes with columns: Image filename | Page | Make | Model | DateTimeOriginal | GPS present? | GPS location | Anomaly?</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 1 &mdash; Extract Images and Run ExifTool</h2><p>Use mutool to extract all embedded images, then run ExifTool on all three to capture their EXIF metadata. Save the output to a file so you can review it carefully.</p><div class="tool-tabs" data-tabgroup="m06ex1"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; extract images and capture EXIF</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Extract all embedded images
+mutool extract lab06_exif_comments.pdf
+# mutool creates files like img-0001.jpg, img-0002.jpg, img-0003.jpg
+# List the extracted files:
+Get-ChildItem img-*.jpg | Select-Object Name, Length
+
+# Step 2: Run ExifTool on all images and save to a report
+exiftool img-0001.jpg img-0002.jpg img-0003.jpg > lab06_exif_report.txt
+notepad lab06_exif_report.txt
+
+# For each image, find and record these fields:
+# File Name        <- which image file
+# Make             <- camera/scanner manufacturer
+# Camera Model Name OR Model <- specific device
+# Date/Time Original <- when the image was captured
+# GPS Latitude     <- if present, the capture location
+# GPS Longitude    <- if present, the capture location
+
+# Quick scan for just the key fields:
+exiftool -FileName -Make -Model -DateTimeOriginal -GPSLatitude -GPSLongitude img-*.jpg</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; extract images and capture EXIF</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Extract images
+mutool extract lab06_exif_comments.pdf
+ls -lh img-*.jpg
+
+# Step 2: ExifTool on all images
+exiftool img-*.jpg > lab06_exif_report.txt
+cat lab06_exif_report.txt
+
+# Quick scan for key fields only:
+exiftool -FileName -Make -Model -DateTimeOriginal -GPSLatitude -GPSLongitude img-*.jpg</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li>For each image: <strong>Make</strong> (manufacturer) and <strong>Model</strong> (device name)</li><li>For each image: <strong>DateTimeOriginal</strong> &mdash; when it was actually captured</li><li>For each image: <strong>GPS present?</strong> (yes/no)</li><li>Which image(s) have a Make/Model inconsistent with a Canon scanner?</li><li>Which image has GPS data embedded?</li></ul></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 2 &mdash; Complete the EXIF Comparison Table</h2><p>Fill in your findings for each image. Assess each row: does the Make/Model match a Canon office scanner? If not, what type of device is it? Is the GPS location consistent with the claimed London office origin?</p><div class="table-wrap"><table><thead><tr><th>Image</th><th>Page</th><th>Make</th><th>Model</th><th>DateTimeOriginal</th><th>GPS?</th><th>Anomaly?</th></tr></thead><tbody><tr><td>img-0001.jpg</td><td>1</td><td><em>your finding</em></td><td><em>your finding</em></td><td></td><td></td><td></td></tr><tr><td>img-0002.jpg</td><td>2</td><td><em>your finding</em></td><td><em>your finding</em></td><td></td><td></td><td></td></tr><tr><td>img-0003.jpg</td><td>3</td><td><em>your finding</em></td><td><em>your finding</em></td><td></td><td></td><td></td></tr></tbody></table></div><div class="callout callout-info"><div class="callout-icon">&#x2139;&#xFE0F;</div><div class="callout-body"><div class="callout-title">How to identify device types from Make/Model</div><p><strong>Canon imageRUNNER</strong> &mdash; office scanner. Consistent with the claim.<br><strong>SAMSUNG SM-GXXXXX</strong> &mdash; Samsung Galaxy smartphone. Not a scanner.<br><strong>FUJIFILM X-T5</strong> &mdash; mirrorless digital camera. Not a scanner.<br><br>Any device other than a scanner in a supposedly scanned document is an anomaly requiring explanation. Multiple different devices across pages of the same scan is a further anomaly &mdash; a single scan run would produce uniform EXIF across all pages.</p></div></div><button class="reveal-answer-btn" style="padding:8px 16px;background:var(--blue);color:white;border:none;border-radius:var(--radius);cursor:pointer;margin-top:8px">&#x1F441; Reveal EXIF Answer Table</button><div style="display:none;margin-top:12px"><div class="table-wrap"><table><thead><tr><th>Image</th><th>Make</th><th>Model</th><th>DateTimeOriginal</th><th>GPS</th><th>Forensic Note</th></tr></thead><tbody><tr><td>img-0001.jpg</td><td>Canon</td><td>imageRUNNER 2630</td><td>2025:11:10 14:22:35</td><td>None</td><td>Consistent with office scanner. No GPS.</td></tr><tr><td>img-0002.jpg</td><td>SAMSUNG</td><td>SM-G991B</td><td>2025:11:12 09:14:07</td><td>48.8566&deg;N 2.3522&deg;E</td><td>ANOMALY: Smartphone, not scanner. GPS coordinates are Paris, France.</td></tr><tr><td>img-0003.jpg</td><td>FUJIFILM</td><td>X-T5</td><td>2025:11:15 16:45:22</td><td>None</td><td>ANOMALY: Mirrorless camera, not scanner. Different device from page 1.</td></tr></tbody></table></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 3 &mdash; Decode the GPS Coordinates from img-0002.jpg</h2><p>ExifTool reported GPS latitude and longitude for img-0002.jpg in degrees/minutes/seconds format. Convert to decimal degrees and look up the location. This is the command and calculation you will use whenever GPS data is present in an exhibit.</p><div class="tool-tabs" data-tabgroup="m06ex3"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; decode GPS to decimal degrees</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Get GPS coordinates in decimal degrees directly:
+exiftool -csv -GPSLatitude# -GPSLongitude# img-0002.jpg
+# The # suffix forces numeric (decimal) output.
+# Record the two numbers shown.
+
+# Look up the coordinates:
+# Open in your browser:
+# https://maps.google.com?q=LAT,LON
+# (Replace LAT and LON with your decimal degree values)
+
+# If the output shows values like 48.8566 and 2.3522:
+# Navigate to: https://maps.google.com?q=48.8566,2.3522
+# Record: what city/location does this resolve to?
+# Is this consistent with the claimed London office origin?</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; decode GPS to decimal degrees</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Get decimal degree GPS coordinates:
+exiftool -csv -GPSLatitude# -GPSLongitude# img-0002.jpg
+# Record the latitude and longitude values
+
+# Look up the location:
+# xdg-open "https://maps.google.com?q=\$(exiftool -GPSLatitude# -n img-0002.jpg | awk '{print $4}'),\$(exiftool -GPSLongitude# -n img-0002.jpg | awk '{print $4}')"
+# Or manually navigate to the URL with your recorded values</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>GPS Latitude (decimal)</strong>: _____</li><li><strong>GPS Longitude (decimal)</strong>: _____</li><li><strong>Location resolved to</strong>: _____ (city, country) &mdash; answers Q2</li><li><strong>Consistent with claimed London origin?</strong> Yes / No</li></ul></div></div><div class="callout callout-danger"><div class="callout-icon">&#x1F6A8;</div><div class="callout-body"><div class="callout-title">Key Finding</div><p>GPS coordinates 48.8566&deg;N, 2.3522&deg;E resolve to <strong>Paris, France</strong> &mdash; not London, UK. The document claims all photographs were taken at the London office. The GPS evidence in img-0002.jpg directly contradicts this claim. Additionally, the device is a Samsung Galaxy smartphone, not the claimed Canon office scanner.</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Exercise 4 &mdash; Extract and Read the Reviewer Annotations</h2><p>The document contains annotations left by reviewers. Each annotation stores the author's name (as set in their PDF editor) and a creation timestamp. Read all three annotations and note what each reviewer observed &mdash; the annotation /T field answers Q4 in the knowledge check.</p><div class="tool-tabs" data-tabgroup="m06ex4"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; find and read all annotations</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>peepdf -i lab06_exif_comments.pdf
+
+# Check each page for annotations:
+pdf> page 1
+# Look for /Annots [N 0 R ...] in the page dictionary output
+# Note all annotation object numbers
+
+pdf> page 2
+# Note annotation object numbers
+
+pdf> page 3
+# Note annotation object numbers
+
+# Read each annotation object:
+pdf> object ANNOT_OBJ_NUM
+# For each annotation, record:
+#   /Subtype     <- annotation type (/Text, /Highlight, /FreeText)
+#   /T           <- author name (from PDF editor user preferences -- NOT verified)
+#   /Contents    <- the annotation comment text
+#   /CreationDate <- when it was added
+pdf> exit</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; find and read all annotations</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>peepdf -i lab06_exif_comments.pdf
+pdf> page 1
+# Note /Annots object numbers
+pdf> page 2
+pdf> page 3
+# Read each:
+pdf> object ANNOT_OBJ_NUM
+# Record: /Subtype, /T (author), /Contents, /CreationDate
+pdf> exit</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li>For each annotation: <strong>/Subtype</strong>, <strong>/T (author name)</strong>, <strong>/Contents (comment text)</strong>, <strong>/CreationDate</strong></li><li><strong>/T field note</strong>: this value reflects the name set in the reviewer's PDF editor preferences &mdash; it is NOT cryptographically verified and can be any string (answers Q4)</li><li>Do any annotation comments corroborate the EXIF anomalies you found?</li></ul></div></div><button class="reveal-answer-btn" style="padding:8px 16px;background:var(--blue);color:white;border:none;border-radius:var(--radius);cursor:pointer;margin-top:8px">&#x1F441; Reveal Annotation Details</button><div style="display:none;margin-top:12px"><div class="table-wrap"><table><thead><tr><th>Page</th><th>Type</th><th>Author (/T)</th><th>Comment (excerpt)</th><th>Created</th></tr></thead><tbody><tr><td>1</td><td>/Text</td><td>D. Chen</td><td>This scan looks authentic — Canon scanner EXIF matches office equipment log....</td><td>D:20251112093000+00'00'</td></tr><tr><td>2</td><td>/Highlight</td><td>M. Patel (QA)</td><td>CHECK: Samsung smartphone GPS shows Paris -- document claims London origin...</td><td>D:20251115104500+00'00'</td></tr><tr><td>3</td><td>/FreeText</td><td>M. Patel (QA)</td><td>INCONSISTENT: Fujifilm camera EXIF on a supposedly scanned document. Requires ex...</td><td>D:20251115110000+00'00'</td></tr></tbody></table></div></div><h2 class="section-title"><span class="icon">&#x1F4DD;</span> Knowledge Check Preparation</h2><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q1: EXIF Make='SAMSUNG', Model='SM-G991B'. Document claims all images are scanned. What is the significance?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">The Samsung SM-G991B is a Galaxy S21 smartphone &mdash; not a scanner. EXIF Make and Model fields identify the physical device that captured the image. A smartphone-originated image in a document where all images are claimed to be scanner output is a significant anomaly. The device discrepancy contradicts the claimed capture workflow.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q2: ExifTool shows GPSLatitude: 25.2048, GPSLongitude: 55.2708. Document claims London. What should you do?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">25.2&deg;N, 55.3&deg;E is <strong>Dubai, UAE</strong> &mdash; not London, UK. Document the specific GPS values, look up the location independently (maps.google.com?q=25.2048,55.2708), note the discrepancy with the stated provenance, and seek corroborating evidence. Note: GPS data can be edited, so this finding requires corroboration but is significant evidence.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q3: Which ExifTool command extracts GPS coordinates in decimal degree format from all JPEGs?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem"><code>exiftool -csv -GPSLatitude# -GPSLongitude# img-*.jpg</code> &mdash; the # suffix forces numeric (decimal degree) output instead of the default degrees/minutes/seconds format. The -csv flag formats the output as comma-separated values that can be pasted directly into a mapping service or spreadsheet.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q4: Annotation has /T (D. Chen). What does /T represent and how reliable is it?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">The /T field is the annotation's author or title field. It is set to whatever name is configured in the annotating user's PDF editor preferences at the time the annotation was created &mdash; typically the OS username or a user-entered name. It has <strong>no cryptographic verification</strong> and can be set to any string. Use it as an investigative lead, not as definitive proof of authorship.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q5: When using mutool extract, where are files saved?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">To the <strong>current working directory</strong> &mdash; wherever your terminal session is located when you run the command. Navigate to your intended output folder before running <code>mutool extract</code>, or the files will appear in whatever directory you are currently in.</div></div><div class="page-nav"><a href="lesson_exif.html" class="btn btn-secondary">&larr; Lesson</a><div class="page-nav-info">Module 06 &middot; Lab</div><a href="quiz.html" class="btn btn-primary">Knowledge Check &rarr;</a></div></main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>

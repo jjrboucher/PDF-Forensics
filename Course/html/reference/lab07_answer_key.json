@@ -1,0 +1,78 @@
+{
+  "lab": "07",
+  "title": "Capstone \u2014 Service Agreement SA-2025-0847",
+  "file": "lab07_capstone.pdf",
+  "md5": "f6a8282914f633ee465866c47e1229ad",
+  "pages": 5,
+  "scenario": "A service agreement purportedly worth $240,000 has been manipulated on multiple pages. The candidate must identify all manipulation artifacts without guidance.",
+  "all_findings": [
+    {
+      "id": "CAP-01",
+      "page": 1,
+      "type": "Metadata \u2014 Creator/XMP mismatch",
+      "info_creator": "Microsoft Word 2021",
+      "xmp_creator": "LibreOffice Writer 7.6",
+      "xmp_producer": "LibreOffice 7.6",
+      "significance": "Document claims MS Word origin but XMP reveals LibreOffice. Info dict was edited after creation."
+    },
+    {
+      "id": "CAP-02",
+      "page": 2,
+      "type": "TEXT_OVERLAY \u2014 FreeText annotation",
+      "covered_text": "1 November 2025",
+      "replacement_text": "1 February 2026",
+      "annotation_rect": "[290, 648, 430, 666]",
+      "created": "D:20251102144500+00'00'  (3 weeks after contract date)",
+      "significance": "Payment start date changed from Nov 2025 to Feb 2026 via annotation, three weeks after the contract was executed."
+    },
+    {
+      "id": "CAP-03",
+      "page": 3,
+      "type": "BBOX_CROP",
+      "form_bbox": "[0, 0, 250, 175]",
+      "image_display": "500x350 pts",
+      "cropped_content": "Right half of 'ANNEX A - ORIGINAL PAYMENT SCHEDULE: $45,000'",
+      "image_md5": "4e22a3940d42f10bc58dd472ec5e676d"
+    },
+    {
+      "id": "CAP-04",
+      "page": 4,
+      "type": "TEXT_OVERLAY \u2014 white-box",
+      "original_value": "$240,000",
+      "replacement_value": "$180,000",
+      "white_rect": "290 668 70 14 re  (x y w h)",
+      "significance": "$60,000 reduction in professional services fee via content-stream white box."
+    },
+    {
+      "id": "CAP-05",
+      "page": 5,
+      "type": "EXIF GPS anomaly",
+      "claimed_location": "London, UK",
+      "gps_coordinates": "25.2048\u00b0N, 55.2708\u00b0E",
+      "gps_location": "Dubai, UAE",
+      "make_model": "Apple iPhone 15 Pro",
+      "exif_datetime": "2025:10:28 11:33:12",
+      "significance": "Photograph claimed to be from London signing ceremony. EXIF GPS reveals Dubai. Capture date (Oct 28) is 13 days after stated contract date (Oct 15).",
+      "image_md5": "f6f06a911c5aa3ca0735a48b7631ec4b"
+    }
+  ],
+  "answer_summary": "Five distinct manipulation artifacts across five pages. A complete forensic analysis should report CAP-01 through CAP-05 with supporting evidence from peepdf3/qpdf/mutool and the PDF Forensics application.",
+  "exercises": [
+    {
+      "q": "List all manipulation findings in this document by type and page.",
+      "a": "CAP-01 (p1): Metadata mismatch; CAP-02 (p2): FreeText annotation overlay; CAP-03 (p3): BBOX_CROP; CAP-04 (p4): White-box text overlay; CAP-05 (p5): EXIF GPS anomaly"
+    },
+    {
+      "q": "What is the net financial impact of the manipulations you can identify?",
+      "a": "Page 4: $240,000 \u2192 $180,000 (fee reduced by $60,000). Page 3: Annex A crops out original $45,000 payment schedule amount. Page 2: First payment delayed from Nov 2025 to Feb 2026."
+    },
+    {
+      "q": "The photograph on page 5 is claimed to show a London signing ceremony. What evidence contradicts this?",
+      "a": "EXIF GPS = Dubai (25.2\u00b0N, 55.3\u00b0E). EXIF DateTime = Oct 28, not Oct 15. Device = iPhone 15 Pro, not a document scanner."
+    },
+    {
+      "q": "How would you present CAP-02 (page 2 annotation) in a court exhibit?",
+      "a": "Produce: (1) Screenshot of page 2 in normal view showing altered date; (2) annotation object dump from peepdf3 showing /Rect, /Contents, /CreationDate; (3) screenshot of the Visual Overlay Report before/after toggle; (4) extracted version 1 of the PDF showing the original date."
+    }
+  ]
+}

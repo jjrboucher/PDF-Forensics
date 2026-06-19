@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson: PDF Structure &mdash; PDF Forensics Course</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+</head>
+<body data-mod="mod01" data-page="lesson_structure">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="../reference/index.html">Reference</a><a href="../license/index.html">License</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<a href="../module_01/index.html" class="sidebar-item active" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<div class="sidebar-sub">
+<a href="index.html">Overview</a>
+<a href="lesson_structure.html">Lesson: PDF Structure</a>
+<a href="lab.html">Lab: Navigating Objects</a>
+<a href="quiz.html">Knowledge Check</a>
+</div>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<a href="../module_04/index.html" class="sidebar-item" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<a href="../module_05/index.html" class="sidebar-item" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<a href="../module_06/index.html" class="sidebar-item" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+</div>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><a href="index.html">Module 01</a><span class="sep">&#x203A;</span><span>Lesson</span></div>
+<div class="page-header"><div class="module-badge">Module 01 &middot; Lesson</div>
+<h1>The PDF File Structure</h1>
+<p class="subtitle">A technically precise walkthrough of how a PDF is organised &mdash; from the first byte to the last %%EOF. Each concept here is something you will navigate directly during the lab.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SECTION 1 — THE FOUR SECTIONS
+══════════════════════════════════════════════════════ -->
+<h2 class="section-title" id="s-header"><span class="icon">&#x1F4CC;</span> 1. The Four Sections</h2>
+<p>Every PDF file &mdash; regardless of how it was created &mdash; follows the same four-section structure defined in <strong>ISO 32000-2:2020, &sect;7.5</strong>. Understanding this structure is what lets you navigate to any object in any PDF, with or without specialist software.</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Section</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td><strong>1</strong></td><td><strong>Header</strong></td><td>First two lines of the file. Declares the PDF version and signals that the file contains binary data.</td></tr>
+<tr><td><strong>2</strong></td><td><strong>Body</strong></td><td>The bulk of the file. Contains all <em>indirect objects</em>: the document catalog, pages, fonts, images, and content streams.</td></tr>
+<tr><td><strong>3</strong></td><td><strong>Cross-Reference Table</strong> (<code>xref</code>)</td><td>A fixed-width lookup table mapping every object number to its exact byte offset in the body. Enables random access: a reader can jump directly to object 47 without scanning the whole file.</td></tr>
+<tr><td><strong>4</strong></td><td><strong>Trailer</strong></td><td>Identifies the document root (<code>/Root</code>) and metadata object (<code>/Info</code>), records the xref byte offset (<code>startxref</code>), and ends with <code>%%EOF</code>.</td></tr>
+</tbody></table></div>
+
+<p>The annotated layout below shows how these four sections appear in a real file. The byte offsets on the left are what you will see in a hex editor:</p>
+
+<div class="struct-diagram">
+<span class="struct-offset">Byte 0</span>  <span class="struct-keyword">%PDF-1.7</span>                          <span class="struct-comment">&larr; HEADER: version declaration</span>
+<span class="struct-offset">Byte 9</span>  <span class="struct-comment">%&#xE2;&#xE3;&#xCF;&#xD3;</span>                              <span class="struct-comment">&larr; HEADER: four high-bit bytes = binary file marker</span>
+
+<span class="struct-offset">Byte 19</span> <span class="struct-highlight">BODY</span> <span class="struct-comment">&larr; indirect objects begin here</span>
+<span class="struct-offset">Byte 19</span> <span class="struct-value">1 0 obj</span>  <span class="struct-comment">&larr; object 1 (the Catalog)</span>
+<span class="struct-offset">...</span>     <span class="struct-value">5 0 obj</span>  <span class="struct-comment">&larr; object 5 (a content stream)</span>
+<span class="struct-offset">...</span>     <span class="struct-comment">... more objects ...</span>
+
+<span class="struct-offset">Byte 809</span> <span class="struct-keyword">xref</span>                               <span class="struct-comment">&larr; CROSS-REFERENCE TABLE begins</span>
+<span class="struct-offset"></span>        <span class="struct-value">0 9</span>                              <span class="struct-comment">&larr; 9 entries, starting at object 0</span>
+<span class="struct-offset"></span>        <span class="struct-value">0000000000 65535 f</span>               <span class="struct-comment">&larr; object 0: free (always present)</span>
+<span class="struct-offset"></span>        <span class="struct-value">0000000019 00000 n</span>               <span class="struct-comment">&larr; object 1 lives at byte offset 19</span>
+<span class="struct-offset"></span>        <span class="struct-value">0000000058 00000 n</span>               <span class="struct-comment">&larr; object 2 lives at byte offset 58</span>
+<span class="struct-offset"></span>        <span class="struct-comment">... one 20-byte entry per object ...</span>
+
+<span class="struct-offset">Byte 989</span> <span class="struct-keyword">trailer</span>                            <span class="struct-comment">&larr; TRAILER begins</span>
+<span class="struct-offset"></span>        <span class="struct-value">&lt;&lt; /Size 9 /Root 1 0 R /Info 2 0 R &gt;&gt;</span>
+<span class="struct-offset"></span>        <span class="struct-keyword">startxref</span>
+<span class="struct-offset"></span>        <span class="struct-value">809</span>                              <span class="struct-comment">&larr; byte offset of the xref table above</span>
+<span class="struct-offset"></span>        <span class="struct-keyword">%%EOF</span>
+</div>
+
+<div class="callout callout-info"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">What This Looks Like in a Hex Editor</div>
+<p>Open any lab PDF in HxD (Windows) or <code>xxd lab01_structure.pdf | head -5</code> (Linux). The very first bytes will be <code>25 50 44 46 2D</code> &mdash; ASCII for <code>%PDF-</code>. Scroll to the end and you will see <code>73 74 61 72 74 78 72 65 66</code> (<code>startxref</code>) followed by the xref offset as a plain decimal number, then <code>25 25 45 4F 46</code> (<code>%%EOF</code>). The xref offset tells you exactly where to jump to find the cross-reference table.</p>
+</div></div>
+
+<div class="callout callout-forensic"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">Viewing the Structure with Course Tools</div>
+<p><strong>peepdf:</strong> <code>peepdf -i lab01_structure.pdf</code> then <code>pdf&gt; info</code> shows the PDF version, object count, and whether the file is encrypted or linearised. <code>pdf&gt; tree</code> shows the full object hierarchy from Catalog down to Page.<br><br>
+<strong>qpdf:</strong> <code>qpdf --json lab01_structure.pdf</code> emits a JSON representation of the entire file structure including the trailer dictionary values (<code>/Root</code>, <code>/Info</code>, <code>/Size</code>). Pipe through <code>python3 -m json.tool</code> for readable output.</p>
+</div></div>
+
+<!-- ═══════════════════════════════════════════════════
+     SECTION 2 — INDIRECT OBJECTS
+══════════════════════════════════════════════════════ -->
+<h2 class="section-title" id="s-objects"><span class="icon">&#x1F4E6;</span> 2. Indirect Objects</h2>
+
+<p>In the layout above, the Body section says it contains <em>indirect objects</em>. Every significant piece of data in a PDF &mdash; every page, every image, every font, every metadata record &mdash; is stored as one. Understanding indirect objects is the single most important concept for navigating a PDF forensically.</p>
+
+<h3 class="subsection-title">What an indirect object is</h3>
+<p>An indirect object is a self-contained data block with a unique numeric identity. That identity is two numbers: an <strong>object number</strong> (unique ID) and a <strong>generation number</strong> (almost always <code>0</code> in modern files &mdash; it only increments when an object is deleted and reused). The xref table maps that identity to a byte offset so any reader &mdash; or examiner &mdash; can jump directly to it.</p>
+<p>The reason PDF uses indirect objects rather than inline data is <strong>random access</strong>: a 500-page document does not need to be read from page 1 to reach page 347. The reader looks up object 347 in the xref table, seeks to that byte offset, and reads the page directly. Forensically, this also means you can jump to any suspicious object the moment you know its number.</p>
+
+<h3 class="subsection-title">What an indirect object looks like in the raw file</h3>
+<p>Every indirect object has the same wrapper syntax, regardless of what it contains:</p>
+
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">PDF Syntax &mdash; Indirect Object Wrapper</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code><span class="nm">N G</span> <span class="kw">obj</span>
+  <span class="cm">&lt;&lt; ... object content ... &gt;&gt;</span>
+<span class="kw">endobj</span></code></pre></div>
+
+<p>A realistic example &mdash; object 2, the document Info dictionary, which holds the metadata you will analyse in Module 02:</p>
+
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">Real Indirect Object &mdash; Info Dictionary (object 2)</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code><span class="nm">2 0</span> <span class="kw">obj</span>
+&lt;&lt; /<span class="op">Creator</span>   (<span class="st">Microsoft Word 2019</span>)
+   /<span class="op">Producer</span>  (<span class="st">Microsoft Word 2019</span>)
+   /<span class="op">CreationDate</span> (<span class="st">D:20250301120000+00'00'</span>)
+   /<span class="op">ModDate</span>   (<span class="st">D:20250301120000+00'00'</span>)
+&gt;&gt;
+<span class="kw">endobj</span></code></pre></div>
+
+<p>To <strong>reference</strong> this object from elsewhere in the file, you write <code>2 0 R</code> &mdash; the object number, the generation number, and the letter R. For example, the trailer says <code>/Info 2 0 R</code>, meaning "the Info dictionary is object 2."</p>
+
+<h3 class="subsection-title">Reading dictionary keys: /Type, /Catalog, /Pages, and indirect references</h3>
+<p>When you run <code>pdf&gt; object 1</code> in peepdf on a typical PDF, the output looks like this:</p>
+
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">peepdf output &mdash; Object 1 (the Document Catalog)</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code>&lt;&lt; /<span class="op">Type</span>  /<span class="hi">Catalog</span>
+   /<span class="op">Pages</span> <span class="nm">3 0 R</span>
+&gt;&gt;</code></pre></div>
+
+<p>Every key in this dictionary is a <strong>Name</strong> (always starting with <code>/</code>). Here is what each one means:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>Key</th><th>Value</th><th>What it means</th></tr></thead>
+<tbody>
+<tr><td><code>/Type</code></td><td><code>/Catalog</code></td>
+<td>Every significant PDF object declares what type it is using the <code>/Type</code> key. <code>/Catalog</code> means this object is the <strong>Document Catalog</strong> &mdash; the single entry point into the document. A PDF reader always starts here. The xref table&rsquo;s trailer says <code>/Root 1 0 R</code>, meaning &ldquo;object 1 is the Catalog.&rdquo;</td></tr>
+<tr><td><code>/Pages</code></td><td><code>3 0 R</code></td>
+<td>An <strong>indirect reference</strong> to object 3. The value <code>3 0 R</code> means &ldquo;go to object number 3, generation 0.&rdquo; Object 3 is the <strong>Pages tree</strong>, which in turn lists every page in the document. The Catalog does not contain the pages directly &mdash; it points to a separate object that does. This indirection is what allows a reader to jump to any page without reading the whole file.</td></tr>
+</tbody></table></div>
+
+<p>Object 3 (the Pages tree) will look something like this:</p>
+
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">peepdf output &mdash; Object 3 (the Pages Tree)</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code>&lt;&lt; /<span class="op">Type</span>  /<span class="hi">Pages</span>
+   /<span class="op">Kids</span>  [<span class="nm">4 0 R</span>]    <span class="cm">% array of references to individual pages</span>
+   /<span class="op">Count</span> <span class="hi">1</span>          <span class="cm">% total number of pages in this document</span>
+&gt;&gt;</code></pre></div>
+
+<p>And following the reference <code>4 0 R</code> to the first actual page:</p>
+
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">peepdf output &mdash; Object 4 (a Page dictionary)</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code>&lt;&lt; /<span class="op">Type</span>      /<span class="hi">Page</span>
+   /<span class="op">Parent</span>    <span class="nm">3 0 R</span>        <span class="cm">% reference back to the Pages tree</span>
+   /<span class="op">MediaBox</span>  [<span class="hi">0 0 612 792</span>] <span class="cm">% page size in points (8.5 x 11 inches)</span>
+   /<span class="op">Contents</span>  <span class="nm">5 0 R</span>        <span class="cm">% reference to the content stream for this page</span>
+   /<span class="op">Resources</span> <span class="nm">6 0 R</span>        <span class="cm">% fonts, images, and other resources used on this page</span>
+&gt;&gt;</code></pre></div>
+
+<p>This chain &mdash; <strong>Catalog &rarr; Pages &rarr; Page &rarr; Contents</strong> &mdash; is the backbone of every PDF. Every forensic investigation follows this chain. The <code>pdf&gt; tree</code> command in peepdf walks it for you automatically and prints the hierarchy.</p>
+
+<div class="callout callout-info"><div class="callout-icon">&#x2139;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Common /Type Values You Will Encounter</div>
+<p>The <code>/Type</code> key is how you identify what an object is. The most important values in forensic work:</p>
+<ul>
+<li><code>/Catalog</code> &mdash; the document root; always object 1 in most PDFs</li>
+<li><code>/Pages</code> &mdash; the page tree node; lists all pages via <code>/Kids</code></li>
+<li><code>/Page</code> &mdash; a single page; has <code>/Contents</code> and <code>/Resources</code></li>
+<li><code>/XObject</code> with <code>/Subtype /Image</code> &mdash; an embedded image</li>
+<li><code>/XObject</code> with <code>/Subtype /Form</code> &mdash; a Form XObject (used in BBOX_CROP)</li>
+<li><code>/Annot</code> &mdash; an annotation (sticky note, FreeText overlay, highlight)</li>
+<li><code>/Font</code> &mdash; an embedded font resource</li>
+</ul>
+<p>When peepdf&rsquo;s <code>pdf&gt; objects</code> command lists all objects, the type column is derived from this <code>/Type</code> key.</p>
+</div></div>
+
+<h3 class="subsection-title">What an indirect object looks like at hex level</h3>
+<p>In a hex editor, jump to the byte offset stored in the xref table for object 2. You will see the ASCII text <code>32 20 30 20 6F 62 6A</code> &mdash; that is <code>2 0 obj</code>. The dictionary content follows immediately, then <code>65 6E 64 6F 62 6A</code> (<code>endobj</code>) marks the end. Everything between those two markers is the object's data.</p>
+
+<div class="callout callout-forensic"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">Viewing Indirect Objects with Course Tools</div>
+<p><strong>peepdf:</strong> <code>pdf&gt; objects</code> lists every object number and its type. <code>pdf&gt; object 2</code> prints the raw content of object 2 exactly as it appears in the file &mdash; no decompression, no interpretation.<br><br>
+<strong>qpdf:</strong> <code>qpdf --show-object=2 lab01_structure.pdf</code> prints the same thing. This is the primary command for independently verifying any finding the forensics application reports &mdash; the <code>obj_locator</code> field in every report gives you the object number to use here.</p>
+</div></div>
+
+<!-- ═══════════════════════════════════════════════════
+     SECTION 3 — STREAMS AND FILTERS
+══════════════════════════════════════════════════════ -->
+<h2 class="section-title" id="s-streams"><span class="icon">&#x1F500;</span> 3. Streams and Filters</h2>
+
+<p>Most indirect objects contain only a dictionary. But some objects &mdash; page content, images, embedded fonts, XMP metadata &mdash; contain a large block of binary data. These are <strong>stream objects</strong>. A stream object is an indirect object whose dictionary is immediately followed by a block of raw bytes:</p>
+
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">PDF Syntax &mdash; Stream Object</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code><span class="nm">5 0</span> <span class="kw">obj</span>
+&lt;&lt; /<span class="op">Length</span> <span class="hi">487</span>
+   /<span class="op">Filter</span> /<span class="hi">FlateDecode</span>
+&gt;&gt;
+<span class="kw">stream</span>
+<span class="cm">... 487 bytes of compressed binary data ...</span>
+<span class="kw">endstream</span>
+<span class="kw">endobj</span></code></pre></div>
+
+<p>The <code>/Length</code> key tells a reader exactly how many bytes to read. The <code>/Filter</code> key names the compression or encoding algorithm applied to those bytes. Without knowing the filter, the binary data is unreadable &mdash; which is why you must <em>decompress</em> a stream before you can inspect its contents.</p>
+
+<h3 class="subsection-title">Why streams are compressed</h3>
+<p>Page content streams contain hundreds of drawing operators per page; image streams contain raw pixel data. Storing these uncompressed would make PDFs many times larger. <code>/FlateDecode</code> (zlib) is by far the most common filter and typically achieves 60&ndash;80% size reduction on text content. Images use JPEG (<code>/DCTDecode</code>) or scanner-specific formats.</p>
+
+<h3 class="subsection-title">What a stream looks like at hex level</h3>
+<p>After the dictionary closing <code>&gt;&gt;</code>, a PDF reader expects the literal bytes <code>73 74 72 65 61 6D 0A</code> (<code>stream
+</code>). What follows is raw compressed binary &mdash; for a FlateDecode stream it will start with <code>78 9C</code> or <code>78 DA</code>, the zlib magic bytes. The stream ends at <code>65 6E 64 73 74 72 65 61 6D</code> (<code>endstream</code>).</p>
+
+<h3 class="subsection-title">Decoding a FlateDecode stream manually &mdash; avoiding the HxD copy error</h3>
+<p>A common mistake is to copy bytes from HxD using <em>Edit &rarr; Copy &rarr; Copy as Hex String</em>, then paste that into an online zlib decompressor. This produces the <strong>"InvalidCharacterError: Failed to execute 'atob' on 'Window': The string to be decoded is not correctly encoded"</strong> error. The reason: online decompressors expect <strong>Base64-encoded</strong> input, not a hex string. HxD gives you hex; the site wants Base64. They are two different ways of representing the same bytes, and you must convert between them.</p>
+
+<div class="callout callout-warning"><div class="callout-icon">&#x26A0;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Why this happens</div>
+<p>A hex string looks like <code>789C CB48CDC9C90700062C0215</code> &mdash; pairs of hex digits, one per byte. Base64 looks like <code>eJzLSM3JyQcABiwCFQ==</code> &mdash; a different encoding of the same bytes using letters, digits, <code>+</code>, and <code>/</code>. The <code>atob()</code> function in browsers only accepts Base64. Pasting a hex string into it causes the error you saw.</p>
+</div></div>
+
+<p>There are two reliable approaches. The first avoids the problem entirely by using the course tools directly. The second shows how to do it manually if you need to.</p>
+
+<div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">Recommended: use qpdf or peepdf &mdash; no manual conversion needed</div>
+<p>Both tools decompress FlateDecode streams for you automatically. You never need to touch HxD for this task:</p>
+</div></div>
+
+<div class="tool-tabs">
+<div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div>
+<div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div>
+</div>
+<div class="tool-panel active">
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; decode a stream without touching HxD</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code># Step 1: find which object number holds the content stream
+#         (from pdf> page 1 in peepdf, or from the /Contents key)
+
+# Step 2: qpdf decodes FlateDecode automatically:
+qpdf --show-object=5 --filtered-stream-data lab01_structure.pdf
+
+# The output is the raw decoded text (PDF operators).
+# Redirect to a file if you want to read it more easily:
+qpdf --show-object=5 --filtered-stream-data lab01_structure.pdf > stream5_decoded.txt
+notepad stream5_decoded.txt
+
+# In peepdf interactive mode:
+# pdf&gt; stream 5
+# (peepdf also decompresses automatically)</code></pre></div>
+</div>
+<div class="tool-panel">
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">Linux / macOS &mdash; decode a stream without touching HxD</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code># qpdf decodes FlateDecode automatically:
+qpdf --show-object=5 --filtered-stream-data lab01_structure.pdf
+
+# Save to file and inspect:
+qpdf --show-object=5 --filtered-stream-data lab01_structure.pdf > stream5_decoded.txt
+cat stream5_decoded.txt
+
+# Or in peepdf:
+# pdf&gt; stream 5</code></pre></div>
+</div>
+
+<p>If you specifically need to use an online tool alongside HxD, <strong>CyberChef</strong> (<a href="https://gchq.github.io/CyberChef/" target="_blank">gchq.github.io/CyberChef</a>) handles this cleanly because it accepts hex input directly &mdash; no Base64 conversion required.</p><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">CyberChef method &mdash; correct four-step procedure</div><ol><li><strong>In HxD:</strong> click inside the hex panel (the left column showing pairs of hex digits). Press <strong>Tab</strong> if needed to make sure the hex column is focused rather than the text column &mdash; you can tell it is focused because the cursor appears as a block in the hex area. Select your stream bytes, then press <strong>Ctrl+C</strong>. HxD copies space-separated hex pairs, e.g. <code>78 9C CB 48 CD C9 ...</code>.<br><em>Note: there is no "Edit &rarr; Copy &rarr; Copy Hex String" option in HxD 2.5. The Ctrl+C method with the hex column focused is the correct approach.</em></li><li><strong>Open CyberChef:</strong> go to <a href="https://gchq.github.io/CyberChef/" target="_blank">gchq.github.io/CyberChef</a> and paste your hex string into the <strong>Input</strong> box.</li><li><strong>Add "From Hex" to the recipe:</strong> in the Operations search box (top-left), type <code>From Hex</code> and drag it into the Recipe panel. This step converts your space-separated hex pairs into raw bytes. Note: there is no input format dropdown in CyberChef &mdash; the conversion is handled via a recipe step.</li><li><strong>Add "Zlib Inflate":</strong> search for <code>Zlib Inflate</code> and drag it into the recipe below "From Hex". The decoded content stream operators appear immediately in the Output panel.</li></ol><div style="margin:16px 0 24px;text-align:center"><img src="../assets/img/cyberchef_recipe.jpg" alt="CyberChef recipe panel showing From Hex (Delimiter: Auto) followed by Zlib Inflate" style="max-width:440px;width:100%;border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)"><p style="font-size:0.8rem;color:var(--text-muted);margin-top:8px;margin-bottom:0">The completed Recipe panel: <strong>From Hex</strong> (Delimiter: Auto) above <strong>Zlib Inflate</strong>.</p></div><p style="margin-top:10px"><strong>Bookmark the recipe:</strong> once you have both steps set up, use the <strong>Save</strong> icon (floppy disk, top-right) &rarr; <strong>Save recipe link</strong> to get a URL you can bookmark and reuse throughout the course without rebuilding it each time. You can also use this direct link which has the recipe pre-loaded: <a href="https://gchq.github.io/CyberChef/#recipe=From_Hex('Space')Zlib_Inflate(0,0,'Deflate',false,false)" target="_blank">CyberChef: From Hex &rarr; Zlib Inflate</a>.</p></div></div><div class="callout callout-warning"><div class="callout-icon">&#x26A0;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Using other online decompressors &mdash; a common pitfall</div><p>If you use an alternative site such as codebeautify.org for this task, be aware that its decompressor input box expects <strong>Base64-encoded</strong> data, not a hex string. Pasting hex directly will produce an error along the lines of <em>"Failed to execute 'atob'"</em>. If you prefer that site, you would first need to convert your hex to Base64 before pasting &mdash; an extra step that CyberChef avoids by letting you add <strong>From Hex</strong> as a recipe step to handle the conversion inline.</p></div></div><p>If you prefer working entirely in Python without any online tool, here is the equivalent procedure:</p>
+
+<div class="callout callout-info"><div class="callout-icon">&#x2139;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Two ways to run the Python below</div><p>The commands below are <strong>shell one-liners</strong> (note the <code>python -c "..."</code> wrapper) meant to be typed directly into PowerShell or a terminal &mdash; not saved as a standalone <code>.py</code> file. If you save and run them as a <code>.py</code> file with <code>python script.py</code>, you will get a <code>SyntaxError: unterminated string literal</code> because <code>python -c "</code> is shell syntax for launching Python, not valid Python code itself.</p><p>If you prefer a standalone script, see the <strong>"Save as a .py file instead"</strong> version further down, which is plain Python with no shell wrapper.</p></div></div><div class="callout callout-warning"><div class="callout-icon">&#x26A0;&#xFE0F;</div><div class="callout-body"><div class="callout-title">The hex string below is a placeholder, not real PDF data</div><p>The value <code>78 9C CB48CDC9C90700062C0215</code> in the examples below is a small, generic zlib-compressed sample used only to demonstrate the code syntax. Running it as-is will correctly print <code>hello</code> &mdash; that confirms your Python, zlib, and binascii setup all work, but it does not come from <code>lab01_structure.pdf</code> or any other lab file.</p><p>To decode a real content stream, replace the <code>hex_str</code> value with the actual bytes you copied from HxD for that object's stream (the section between <code>stream</code> and <code>endstream</code>, starting with the zlib magic bytes <code>78 9C</code> or <code>78 DA</code>). The output will then be the real PDF content stream operators &mdash; <code>BT</code>, <code>Tj</code>, <code>cm</code>, <code>Do</code>, and so on &mdash; rather than the word "hello".</p></div></div><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell / Terminal &mdash; Option A: decompress directly (type this whole block at the prompt)</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Run this AT THE COMMAND PROMPT, not saved as a .py file:
+python -c "
+import zlib, binascii
+hex_str = '78 9C CB48CDC9C90700062C0215'  # <-- PLACEHOLDER: replace with your real bytes from HxD
+raw = binascii.unhexlify(hex_str.replace(' ', ''))
+print(zlib.decompress(raw).decode('latin-1'))
+"</code></pre></div><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell / Terminal &mdash; Option B: convert hex to Base64 for an online tool</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Run this AT THE COMMAND PROMPT, not saved as a .py file:
+python -c "
+import binascii, base64
+hex_str = '78 9C CB48CDC9C90700062C0215'  # <-- PLACEHOLDER: replace with your real bytes from HxD
+raw = binascii.unhexlify(hex_str.replace(' ', ''))
+print(base64.b64encode(raw).decode())
+"
+# Copy the Base64 output and paste THAT into codebeautify.org/zlib-decompress-online</code></pre></div><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Save as a .py file instead (no shell wrapper, run with: python decompress.py)</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>import zlib, binascii
+
+hex_str = '78 9C CB48CDC9C90700062C0215'  # <-- PLACEHOLDER: replace with your real bytes from HxD
+
+raw = binascii.unhexlify(hex_str.replace(' ', ''))
+print(zlib.decompress(raw).decode('latin-1'))</code></pre></div>
+
+<div class="callout callout-info"><div class="callout-icon">&#x2139;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Identifying the stream bytes correctly in HxD</div>
+<p>When selecting stream bytes in HxD, be precise about where the stream data starts and ends:</p>
+<ul>
+<li>The word <code>stream</code> is followed by a newline (<code>0A</code>) or carriage-return+newline (<code>0D 0A</code>). The compressed data starts at the <em>first byte after that newline</em> &mdash; typically <code>78 9C</code> or <code>78 DA</code> for FlateDecode.</li>
+<li>The compressed data ends at the byte immediately <em>before</em> the newline that precedes <code>endstream</code>. Do not include the <code>endstream</code> keyword bytes or any trailing newline in your selection.</li>
+<li>If the first two bytes of your selection are not <code>78 9C</code>, <code>78 DA</code>, or <code>78 01</code>, you have selected the wrong range.</li>
+</ul>
+</div></div>
+
+<h3 class="subsection-title">Filter types you will encounter</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Filter Name</th><th>Algorithm</th><th>Used For</th><th>How to Decode</th></tr></thead>
+<tbody>
+<tr><td><code>/FlateDecode</code></td><td>zlib/DEFLATE</td><td>Page content, XMP metadata, most general streams</td><td><code>qpdf --filtered-stream-data</code> or peepdf <code>pdf&gt; stream N</code></td></tr>
+<tr><td><code>/DCTDecode</code></td><td>JPEG</td><td>Photographic colour images &mdash; lossy</td><td><code>mutool extract</code> saves as .jpg directly</td></tr>
+<tr><td><code>/CCITTFaxDecode</code></td><td>CCITT Group 4</td><td>Scanner bi-tonal (black &amp; white) images</td><td><code>mutool extract</code> saves as .png or .tiff</td></tr>
+<tr><td><code>/JBIG2Decode</code></td><td>JBIG2</td><td>High-compression bi-tonal, modern scanner PDFs</td><td><code>mutool extract</code></td></tr>
+<tr><td><code>/ASCII85Decode</code></td><td>Base-85</td><td>Legacy ASCII encoding of binary data</td><td><code>qpdf --filtered-stream-data</code></td></tr>
+</tbody></table></div>
+
+<div class="callout callout-forensic"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">Decoding Streams with Course Tools</div>
+<p><strong>peepdf:</strong> <code>pdf&gt; stream 5</code> prints the <em>decoded</em> content of stream object 5 (peepdf decompresses automatically). This is how you read a page content stream to look for overlay operators.<br><br>
+<strong>qpdf:</strong> <code>qpdf --show-object=5 --filtered-stream-data lab01_structure.pdf</code> outputs the decoded stream bytes to stdout. Pipe to a file or to <code>grep</code> to search for specific operators. This is the most reliable method for content stream analysis.<br><br>
+<strong>mutool:</strong> <code>mutool extract lab01_structure.pdf</code> decodes and saves every image stream to a file in the current directory &mdash; the fastest way to obtain the raw image data regardless of which filter was used.</p>
+</div></div>
+
+<!-- ═══════════════════════════════════════════════════
+     SECTION 4 — CONTENT STREAM OPERATORS
+══════════════════════════════════════════════════════ -->
+<h2 class="section-title" id="s-content"><span class="icon">&#x270D;&#xFE0F;</span> 4. Content Streams and Operators</h2>
+
+<p>Every page in a PDF has a <code>/Contents</code> key that references a stream object. That stream contains the page's <strong>content stream</strong>: a sequence of operands and operators that describe everything visible on the page &mdash; text, graphics, and image placements. It is essentially a small stack-based programming language.</p>
+
+<p>A decoded content stream for a simple page might look like this:</p>
+
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">Decoded Page Content Stream &mdash; Annotated</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code><span class="kw">q</span>                           <span class="cm">% save graphics state</span>
+  <span class="hi">1 0 0 1 72 720</span> <span class="kw">cm</span>        <span class="cm">% move coordinate origin to (72, 720) pts</span>
+<span class="kw">Q</span>                           <span class="cm">% restore graphics state</span>
+
+<span class="kw">BT</span>                          <span class="cm">% begin text block</span>
+  /<span class="op">F1</span> <span class="hi">12</span> <span class="kw">Tf</span>               <span class="cm">% set font F1 at 12 pt</span>
+  <span class="hi">72 700</span> <span class="kw">Td</span>               <span class="cm">% move text cursor to position (72, 700)</span>
+  (<span class="st">Invoice Total: $8,200</span>) <span class="kw">Tj</span>  <span class="cm">% render the string</span>
+<span class="kw">ET</span>                          <span class="cm">% end text block</span>
+
+<span class="kw">q</span>
+  <span class="hi">200 0 0 150 72 500</span> <span class="kw">cm</span>    <span class="cm">% place image: 200x150 pts at (72,500)</span>
+  /<span class="hi">Im0</span> <span class="kw">Do</span>                  <span class="cm">% invoke image Im0 (draws it)</span>
+<span class="kw">Q</span></code></pre></div>
+
+<p>Reading content streams is the core skill for text overlay detection (Module 05) and image manipulation detection (Module 04). The forensically critical operators are:</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>Operator</th><th>Meaning</th><th>Why It Matters Forensically</th></tr></thead>
+<tbody>
+<tr><td><code>q / Q</code></td><td>Save / restore graphics state</td><td>Defines scope of transformations. Manipulation code is almost always wrapped in a <code>q ... Q</code> block.</td></tr>
+<tr><td><code>cm</code></td><td>Concatenate matrix (CTM)</td><td>Sets position, scale, and rotation of everything that follows. The six numbers in the matrix encode where an image is placed and how large it appears.</td></tr>
+<tr><td><code>Do</code></td><td>Invoke XObject</td><td>Places an image or Form XObject. Every image you see in a PDF got there via a <code>Do</code> call. BBOX_CROP and OFFPAGE findings both come from analysing what <code>Do</code> is placing and where.</td></tr>
+<tr><td><code>BT / ET</code></td><td>Begin / end text block</td><td>All text rendering happens here. Text-over-text overlays are two <code>BT...ET</code> blocks at the same coordinates.</td></tr>
+<tr><td><code>Tj / TJ</code></td><td>Show text string</td><td>The operator that actually renders characters to the page.</td></tr>
+<tr><td><code>1 1 1 rg</code></td><td>Set fill colour to white</td><td>The first step of a white-box overlay. Always followed by <code>re</code> (rectangle) and <code>f</code> (fill) to paint a white rectangle over content.</td></tr>
+<tr><td><code>re / f</code></td><td>Rectangle / fill</td><td>Together with <code>1 1 1 rg</code>, used to paint the concealing white box in Module 05 overlays.</td></tr>
+<tr><td><code>W / W*</code></td><td>Set clipping path</td><td>Restricts rendering to within a path. Used in EXPLICIT_CLIP manipulation to hide image content.</td></tr>
+</tbody></table></div>
+
+<div class="callout callout-forensic"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">Reading a Content Stream with Course Tools</div>
+<p><strong>peepdf:</strong> <code>pdf&gt; page 1</code> shows the resource dictionary for page 1, including the <code>/Contents</code> object number. Then <code>pdf&gt; stream N</code> (where N is that object number) prints the decoded operators.<br><br>
+<strong>qpdf:</strong> First find the <code>/Contents</code> object number from <code>qpdf --show-object=PAGE_OBJ_NUM</code>, then: <code>qpdf --show-object=CONTENTS_OBJ_NUM --filtered-stream-data lab01_structure.pdf</code>. On Linux, pipe to <code>grep -n "1 1 1 rg\|Do\|BT"</code> to quickly scan for forensic indicators. On Windows use <code>findstr</code>.</p>
+</div></div>
+
+<!-- ═══════════════════════════════════════════════════
+     SECTION 5 — XOBJECTS
+══════════════════════════════════════════════════════ -->
+<h2 class="section-title" id="s-xobjects"><span class="icon">&#x1F5BC;&#xFE0F;</span> 5. XObjects &mdash; Images and Forms</h2>
+
+<p>When a content stream executes <code>/Im0 Do</code>, it is calling an <strong>XObject</strong> (External Object) by name. XObjects are reusable graphic resources defined as indirect objects and referenced from a page's resource dictionary. Two types are central to PDF forensics:</p>
+
+<h3 class="subsection-title">Image XObjects</h3>
+<p>An Image XObject is an indirect stream object containing raw or compressed raster pixel data. Its dictionary declares the image dimensions, colour space, and filter. When the content stream executes <code>/Im0 Do</code>, the image is rendered into the current coordinate space established by the preceding <code>cm</code> matrix.</p>
+
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">Image XObject &mdash; Raw PDF Syntax</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code><span class="nm">8 0</span> <span class="kw">obj</span>
+&lt;&lt; /<span class="op">Type</span>             /<span class="hi">XObject</span>
+   /<span class="op">Subtype</span>          /<span class="hi">Image</span>
+   /<span class="op">Width</span>            <span class="hi">400</span>         <span class="cm">% pixel width of the image data</span>
+   /<span class="op">Height</span>           <span class="hi">300</span>         <span class="cm">% pixel height of the image data</span>
+   /<span class="op">ColorSpace</span>       /<span class="hi">DeviceRGB</span>
+   /<span class="op">BitsPerComponent</span> <span class="hi">8</span>
+   /<span class="op">Filter</span>           /<span class="hi">DCTDecode</span>  <span class="cm">% JPEG-compressed</span>
+   /<span class="op">Length</span>           <span class="hi">14782</span>
+&gt;&gt;
+<span class="kw">stream</span>
+<span class="cm">  ... 14782 bytes of JPEG data (starts with FF D8 FF) ...</span>
+<span class="kw">endstream</span>
+<span class="kw">endobj</span></code></pre></div>
+
+<p>The pixel dimensions (<code>/Width</code> and <code>/Height</code>) are the dimensions of the stored data. The size it is <em>displayed</em> at on the page is set by the <code>cm</code> matrix in the content stream &mdash; and those two numbers do not have to match. That discrepancy is the basis of the DPI_ANOMALY finding in Module 04.</p>
+
+<h3 class="subsection-title">Form XObjects</h3>
+<p>A Form XObject is a self-contained mini-page: it has its own content stream, its own resource dictionary, and critically, its own <strong><code>/BBox</code></strong> (bounding box). Only content that falls within the BBox rectangle is rendered when the Form is invoked. Anything outside the BBox is clipped and invisible &mdash; but the data still exists in the file.</p>
+
+<div class="pre-wrap"><div class="pre-header"><span class="pre-label">Form XObject &mdash; Raw PDF Syntax</span><button class="copy-btn">&#x29D7; Copy</button></div>
+<pre><code><span class="nm">7 0</span> <span class="kw">obj</span>
+&lt;&lt; /<span class="op">Type</span>      /<span class="hi">XObject</span>
+   /<span class="op">Subtype</span>   /<span class="hi">Form</span>
+   /<span class="op">BBox</span>      [<span class="hi">0 0 200 150</span>]   <span class="cm">% only this region is rendered</span>
+   /<span class="op">Resources</span> &lt;&lt; /<span class="op">XObject</span> &lt;&lt; /<span class="hi">Im0</span> <span class="nm">8 0 R</span> &gt;&gt; &gt;&gt;
+&gt;&gt;
+<span class="kw">stream</span>
+  <span class="hi">400 0 0 300 0 0</span> <span class="kw">cm</span>   <span class="cm">% place Im0 at 400x300 pts &mdash; LARGER than the BBox</span>
+  /<span class="hi">Im0</span> <span class="kw">Do</span>
+<span class="kw">endstream</span>
+<span class="kw">endobj</span></code></pre></div>
+
+<div class="callout callout-warning"><div class="callout-icon">&#x26A0;&#xFE0F;</div><div class="callout-body"><div class="callout-title">What This Means Visually</div>
+<p>In the example above, object 8 is a 400&times;300 pixel image. The Form places it at 400&times;300 <em>points</em> &mdash; filling the entire Form canvas. But the Form's <code>/BBox</code> is only [0 0 200 150]: the left half and lower half. The right half and upper half of the image extend beyond the BBox and are clipped &mdash; they never appear in any PDF viewer. Open the PDF and you see a 200&times;150 image. Extract the image with <code>mutool extract</code> and you get a 400&times;300 image with content in the portions you never saw.</p>
+</div></div>
+
+<div class="callout callout-danger"><div class="callout-icon">&#x1F6A8;</div><div class="callout-body"><div class="callout-title">This is the BBOX_CROP Artifact &mdash; Covered in Depth in Module 04</div>
+<p>The scenario above is exactly what the <strong>BBOX_CROP</strong> finding detects. This lesson introduces the mechanism so you understand <em>why</em> it works; Module 04 covers how to measure the hidden area, extract the concealed content, and document the finding for court. For now, the key takeaway is: <strong>the BBox clips what is rendered, not what is stored</strong>.</p>
+</div></div>
+
+<div class="callout callout-forensic"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">Viewing XObjects with Course Tools</div>
+<p><strong>peepdf:</strong> <code>pdf&gt; object 8</code> shows the Image XObject dictionary &mdash; you can read <code>/Width</code>, <code>/Height</code>, <code>/Filter</code>, and <code>/ColorSpace</code> directly. <code>pdf&gt; object 7</code> shows the Form XObject dictionary including its <code>/BBox</code>. <code>pdf&gt; stream 7</code> decodes the Form's content stream, revealing the <code>cm</code> matrix and <code>Do</code> call.<br><br>
+<strong>qpdf:</strong> <code>qpdf --show-object=8 lab01_structure.pdf</code> prints the Image XObject dictionary. <code>qpdf --show-object=7 --filtered-stream-data lab01_structure.pdf</code> decodes and prints the Form XObject's content stream, where you can read the exact <code>cm</code> values and compare them to the <code>/BBox</code>.<br><br>
+<strong>mutool:</strong> <code>mutool extract lab01_structure.pdf</code> saves every Image XObject to a file in the current directory, bypassing the BBox entirely &mdash; you get the full pixel data regardless of how much was visible.</p>
+</div></div>
+
+<div class="page-nav"><a href="index.html" class="btn btn-secondary">&larr; Module Overview</a><div class="page-nav-info">Module 01 &middot; Lesson</div><a href="lab.html" class="btn btn-primary">Lab: Navigating Objects &rarr;</a></div>
+</main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>

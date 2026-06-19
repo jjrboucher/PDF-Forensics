@@ -1,0 +1,92 @@
+{
+  "lab": "06",
+  "title": "EXIF, GPS and Document Comments",
+  "file": "lab06_exif_comments.pdf",
+  "md5": "4430ead9f72e5d2fbfe1d80b6b3b1aa9",
+  "pages": 3,
+  "images": [
+    {
+      "page": 1,
+      "label": "Im1",
+      "make": "Canon",
+      "model": "imageRUNNER 2630",
+      "software": "Canon Scanner Driver 3.2",
+      "datetime_original": "2025:11:10 14:22:35",
+      "gps": null,
+      "md5": "cb285bc9dbafd65c463f773eb494a499",
+      "forensic_note": "Consistent with office scanner. No GPS."
+    },
+    {
+      "page": 2,
+      "label": "Im2",
+      "make": "SAMSUNG",
+      "model": "SM-G991B",
+      "software": "Samsung Camera App",
+      "datetime_original": "2025:11:12 09:14:07",
+      "gps": {
+        "lat": 48.8566,
+        "lon": 2.3522,
+        "alt": 35.0,
+        "location": "Paris, France"
+      },
+      "md5": "46261af6ba2c35c5f61a2e70e3a5384e",
+      "forensic_note": "ANOMALY: Smartphone (not scanner). GPS coordinates in Paris, document claims London origin."
+    },
+    {
+      "page": 3,
+      "label": "Im3",
+      "make": "FUJIFILM",
+      "model": "X-T5",
+      "software": "Fujifilm RAW Studio",
+      "datetime_original": "2025:11:15 16:45:22",
+      "gps": null,
+      "md5": "8d79a53a65df97b1866ab1d276b05399",
+      "forensic_note": "ANOMALY: Mirrorless camera. Inconsistent with Canon scanner on page 1."
+    }
+  ],
+  "annotations": [
+    {
+      "page": 1,
+      "subtype": "/Text",
+      "author": "D. Chen",
+      "created": "D:20251112093000+00'00'",
+      "contents": "This scan looks authentic \u2014 Canon scanner EXIF matches office equipment log."
+    },
+    {
+      "page": 2,
+      "subtype": "/Highlight",
+      "author": "M. Patel (QA)",
+      "created": "D:20251115104500+00'00'",
+      "contents": "CHECK: Samsung smartphone GPS shows Paris -- document claims London origin"
+    },
+    {
+      "page": 3,
+      "subtype": "/FreeText",
+      "author": "M. Patel (QA)",
+      "created": "D:20251115110000+00'00'",
+      "contents": "INCONSISTENT: Fujifilm camera EXIF on a supposedly scanned document. Requires explanation."
+    }
+  ],
+  "exercises": [
+    {
+      "q": "Extract Image 2 (page 2) and identify the GPS coordinates.",
+      "a": "GPS: 48.8566\u00b0N, 2.3522\u00b0E \u2014 Paris, France. Use: mutool extract lab06.pdf  then  exiftool <image_file>"
+    },
+    {
+      "q": "What does the EXIF Make/Model on page 2 reveal?",
+      "a": "SAMSUNG SM-G991B \u2014 a Samsung Galaxy smartphone. Document claims images are 'scanned' but this is a phone photo."
+    },
+    {
+      "q": "Compare EXIF Make across all three pages. What is the forensic significance?",
+      "a": "Page 1: Canon scanner; Page 2: Samsung smartphone; Page 3: Fujifilm mirrorless camera. Three different capture devices in one supposedly uniformly-scanned document."
+    },
+    {
+      "q": "Using peepdf3, list all annotations and their authors.",
+      "a": "pdf> object <page_obj_num>  \u2192 check /Annots array \u2192 object each annotation \u2192 read /T (author) and /Contents"
+    },
+    {
+      "q": "What is the timestamp of the M. Patel (QA) highlight annotation on page 2?",
+      "a": "D:20251115104500+00'00'  (2025-11-15 10:45:00 UTC)"
+    }
+  ]
+}

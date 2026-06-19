@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lab: Image Analysis &mdash; PDF Forensics Course</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+</head>
+<body data-mod="mod04" data-page="lab">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="../reference/index.html">Reference</a><a href="../license/index.html">License</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<a href="../module_01/index.html" class="sidebar-item" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<a href="../module_04/index.html" class="sidebar-item active" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<div class="sidebar-sub">
+<a href="index.html">Overview</a>
+<a href="lesson_images.html">Lesson: Image Artifacts</a>
+<a href="lab.html">Lab: Image Analysis</a>
+<a href="quiz.html">Knowledge Check</a>
+</div>
+<a href="../module_05/index.html" class="sidebar-item" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<a href="../module_06/index.html" class="sidebar-item" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+</div>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><a href="index.html">Module 04</a><span class="sep">&#x203A;</span><span>Lab</span></div><div class="page-header"><div class="module-badge">Module 04 &middot; Lab</div><h1>Lab: Detecting Hidden Image Content</h1><p class="subtitle">Four pages, four hiding techniques. Work each page in order &mdash; each one teaches a different detection method you will use in the capstone.</p></div><div class="lab-file-panel"><div class="lab-file-icon">&#x1F4C4;</div><div class="lab-file-info"><div class="lab-file-title">lab04_images.pdf</div><div class="lab-file-sub">Lab file for this module</div><div class="lab-file-meta"><span class="lab-file-meta-item"><span class="key">MD5</span><span class="val">350f99d17a897348ff0080d2755b10c2</span></span><span class="lab-file-meta-item"><span class="key">Pages</span><span class="val">4 pages</span></span></div><div style="margin-bottom:12px"><span class="badge badge-high" style="margin:2px">BBOX_CROP</span><span class="badge badge-high" style="margin:2px">OVERLAP</span><span class="badge badge-high" style="margin:2px">OFFPAGE</span><span class="badge badge-high" style="margin:2px">DPI_ANOMALY</span></div><div class="lab-file-actions"><a href="../sample_pdfs/lab04_images.pdf" download class="btn btn-primary btn-sm">&#x2B07; Download Lab File</a><button onclick="navigator.clipboard.writeText(&#39;350f99d17a897348ff0080d2755b10c2&#39;)" class="btn btn-secondary btn-sm">&#x1F4CB; Copy MD5</button></div></div></div><div class="callout callout-info"><div class="callout-icon">&#x2139;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Before You Begin</div><p>Open a terminal in the folder containing <code>lab04_images.pdf</code>. Also open the file in your PDF viewer so you can compare what the viewer shows against what the tools reveal. You will need a notepad for recording object numbers, BBox values, matrix values, and DPI calculations. Keep the DPI formula handy: <code>effective_dpi = pixel_width &times; 72 / display_width_pts</code>.</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Page 1 &mdash; BBOX_CROP</h2><p>Page 1 contains a Form XObject whose /BBox is smaller than the image placed inside it. The image extends beyond the BBox in two directions, hiding 75% of its content from any PDF viewer. Your job is to measure the discrepancy and extract the full uncropped image to prove what is hidden.</p><div class="tool-tabs" data-tabgroup="m04ex1"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; Page 1 BBOX_CROP investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Open in peepdf and navigate to page 1 resources
+peepdf -i lab04_images.pdf
+pdf> tree
+# In the output, look for the page 1 entry.
+# Under its /Resources you will see /XObject entries.
+# One of them will be a Form XObject (Subtype /Form) -- note its object number.
+
+# Step 2: Read the Form XObject dictionary
+pdf> object FORM_OBJ_NUM
+# Look for and record:
+#   /BBox [x1 y1 x2 y2]   <- the visible clipping rectangle
+#   The content stream will show a 'cm' matrix and 'Do' call
+
+# Step 3: Decode the Form content stream to see the actual image placement
+pdf> stream FORM_OBJ_NUM
+# Record the six numbers in the 'cm' matrix: a b c d tx ty
+# For a simple scale+translate: 'width 0 0 height 0 0 cm'
+# The first value is the image's display width, third is height.
+
+pdf> exit
+
+# Step 4: Extract all images to get the full uncropped pixel data
+mutool extract lab04_images.pdf
+# This extracts ALL images from ALL pages.
+# Identify the page 1 image (largest file is usually it).
+Get-FileHash -Algorithm MD5 <extracted_image_filename>
+# Expected: cf6e8e663cf7ac581fd48f303f15dcb3
+
+# Open the extracted image in an image viewer to see the hidden content:
+Invoke-Item <extracted_image_filename></code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; Page 1 BBOX_CROP investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: peepdf tree to find Form XObject
+peepdf -i lab04_images.pdf
+pdf> tree
+# Note Form XObject object number under page 1 /Resources
+
+# Step 2: Read the Form dictionary
+pdf> object FORM_OBJ_NUM
+# Record: /BBox [x1 y1 x2 y2]
+
+# Step 3: Decode the Form content stream
+pdf> stream FORM_OBJ_NUM
+# Record the cm matrix values
+pdf> exit
+
+# Step 4: Extract images
+mutool extract lab04_images.pdf
+md5sum img-*.jpg img-*.png 2>/dev/null
+# Expected page 1 image MD5: cf6e8e663cf7ac581fd48f303f15dcb3
+
+# Open the extracted image:
+xdg-open <extracted_image_filename>  # or: eog, feh, etc.</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>/BBox</strong> of the Form XObject: [x1 y1 x2 y2] (the visible region)</li><li><strong>cm matrix</strong> in the Form stream: the image display width and height</li><li><strong>Crop calculation</strong>: visible_width/display_width &times; visible_height/display_height = visible fraction</li><li><strong>Hidden fraction</strong> = 1 minus visible fraction (answers Q1)</li><li><strong>What the extracted image shows</strong> in the hidden area</li></ul></div></div><button class="reveal-answer-btn" style="padding:8px 16px;background:var(--blue);color:white;border:none;border-radius:var(--radius);cursor:pointer;margin-top:8px">&#x1F441; Reveal BBOX_CROP Answer</button><div style="display:none;margin-top:12px"><div class="finding-card"><div class="finding-header"><span class="finding-type-badge">BBOX_CROP</span><span style="flex:1;font-weight:700;color:var(--navy)">Page 1</span><span class="badge badge-high">HIGH</span></div><div class="finding-body"><p class="finding-desc">Form XObject BBox [0 0 200 150] is smaller than image display size 400x300 pts. Right 50% and upper 50% of image are cropped.</p><div class="finding-detail-grid"><div class="key">Form BBox</div><div class="val">[0, 0, 200, 150]</div><div class="key">Image placement</div><div class="val">[0, 0, 400, 300] (in Form local coords)</div><div class="key">Visible area</div><div class="val">25% (200/400 wide &times; 150/300 tall)</div><div class="key">Hidden area</div><div class="val">75% (50% wide x 50% tall)</div><div class="key">Hidden content</div><div class="val">Text 'ORIGINAL RECEIPT DATA' in right/upper portion</div><div class="key">Image MD5</div><div class="val">cf6e8e663cf7ac581fd48f303f15dcb3</div></div></div></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Page 2 &mdash; OVERLAP</h2><p>Page 2 has two images placed at overlapping positions. The image drawn <em>first</em> in the content stream is completely hidden behind the second. Your task is to identify both images, determine which is on top and which is hidden, and extract the hidden one.</p><div class="tool-tabs" data-tabgroup="m04ex2"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; Page 2 OVERLAP investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Find both image XObject references on page 2
+peepdf -i lab04_images.pdf
+pdf> page 2
+# In the output, look for /XObject entries in the Resources.
+# You should see two image names (e.g. /ImB and /ImC) with their object numbers.
+# Note both object numbers.
+
+# Step 2: Decode the page 2 content stream to find draw order
+pdf> stream PAGE2_CONTENTS_OBJ_NUM
+# Look for two 'Do' operators. The one that appears FIRST in the stream
+# is drawn FIRST -- it is the back (hidden) image.
+# The one that appears SECOND is on top (visible).
+# Record which image name (/ImB or /ImC) appears first.
+pdf> exit
+
+# Step 3: Extract images from page 2 only
+mutool extract -p 2 lab04_images.pdf
+# Open both extracted images to see what each contains.
+# The hidden (back) image MD5: 4ebd8cefc75e42300bd071f5b86f249f
+# The front image MD5:         5f3ce6c1235b1b1ce38a8f356511120b</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; Page 2 OVERLAP investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Find image XObjects on page 2
+peepdf -i lab04_images.pdf
+pdf> page 2
+# Note both image XObject names and object numbers
+
+# Step 2: Check draw order in content stream
+pdf> stream PAGE2_CONTENTS_OBJ_NUM
+# First 'Do' = back image (hidden); Second 'Do' = front image (visible)
+pdf> exit
+
+# Step 3: Extract page 2 images
+mutool extract -p 2 lab04_images.pdf
+md5sum img-*.jpg 2>/dev/null
+# Back image MD5:  4ebd8cefc75e42300bd071f5b86f249f
+# Front image MD5: 5f3ce6c1235b1b1ce38a8f356511120b</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>Image drawn first</strong> (back/hidden): object number and name</li><li><strong>Image drawn second</strong> (front/visible): object number and name</li><li><strong>What the hidden image shows</strong> (open it from mutool extract output)</li><li>This answers Q2: which image is considered the 'back' image?</li></ul></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Page 3 &mdash; OFFPAGE</h2><p>Page 3 has an image placed with a negative x coordinate, so part of it lies to the left of the page boundary. The MediaBox left edge is x=0; anything at x&lt;0 is off the visible page. Find the exact placement coordinates from the content stream.</p><div class="tool-tabs" data-tabgroup="m04ex3"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; Page 3 OFFPAGE investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Find page 3 content stream object number
+peepdf -i lab04_images.pdf
+pdf> page 3
+# Note the /Contents object number
+pdf> exit
+
+# Step 2: Decode page 3 content stream
+qpdf --show-object=PAGE3_CONTENTS_OBJ --filtered-stream-data lab04_images.pdf
+# Look for the 'cm' matrix operator.
+# The format is: a b c d tx ty cm
+# tx is the x position of the image's lower-left corner.
+# A negative tx value means the image starts off the left edge of the page.
+
+# Step 3: Find the page MediaBox to calculate the violation magnitude
+peepdf -i lab04_images.pdf
+pdf> page 3
+# Look for /MediaBox [left bottom right top]
+# The left edge is the first value (usually 0).
+# Violation = |tx| when tx is negative.
+pdf> exit</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; Page 3 OFFPAGE investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>peepdf -i lab04_images.pdf
+pdf> page 3
+# Note /Contents object number and /MediaBox values
+pdf> exit
+
+# Decode content stream and find the cm matrix:
+qpdf --show-object=PAGE3_CONTENTS_OBJ --filtered-stream-data lab04_images.pdf \
+  | grep -E 'cm|Do'
+# Look for: NEGATIVE_NUMBER 0 0 HEIGHT 0 0 cm
+# The negative first number = off-page displacement</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>cm matrix tx value</strong> (the x placement coordinate): is it negative?</li><li><strong>Page MediaBox left edge</strong>: (usually 0)</li><li><strong>Off-page distance</strong>: |tx| points (answers Q3's calculation)</li><li><strong>Percentage of image width off-page</strong>: |tx| / display_width &times; 100</li></ul></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Page 4 &mdash; DPI_ANOMALY</h2><p>Page 4 has two images. One has a normal scanner DPI; the other has a suspicious screen-resolution DPI suggesting it is a screenshot rather than a scan. Find each image's pixel dimensions and display size, then calculate effective DPI for each.</p><div class="tool-tabs" data-tabgroup="m04ex4"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; Page 4 DPI investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Find image XObjects on page 4 and get pixel dimensions
+peepdf -i lab04_images.pdf
+pdf> page 4
+# Note image XObject names (e.g. /ImE and /ImF) and object numbers
+
+# Step 2: Read each Image XObject dictionary
+pdf> object ImE_OBJ_NUM
+# Record: /Width (pixel width), /Height (pixel height)
+pdf> object ImF_OBJ_NUM
+# Record: /Width, /Height
+pdf> exit
+
+# Step 3: Get display sizes from the content stream
+# (The cm matrix 'a 0 0 d 0 0 cm' places the image at 'a' pts wide and 'd' pts tall)
+qpdf --show-object=PAGE4_CONTENTS_OBJ --filtered-stream-data lab04_images.pdf
+# For each image, note the cm matrix before its 'Do' call.
+
+# Step 4: Calculate effective DPI for each image
+# Formula: (pixel_width * 72) / display_width_pts
+# ImE example: (150 * 72) / 150 = 72 DPI   <- screenshot resolution
+# ImF example: (600 * 72) / 144 = 300 DPI  <- scanner resolution</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; Page 4 DPI investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>peepdf -i lab04_images.pdf
+pdf> page 4
+# Note image object numbers
+pdf> object ImE_OBJ_NUM
+# Record /Width and /Height
+pdf> object ImF_OBJ_NUM
+# Record /Width and /Height
+pdf> exit
+
+# Get display sizes from content stream:
+qpdf --show-object=PAGE4_CONTENTS_OBJ --filtered-stream-data lab04_images.pdf \
+  | grep -E 'cm|Do'
+
+# Calculate DPI:
+python3 -c "
+for name, pw, dw in [('ImE',150,150), ('ImF',600,144)]:
+    print(f'{name}: {pw*72/dw:.0f} DPI')
+"</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>ImE pixel width &times; height</strong>: _____ &times; _____</li><li><strong>ImE display width in pts</strong> (from cm matrix): _____</li><li><strong>ImE effective DPI</strong> = pixel_width &times; 72 / display_pts = _____ (answers Q4)</li><li><strong>ImF effective DPI</strong>: _____ (for comparison)</li><li><strong>Which DPI is anomalous?</strong> (below 100 = screenshot resolution)</li></ul></div></div><h2 class="section-title"><span class="icon">&#x1F4DD;</span> Knowledge Check Preparation</h2><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q1: /BBox [0 0 200 150], image placement '400 0 0 300 0 0 cm'. What percentage is hidden?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">Visible width = 200/400 = 50%. Visible height = 150/300 = 50%. Visible area = 50% &times; 50% = <strong>25%</strong>. Hidden area = <strong>75%</strong>. The image is placed at double the BBox dimensions in both directions, so three-quarters of the pixel data is clipped by the BBox and invisible in any PDF viewer.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q2: When two images overlap, which is considered the 'back' (hidden) image?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">The image drawn <strong>first</strong> in the content stream. PDF renders content in stream order: later operators paint over earlier ones. The first <code>Do</code> call places the back image; the second <code>Do</code> call places the front image on top of it.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q3: Image at x=-80 pts on a page with MediaBox [0 0 612 792]. What does OFFPAGE mean?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">The image starts 80 points to the left of the visible page edge (x=0). Those 80 points of the image are completely outside the visible area &mdash; they are never rendered by any compliant PDF viewer. However, the pixel data for the off-page portion is still fully present in the Image XObject stream in the file.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q4: Image: 150 pixels wide, displayed at 150 points wide. What is the effective DPI?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">(150 &times; 72) / 150 = <strong>72 DPI</strong>. This is screen resolution, consistent with a screenshot taken on a standard-density display. It is inconsistent with a scanned document, which would typically be 200&ndash;300 DPI or higher.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q5: Which command extracts the full uncropped image from a BBOX_CROP finding?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem"><code>mutool extract lab04_images.pdf</code> &mdash; this extracts every Image XObject stream to a file in the current directory, bypassing all display-level clipping including BBox, CropBox, and off-page placement. The extracted file contains the complete pixel data as stored in the PDF, not just the visible portion.</div></div><div class="page-nav"><a href="lesson_images.html" class="btn btn-secondary">&larr; Lesson</a><div class="page-nav-info">Module 04 &middot; Lab</div><a href="quiz.html" class="btn btn-primary">Knowledge Check &rarr;</a></div></main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>

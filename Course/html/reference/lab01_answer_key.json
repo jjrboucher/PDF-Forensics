@@ -1,0 +1,43 @@
+{
+  "lab": "01",
+  "title": "PDF Structure",
+  "file": "lab01_structure.pdf",
+  "md5": "5440841e16b52738b7bdc352fda1bb1e",
+  "pages": 2,
+  "pdf_version": "1.7",
+  "expected_findings": [],
+  "object_map": {
+    "description": "Object numbers assigned by pikepdf \u2014 run: python3 -c \"import pikepdf; p=pikepdf.open('lab01_structure.pdf'); [print(i, p.get_object(i,0)) for i in range(1,15)]\"",
+    "notes": "Catalog is /Root. Pages object is /Root[/Pages]. Image is the object with /Subtype /Image."
+  },
+  "image_info": {
+    "image_0": {
+      "width": 200,
+      "height": 150,
+      "format": "JPEG",
+      "md5": "a61237da1ef601b7019bc2218871cbb5"
+    }
+  },
+  "exercises": [
+    {
+      "q": "What PDF version is declared in the file header?",
+      "a": "PDF 1.7 (%PDF-1.7)"
+    },
+    {
+      "q": "How many indirect objects does the file contain?",
+      "a": "Count lines in xref table minus the free-object entry (entry 0 65535 f)"
+    },
+    {
+      "q": "What is the /Filter on the page-2 image stream?",
+      "a": "/DCTDecode (JPEG compression)"
+    },
+    {
+      "q": "What is the MD5 of the embedded image?",
+      "a": "a61237da1ef601b7019bc2218871cbb5"
+    },
+    {
+      "q": "How many pages does the /Pages object's /Count entry declare?",
+      "a": "2"
+    }
+  ]
+}

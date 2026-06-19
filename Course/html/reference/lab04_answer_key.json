@@ -1,0 +1,106 @@
+{
+  "lab": "04",
+  "title": "Image Manipulation Artifacts",
+  "file": "lab04_images.pdf",
+  "md5": "350f99d17a897348ff0080d2755b10c2",
+  "pages": 4,
+  "findings": [
+    {
+      "id": "IMG-01",
+      "type": "BBOX_CROP",
+      "severity": "HIGH",
+      "risk_weight": 30,
+      "page": 1,
+      "description": "Form XObject BBox [0 0 200 150] is smaller than image display size 400x300 pts. Right 50% and upper 50% of image are cropped.",
+      "form_bbox": "[0, 0, 200, 150]",
+      "image_display_rect": "[0, 0, 400, 300] (in Form local coords)",
+      "cropped_area_pct": "75% (50% wide x 50% tall)",
+      "hidden_content": "Text 'ORIGINAL RECEIPT DATA' in right/upper portion",
+      "image_md5": "cf6e8e663cf7ac581fd48f303f15dcb3",
+      "verification": "qpdf --show-object=FORM_OBJ_NUM lab04_images.pdf  \u2192 check /BBox vs cm matrix",
+      "mutool_extract": "mutool extract lab04_images.pdf  \u2192 extracts full uncropped image"
+    },
+    {
+      "id": "IMG-02",
+      "type": "OVERLAP",
+      "severity": "HIGH",
+      "risk_weight": 35,
+      "page": 2,
+      "concealment": "FULL",
+      "description": "Image C (200x150 pts at [100,380,300,530]) is fully concealed by Image B (300x200 pts at [50,340,350,540]). Back image AABB fully contained in front image AABB.",
+      "back_image": {
+        "label": "ImC",
+        "rect": "[100,380,300,530]",
+        "content": "HIDDEN DOCUMENT text on red background",
+        "md5": "4ebd8cefc75e42300bd071f5b86f249f"
+      },
+      "front_image": {
+        "label": "ImB",
+        "rect": "[50,340,350,540]",
+        "content": "plain blue image",
+        "md5": "5f3ce6c1235b1b1ce38a8f356511120b"
+      },
+      "overlap_area_pts2": "30000 sq pts (200x150)"
+    },
+    {
+      "id": "IMG-03",
+      "type": "OFFPAGE",
+      "severity": "HIGH",
+      "risk_weight": 25,
+      "page": 3,
+      "description": "Image D placed at x=-80, extending 80 pts beyond the left MediaBox boundary. 80/300 = 26.7% of image width is off-page.",
+      "mediabox": "[0, 0, 612, 792]",
+      "image_display_rect": "[-80, 400, 220, 600]",
+      "violation": "left edge: 80 pts (26.7% of image width)",
+      "image_md5": "047a88259226df2c057f395b7ad6ae25",
+      "hidden_content": "Left 26.7% of 'OFF-PAGE CONTENT' image"
+    },
+    {
+      "id": "IMG-04",
+      "type": "DPI_ANOMALY",
+      "severity": "HIGH",
+      "risk_weight": 20,
+      "page": 4,
+      "description": "Image E is 72 DPI (150px / 150pts * 72) while Image F is 300 DPI (600px / 144pts * 72). DPI spread = 228, well above the 50-point anomaly threshold.",
+      "image_e": {
+        "pixels": "150x100",
+        "display_pts": "150x100",
+        "effective_dpi": 72,
+        "classification": "Screenshot/Web",
+        "md5": "7364bd5e9c84f2a0c5533a667eeab4e5"
+      },
+      "image_f": {
+        "pixels": "600x400",
+        "display_pts": "144x96",
+        "effective_dpi": 300,
+        "classification": "Standard scan",
+        "md5": "a48a6bcbd97c5172b413740167c1c1ab"
+      },
+      "dpi_spread": 228,
+      "median_dpi": 186,
+      "deviation_pct": "61% below median"
+    }
+  ],
+  "exercises": [
+    {
+      "q": "On page 1, what percentage of Image A's content is hidden by the BBox crop?",
+      "a": "75% \u2014 the Form BBox is 200x150 but the image is placed at 400x300, so right 50% and upper 50% are cropped."
+    },
+    {
+      "q": "Extract Image C (the hidden image on page 2) and describe its content.",
+      "a": "Red background image with text 'HIDDEN DOCUMENT'. MD5: 4ebd8cefc75e42300bd071f5b86f249f"
+    },
+    {
+      "q": "On page 3, which edge of the image is off-page and by how many points?",
+      "a": "Left edge. Image placed at x=-80, MediaBox left edge is x=0. Off-page by 80 pts."
+    },
+    {
+      "q": "Calculate the effective DPI for Image E on page 4.",
+      "a": "150 pixels \u00d7 72 / 150 pts = 72 DPI"
+    },
+    {
+      "q": "What does a 72-DPI image in an otherwise 300-DPI scanned document suggest?",
+      "a": "The image was not scanned \u2014 it is likely a screen capture or web graphic inserted into the document."
+    }
+  ]
+}

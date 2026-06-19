@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lab: Overlay Detection &mdash; PDF Forensics Course</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+</head>
+<body data-mod="mod05" data-page="lab">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="../reference/index.html">Reference</a><a href="../license/index.html">License</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<a href="../module_01/index.html" class="sidebar-item" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<a href="../module_04/index.html" class="sidebar-item" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<a href="../module_05/index.html" class="sidebar-item active" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<div class="sidebar-sub">
+<a href="index.html">Overview</a>
+<a href="lesson_overlay.html">Lesson: Overlay Types</a>
+<a href="lab.html">Lab: Overlay Detection</a>
+<a href="quiz.html">Knowledge Check</a>
+</div>
+<a href="../module_06/index.html" class="sidebar-item" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+</div>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><a href="index.html">Module 05</a><span class="sep">&#x203A;</span><span>Lab</span></div><div class="page-header"><div class="module-badge">Module 05 &middot; Lab</div><h1>Lab: Three Pages, Three Overlay Techniques</h1><p class="subtitle">Each page uses a different method to display replacement text over original content. Work each page carefully &mdash; the detection method is different for each one.</p></div><div class="lab-file-panel"><div class="lab-file-icon">&#x1F4C4;</div><div class="lab-file-info"><div class="lab-file-title">lab05_textoverlay.pdf</div><div class="lab-file-sub">Lab file for this module</div><div class="lab-file-meta"><span class="lab-file-meta-item"><span class="key">MD5</span><span class="val">d28ca040172c8abb1499a59bb265d229</span></span><span class="lab-file-meta-item"><span class="key">Pages</span><span class="val">3 pages</span></span></div><div style="margin-bottom:12px"><span class="badge badge-high" style="margin:2px">Annotation</span><span class="badge badge-high" style="margin:2px">White-Box</span><span class="badge badge-high" style="margin:2px">Text-Over-Text</span></div><div class="lab-file-actions"><a href="../sample_pdfs/lab05_textoverlay.pdf" download class="btn btn-primary btn-sm">&#x2B07; Download Lab File</a><button onclick="navigator.clipboard.writeText(&#39;d28ca040172c8abb1499a59bb265d229&#39;)" class="btn btn-secondary btn-sm">&#x1F4CB; Copy MD5</button></div></div></div><div class="callout callout-info"><div class="callout-icon">&#x2139;&#xFE0F;</div><div class="callout-body"><div class="callout-title">Before You Begin</div><p>Open a terminal in the folder containing <code>lab05_textoverlay.pdf</code> and also open the file in your PDF viewer. For each page, look at what the viewer displays, then run the commands to find what is actually in the file structure. Keep notes recording: the overlay type, the original value, the replacement value, the object number, and the detection method used.</p></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Page 1 &mdash; Annotation Overlay</h2><p>Page 1 has a FreeText annotation placed over the invoice date. The annotation has an opaque white background that covers the original date, and displays a replacement date instead. Find the annotation object, read its fields, and establish whether it was added after the document was created.</p><div class="tool-tabs" data-tabgroup="m05ex1"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; Page 1 annotation investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Check what annotations exist on page 1
+peepdf -i lab05_textoverlay.pdf
+pdf> page 1
+# Look for /Annots in the page dictionary output.
+# It will list annotation object numbers (e.g. [7 0 R])
+# Note each annotation object number.
+
+# Step 2: Read the annotation object
+pdf> object 7
+# (Replace 7 with the actual annotation object number)
+# In the output, look for and record ALL of these:
+#   /Subtype    <- should be /FreeText
+#   /Rect       <- [x1 y1 x2 y2] position on page
+#   /Contents   <- the REPLACEMENT text the annotation displays
+#   /MK /BG     <- background colour; [1 1 1] = opaque white (covers original)
+#   /DA         <- default appearance (font and colour)
+#   /CreationDate <- when the annotation was added
+pdf> exit
+
+# Step 3: Compare annotation CreationDate to document CreationDate
+peepdf -i lab05_textoverlay.pdf
+pdf> metadata
+# Record the document /CreationDate
+# Is the annotation CreationDate LATER than the document CreationDate?
+# If yes: the annotation was added AFTER the document was created.
+pdf> exit
+
+# Step 4: Verify with qpdf (independent confirmation)
+qpdf --show-object=7 lab05_textoverlay.pdf</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; Page 1 annotation investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>peepdf -i lab05_textoverlay.pdf
+pdf> page 1
+# Note /Annots object numbers
+
+pdf> object 7
+# Record: /Subtype, /Rect, /Contents, /MK /BG, /CreationDate
+
+pdf> metadata
+# Record document /CreationDate for comparison
+pdf> exit
+
+# Verify with qpdf:
+qpdf --show-object=7 lab05_textoverlay.pdf</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>Annotation object number</strong></li><li><strong>/Contents</strong> (the replacement date displayed to viewer)</li><li><strong>/MK /BG value</strong>: [1 1 1] means opaque white background</li><li><strong>Annotation /CreationDate</strong></li><li><strong>Document /CreationDate</strong> (from pdf> metadata)</li><li><strong>Is the annotation date later?</strong> If yes, this was added post-creation (answers Q4)</li></ul></div></div><button class="reveal-answer-btn" style="padding:8px 16px;background:var(--blue);color:white;border:none;border-radius:var(--radius);cursor:pointer;margin-top:8px">&#x1F441; Reveal Page 1 Answer</button><div style="display:none;margin-top:12px"><div class="finding-card"><div class="finding-header"><span class="finding-type-badge">TEXT_OVERLAY</span><span style="flex:1;font-weight:700;color:var(--navy)">Page 1 &mdash; FreeText Annotation</span><span class="badge badge-high">HIGH</span></div><div class="finding-body"><div class="finding-detail-grid"><div class="key">Object</div><div class="val">7 0 R</div><div class="key">Rect</div><div class="val">[68, 648, 320, 668]</div><div class="key">Original text</div><div class="val">Date: Saturday, 15 March 2025</div><div class="key">Replacement text (/Contents)</div><div class="val">Date: Wednesday, 19 March 2025</div><div class="key">Background (/MK /BG)</div><div class="val">/MK /BG [1 1 1]  (opaque white) = opaque white</div><div class="key">Annotation created</div><div class="val">D:20250320091500+00'00'</div></div></div></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Page 2 &mdash; White-Box Overlay</h2><p>Page 2 uses a different technique: a white-filled rectangle drawn directly in the page content stream covers the original invoice total, and replacement text is drawn on top. There is no annotation object for this one &mdash; you find it only by decoding the content stream and looking for the specific operator sequence.</p><div class="tool-tabs" data-tabgroup="m05ex2"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; Page 2 white-box investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Find the page 2 content stream object number
+peepdf -i lab05_textoverlay.pdf
+pdf> page 2
+# Look for /Contents N 0 R in the output
+# Record the object number N
+pdf> exit
+
+# Step 2: Decode the content stream
+qpdf --show-object=PAGE2_CONTENTS_OBJ --filtered-stream-data lab05_textoverlay.pdf > page2_stream.txt
+notepad page2_stream.txt
+
+# Step 3: In the file, search for this three-operator sequence:
+# 1 1 1 rg     <- set fill colour to WHITE (RGB 1,1,1)
+# X Y W H re   <- define rectangle at position (X,Y) with width W and height H
+# f            <- FILL the rectangle with the current colour (white)
+# The text immediately before this sequence is the ORIGINAL text.
+# The text immediately after is the REPLACEMENT text.
+# Record: the rectangle coordinates, the original text, and the replacement text.</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; Page 2 white-box investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Find page 2 content stream object number
+peepdf -i lab05_textoverlay.pdf
+pdf> page 2
+# Note /Contents object number
+pdf> exit
+
+# Step 2: Decode and search for white-box sequence
+qpdf --show-object=PAGE2_CONTENTS_OBJ --filtered-stream-data lab05_textoverlay.pdf \
+  | grep -n -B5 -A5 '1 1 1 rg'
+
+# The -B5 shows 5 lines before (original text)
+# The -A5 shows 5 lines after (rectangle definition and fill)
+# Look for: 1 1 1 rg -> X Y W H re -> f -> BT...(replacement)...ET</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>Rectangle coordinates</strong>: X Y W H from the 're' operator</li><li><strong>Original value</strong>: the text in the BT...ET block just BEFORE '1 1 1 rg'</li><li><strong>Replacement value</strong>: the text in the BT...ET block AFTER 'f' (answers Q2)</li><li><strong>Operator sequence</strong>: write out the three operators in order</li></ul></div></div><button class="reveal-answer-btn" style="padding:8px 16px;background:var(--blue);color:white;border:none;border-radius:var(--radius);cursor:pointer;margin-top:8px">&#x1F441; Reveal Page 2 Answer</button><div style="display:none;margin-top:12px"><div class="finding-card"><div class="finding-header"><span class="finding-type-badge">TEXT_OVERLAY</span><span style="flex:1;font-weight:700;color:var(--navy)">Page 2 &mdash; White-Box</span><span class="badge badge-high">HIGH</span></div><div class="finding-body"><div class="finding-detail-grid"><div class="key">Original value</div><div class="val">$8,200</div><div class="key">Replacement value</div><div class="val">$12,450</div><div class="key">White rect</div><div class="val">[68, 630, 188, 646] (x, y, x+w, y+h)</div><div class="key">Operator sequence</div><div class="val">1 1 1 rg → 68 630 120 16 re → f → BT...Total: $12,450...ET</div></div></div></div></div><h2 class="section-title"><span class="icon">&#x1F52C;</span> Page 3 &mdash; Text-Over-Text Overlay</h2><p>Page 3 uses the hardest technique to detect: replacement text drawn at exactly the same coordinates as the original text. There is no annotation, no white rectangle &mdash; only careful reading of the decoded content stream reveals it. You are looking for two BT...ET blocks that position text at the <em>same coordinates</em>.</p><div class="tool-tabs" data-tabgroup="m05ex3"><div class="tool-tab active" data-platform="windows">&#x1FA9F; Windows</div><div class="tool-tab" data-platform="linux">&#x1F427; Linux / macOS</div></div><div class="tool-panel active"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">PowerShell &mdash; Page 3 text-over-text investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Step 1: Find the page 3 content stream
+peepdf -i lab05_textoverlay.pdf
+pdf> page 3
+# Note /Contents object number
+pdf> exit
+
+# Step 2: Decode and save the content stream
+qpdf --show-object=PAGE3_CONTENTS_OBJ --filtered-stream-data lab05_textoverlay.pdf > page3_stream.txt
+notepad page3_stream.txt
+
+# Step 3: Read through the decoded stream.
+# Look for ALL text operators (Td, Tj, TJ) and their coordinates.
+# The key indicator: two BT...ET blocks where the 'Td' operator
+# specifies the SAME x,y coordinates but DIFFERENT text in the 'Tj' call.
+# Example of what to look for:
+#   BT  155 656 Td  (Sat) Tj  ET   <- original (drawn first)
+#   BT  155 656 Td  (Wed) Tj  ET   <- replacement (same position, different text)
+# Record: the coordinates, the first (original) text, the second (replacement) text.</code></pre></div></div><div class="tool-panel"><div class="pre-wrap"><div class="pre-header"><span class="pre-label">Bash &mdash; Page 3 text-over-text investigation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code># Find page 3 content stream:
+peepdf -i lab05_textoverlay.pdf
+pdf> page 3
+# Note /Contents object number
+pdf> exit
+
+# Decode and extract all text operator lines:
+qpdf --show-object=PAGE3_CONTENTS_OBJ --filtered-stream-data lab05_textoverlay.pdf \
+  | grep -n 'Td\|Tj\|BT\|ET'
+
+# Look for the SAME Td coordinate appearing twice with different Tj content.
+# The first occurrence is the original; the second is the replacement.</code></pre></div></div><div class="callout callout-success"><div class="callout-icon">&#x2705;</div><div class="callout-body"><div class="callout-title">What to record</div><p>Write these down in your notes before moving on:</p><ul><li><strong>Coordinate pair</strong> (from Td operator): (x, y) where the overlap occurs</li><li><strong>Original word</strong>: the text string in the first Tj at those coordinates</li><li><strong>Replacement word</strong>: the text string in the second Tj at those coordinates (answers Q3)</li><li><strong>Why this is hard to detect</strong>: no /Annots entry, no white rectangle &mdash; only visible when you decode the content stream and compare Td positions</li></ul></div></div><button class="reveal-answer-btn" style="padding:8px 16px;background:var(--blue);color:white;border:none;border-radius:var(--radius);cursor:pointer;margin-top:8px">&#x1F441; Reveal Page 3 Answer</button><div style="display:none;margin-top:12px"><div class="finding-card"><div class="finding-header"><span class="finding-type-badge">TEXT_OVERLAY</span><span style="flex:1;font-weight:700;color:var(--navy)">Page 3 &mdash; Text-Over-Text</span><span class="badge badge-high">HIGH</span></div><div class="finding-body"><div class="finding-detail-grid"><div class="key">Coordinates</div><div class="val">(155, 656)</div><div class="key">Original word</div><div class="val">Sat</div><div class="key">Replacement word</div><div class="val">Wed</div><div class="key">Why invisible to viewers</div><div class="val">No /Annots entry, no white rectangle. Both words render at the same position; only the last one painted is visible.</div></div></div></div></div><h2 class="section-title"><span class="icon">&#x1F4DD;</span> Knowledge Check Preparation</h2><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q1: A FreeText annotation has /MK << /BG [1 1 1] >>. What does this indicate?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">/BG sets the annotation background colour using RGB values from 0 to 1. [1 1 1] is white. An opaque white background means the annotation visually covers any content beneath it &mdash; the original text cannot be seen through the annotation. This is the defining characteristic of an annotation-based overlay.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q2: In a decoded content stream: '1 1 1 rg  68 630 120 16 re  f'. What is this doing?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">'1 1 1 rg' sets the fill colour to white (RGB 1,1,1). '68 630 120 16 re' defines a rectangle at x=68, y=630, width=120, height=16. 'f' fills that rectangle with the current colour (white). The result: a white-filled rectangle 120&times;16 points at position (68,630) that covers any text in that area.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q3: What makes text-over-text overlay the hardest technique to detect?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">There is no annotation in the /Annots array (nothing visible in an annotation panel), no white rectangle in the content stream, and the replacement character paints over the original at the same coordinates &mdash; a PDF viewer shows only the final rendered result. Detection requires decoding the content stream and finding two BT...ET blocks with overlapping Td coordinate positions.</div></div><div style="margin-bottom:20px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden"><div style="padding:12px 16px;background:var(--steel);font-weight:700;font-size:0.9rem;color:var(--navy)">Q4: Annotation CreationDate is 20 March 2025; document /CreationDate is 10 March 2025. What is the significance?</div><button class="reveal-answer-btn" style="width:100%;text-align:left;padding:10px 16px;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.875rem;color:var(--blue)">&#x1F441; Reveal answer</button><div style="padding:12px 16px;display:none;font-size:0.875rem">The annotation was created 10 days after the document was originally produced. An annotation /CreationDate that is later than the document /CreationDate is evidence that the document was modified after it was first created &mdash; the annotation was added as a post-creation edit. Combined with an opaque white background and a /Contents that differs from the underlying text, this constitutes evidence of deliberate text replacement.</div></div><div class="page-nav"><a href="lesson_overlay.html" class="btn btn-secondary">&larr; Lesson</a><div class="page-nav-info">Module 05 &middot; Lab</div><a href="quiz.html" class="btn btn-primary">Knowledge Check &rarr;</a></div></main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>

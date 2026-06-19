@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson: Image Manipulation &mdash; PDF Forensics Course</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+</head>
+<body data-mod="mod04" data-page="lesson_images">
+<header class="site-header">
+  <a href="../index.html" class="logo"><div class="logo-icon"><img src="../assets/img/logo-icon.png" alt="PDF Forensic Suite logo"></div><div class="logo-text">PDF Forensics<span class="logo-sub">Digital Examiner Course</span></div><span class="logo-version-badge" title="">v0.0</span></a>
+  <div class="header-spacer"></div>
+  <nav class="header-nav"><a href="../index.html">Home</a><a href="../reference/index.html">Reference</a><a href="../license/index.html">License</a><span class="progress-badge">0%</span></nav>
+</header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="sidebar-section-label">Modules</div>
+<a href="../module_00/index.html" class="sidebar-item" data-mod="mod00"><span class="sidebar-num">00</span><span class="sidebar-label">Setup &amp; Orientation</span><span class="sidebar-check"></span></a>
+<a href="../module_01/index.html" class="sidebar-item" data-mod="mod01"><span class="sidebar-num">01</span><span class="sidebar-label">PDF Internals</span><span class="sidebar-check"></span></a>
+<a href="../module_02/index.html" class="sidebar-item" data-mod="mod02"><span class="sidebar-num">02</span><span class="sidebar-label">Document Metadata</span><span class="sidebar-check"></span></a>
+<a href="../module_03/index.html" class="sidebar-item" data-mod="mod03"><span class="sidebar-num">03</span><span class="sidebar-label">Incremental Updates</span><span class="sidebar-check"></span></a>
+<a href="../module_04/index.html" class="sidebar-item active" data-mod="mod04"><span class="sidebar-num">04</span><span class="sidebar-label">Image Manipulation</span><span class="sidebar-check"></span></a>
+<div class="sidebar-sub">
+<a href="index.html">Overview</a>
+<a href="lesson_images.html">Lesson: Image Artifacts</a>
+<a href="lab.html">Lab: Image Analysis</a>
+<a href="quiz.html">Knowledge Check</a>
+</div>
+<a href="../module_05/index.html" class="sidebar-item" data-mod="mod05"><span class="sidebar-num">05</span><span class="sidebar-label">Text Overlay</span><span class="sidebar-check"></span></a>
+<a href="../module_06/index.html" class="sidebar-item" data-mod="mod06"><span class="sidebar-num">06</span><span class="sidebar-label">EXIF &amp; Comments</span><span class="sidebar-check"></span></a>
+<a href="../module_07/index.html" class="sidebar-item" data-mod="mod07"><span class="sidebar-num">07</span><span class="sidebar-label">Capstone Exercise</span><span class="sidebar-check"></span></a>
+</div>
+<a href="../final/assessment.html" class="sidebar-item" data-mod="final"><span class="sidebar-num">&#x1F3C6;</span><span class="sidebar-label">Final Assessment</span><span class="sidebar-check"></span></a>
+<div class="sidebar-footer"><div>Overall Progress</div><div class="overall-progress-bar"><div class="overall-progress-fill" style="width:0%"></div></div><div style="margin-top:6px;font-size:0.8rem"><span class="progress-pct">0%</span> complete &nbsp;&middot;&nbsp;<button class="btn-reset-progress" style="background:none;border:none;color:var(--text-muted);font-size:0.75rem;cursor:pointer;padding:0;">Reset</button></div></div>
+</aside>
+<div class="main-wrap"><main class="page-content">
+<div class="breadcrumb"><a href="../index.html">Home</a><span class="sep">&#x203A;</span><a href="index.html">Module 04</a><span class="sep">&#x203A;</span><span>Lesson</span></div>
+<div class="page-header"><div class="module-badge">Module 04 &middot; Lesson</div><h1>Image Manipulation: Four Hiding Techniques</h1></div><h2 class="section-title" id="s-bbox"><span class="icon">&#x2702;&#xFE0F;</span> 1. BBOX_CROP</h2><p>A Form XObject&#39;s <code>/BBox</code> acts as a rectangular mask. When an image is placed inside at a <em>larger</em> size than the BBox, the excess is cropped and hidden &mdash; but the full pixel data remains in the file.</p><div class="finding-card"><div class="finding-header"><span class="finding-type-badge">BBOX_CROP</span><span style="flex:1;font-weight:700;color:var(--navy)">BBox Boundary Crop</span><span class="badge badge-high finding-severity">HIGH</span></div><div class="finding-body"><p class="finding-desc">Image placement extends beyond the Form XObject's /BBox. Content outside the BBox is invisible but intact.</p><div class="finding-detail-grid"><div class="key">Risk Weight</div><div class="val">+30</div><div class="key">Detection</div><div class="val">image_display_rect.any_edge &gt; bbox.corresponding_edge + 1.0 pt</div><div class="key">False Positive</div><div class="val">Professional layout tools (InDesign, Illustrator) legitimately crop images for design purposes</div></div></div></div><div class="pre-wrap"><div class="pre-header"><span class="pre-label">BBOX_CROP &mdash; Annotated PDF Syntax</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code><span class="nm">7 0</span> <span class="kw">obj</span>
+&lt;&lt; /<span class="op">BBox</span> [<span class="hi">0 0 200 150</span>]   <span class="cm">&larr; only 200x150 pts rendered</span>
+   /<span class="op">Resources</span> &lt;&lt; /<span class="op">XObject</span> &lt;&lt; /<span class="hi">ImA</span> <span class="nm">8 0 R</span> &gt;&gt; &gt;&gt; &gt;&gt;
+<span class="kw">stream</span>
+  <span class="hi">400 0 0 300 0 0 cm</span>  <span class="cm">&larr; image placed at 400x300 pts (DOUBLE the BBox)</span>
+  /<span class="hi">ImA Do</span>
+<span class="kw">endstream</span></code></pre></div><h2 class="section-title" id="s-overlap"><span class="icon">&#x1F532;</span> 2. OVERLAP</h2><p>Two images are placed with overlapping display regions. The image drawn <em>first</em> in the content stream is behind (hidden); the image drawn second is on top.</p><div class="finding-card"><div class="finding-header"><span class="finding-type-badge">OVERLAP</span><span style="flex:1;font-weight:700;color:var(--navy)">Overlapping Image Placement</span><span class="badge badge-high finding-severity">HIGH</span></div><div class="finding-body"><p class="finding-desc">Two image bounding boxes intersect. Classified as FULL (back image completely inside front) or PARTIAL.</p><div class="finding-detail-grid"><div class="key">Risk Weight (FULL)</div><div class="val">+35 (highest weight in scoring model)</div><div class="key">Risk Weight (PARTIAL)</div><div class="val">+15 / +8</div><div class="key">False Positive</div><div class="val">Full-page background images (watermarks, letterheads) produce FULL OVERLAP for every page image</div></div></div></div><h2 class="section-title" id="s-offpage"><span class="icon">&#x1F4CF;</span> 3. OFFPAGE</h2><p>An image&#39;s display rectangle extends beyond the page&#39;s CropBox. Content outside the CropBox is not rendered by any compliant PDF viewer, but the image data remains fully intact in the file.</p><div class="finding-card"><div class="finding-header"><span class="finding-type-badge">OFFPAGE</span><span style="flex:1;font-weight:700;color:var(--navy)">Off-Page Image Content</span><span class="badge badge-high finding-severity">HIGH</span></div><div class="finding-body"><p class="finding-desc">Image display rect extends beyond the page CropBox boundary. The off-page portion is invisible but intact.</p><div class="finding-detail-grid"><div class="key">Risk Weight</div><div class="val">+25</div><div class="key">Example</div><div class="val">Image at x=-80 on a page with left edge x=0 &rarr; 80 pts (26.7%) off-page left</div></div></div></div><h2 class="section-title" id="s-dpi"><span class="icon">&#x1F4D0;</span> 4. DPI_ANOMALY</h2><p>The effective DPI is computed from pixel dimensions and display size:</p><div class="pre-wrap"><div class="pre-header"><span class="pre-label">DPI Calculation</span><button class="copy-btn">&#x29D7; Copy</button></div><pre><code>effective_dpi_x = (pixel_width  * 72) / display_width_pts
+effective_dpi_y = (pixel_height * 72) / display_height_pts
+
+# Example: 150px wide, displayed at 150 pts:
+effective_dpi = (150 * 72) / 150 = 72 DPI  # screenshot resolution
+
+# Example: 600px wide, displayed at 144 pts:
+effective_dpi = (600 * 72) / 144 = 300 DPI  # scanner resolution</code></pre></div><div class="table-wrap"><table><thead><tr><th>DPI Range</th><th>Classification</th><th>Typical Source</th></tr></thead><tbody><tr><td>&lt; 100</td><td><span class="badge badge-high">Screenshot</span></td><td>Screen capture at display resolution, web image</td></tr><tr><td>100&ndash;199</td><td><span class="badge badge-medium">Low-res</span></td><td>Resized image, fax scan</td></tr><tr><td>200&ndash;349</td><td><span class="badge badge-low">Standard scan</span></td><td>Office scanner &mdash; normal for document workflows</td></tr><tr><td>&ge; 350</td><td><span class="badge badge-info">High-res</span></td><td>Professional scanner, DSLR camera</td></tr></tbody></table></div><div class="page-nav"><a href="index.html" class="btn btn-secondary">&larr; Module Overview</a><div class="page-nav-info">Module 04 &middot; Lesson</div><a href="lab.html" class="btn btn-primary">Lab: Image Analysis &rarr;</a></div>
+</main>
+<footer class="site-footer">
+<div>&copy; 2026 Jacques Boucher &middot; Course &amp; Guide licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> &middot; Application licensed under <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache 2.0</a></div>
+<div><a href="../license/index.html">Full License &amp; Disclaimer</a></div>
+</footer>
+</div>
+<script src="../assets/js/course-version.js"></script>
+<script src="../assets/js/course.js"></script>
+</body>
+</html>
