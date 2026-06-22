@@ -1,5 +1,18 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-06-22)
+
+### Add a folder of PDFs
+- The PDF files panel gains an "Add folder" button. After choosing a
+  folder, a Yes / No / Cancel prompt asks whether to search subfolders
+  recursively (Yes = this folder and all subfolders, No = this folder
+  only, Cancel = add nothing). Discovered PDFs are added to the list,
+  de-duplicated against entries already present, with a short summary of
+  how many were added or skipped.
+- The PDF files button row now uses an equal-weight grid so all five
+  buttons share the panel width evenly and cannot be clipped, and the
+  analysis window / left panel were widened to fit the row comfortably.
+
 ## v1.0.0 — Update (2026-06-19)
 
 ### Licensing, authorship, and disclaimers (release prep)

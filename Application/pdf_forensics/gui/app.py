@@ -334,7 +334,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # Per-frame window sizes: (width, height)
     frame_sizes = {
         "main":     (780, 540),
-        "analysis": (1060, 860),
+        "analysis": (1200, 860),
         "graph":    (1060, 540),
         "reports":  (1180, 860),
     }
@@ -571,7 +571,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     split = tk.Frame(analysis_frame, bg=BG_DARK)
     split.pack(fill="both", expand=True, padx=20, pady=(0, 8))
 
-    left_panel = tk.Frame(split, bg=BG_DARK, width=420)
+    left_panel = tk.Frame(split, bg=BG_DARK, width=580)
     left_panel.pack(side="left", fill="y", padx=(0, 10))
     left_panel.pack_propagate(False)
 
@@ -628,6 +628,68 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             msg += f"\n{len(missing)} file(s) not found."
         messagebox.showinfo("Import Complete", msg)
 
+    def add_pdfs_from_folder():
+        folder = filedialog.askdirectory(
+            title="Select a folder containing PDF files")
+        if not folder:
+            return
+
+        # Ask whether to descend into subfolders. Yes = recursive,
+        # No = this folder only, Cancel = abort the whole operation.
+        recursive = messagebox.askyesnocancel(
+            "Include subfolders?",
+            "Search subfolders recursively for PDF files?\n\n"
+            "Yes  \u2013 include this folder and all subfolders\n"
+            "No   \u2013 only this folder\n"
+            "Cancel \u2013 don't add anything")
+        if recursive is None:   # Cancel
+            return
+
+        found = []
+        if recursive:
+            for root_dir, _dirs, files in os.walk(folder):
+                for name in files:
+                    if name.lower().endswith(".pdf"):
+                        found.append(os.path.join(root_dir, name))
+        else:
+            try:
+                for name in os.listdir(folder):
+                    full = os.path.join(folder, name)
+                    if (name.lower().endswith(".pdf")
+                            and os.path.isfile(full)):
+                        found.append(full)
+            except OSError as e:
+                messagebox.showerror(
+                    "Folder error",
+                    f"Could not read the folder:\n{e}")
+                return
+
+        found.sort()
+        added = 0
+        for p in found:
+            if p not in pdf_files:
+                pdf_files.append(p)
+                pdf_listbox.insert("end", p)
+                added += 1
+
+        scope = "recursively" if recursive else "in the selected folder"
+        if added:
+            skipped = len(found) - added
+            msg = f"Added {added} PDF(s) found {scope}."
+            if skipped:
+                msg += f"\n{skipped} already in the list (skipped)."
+            messagebox.showinfo("Folder Import Complete", msg)
+        else:
+            if found:
+                messagebox.showinfo(
+                    "Folder Import Complete",
+                    f"All {len(found)} PDF(s) found {scope} are already "
+                    f"in the list.")
+            else:
+                messagebox.showinfo(
+                    "No PDFs Found",
+                    f"No PDF files were found {scope}.")
+
     def remove_pdfs():
         selected = list(pdf_listbox.curselection())
         for idx in reversed(selected):
@@ -638,16 +700,23 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         pdf_files.clear()
         pdf_listbox.delete(0, "end")
 
+    # Lay the buttons out in an equal-weight grid that fills the panel
+    # width, so they always fit regardless of platform font metrics
+    # (a fixed left-packed row can clip the last button on wider fonts).
     pdf_btns = tk.Frame(pdf_body, bg=BG_PANEL)
     pdf_btns.pack(fill="x")
-    ttk.Button(pdf_btns, text="Add files",
-               command=add_pdfs).pack(side="left")
-    ttk.Button(pdf_btns, text="From list",
-               command=add_pdfs_from_list).pack(side="left", padx=(6, 0))
-    ttk.Button(pdf_btns, text="Remove",
-               command=remove_pdfs).pack(side="left", padx=(6, 0))
-    ttk.Button(pdf_btns, text="Clear all",
-               command=remove_all_pdfs).pack(side="left", padx=(6, 0))
+    _pdf_buttons = [
+        ("Add files", add_pdfs),
+        ("Add folder", add_pdfs_from_folder),
+        ("From list", add_pdfs_from_list),
+        ("Remove", remove_pdfs),
+        ("Clear all", remove_all_pdfs),
+    ]
+    for _col, (_label, _cmd) in enumerate(_pdf_buttons):
+        pdf_btns.grid_columnconfigure(_col, weight=1, uniform="pdfbtn")
+        ttk.Button(pdf_btns, text=_label, command=_cmd).grid(
+            row=0, column=_col, sticky="ew",
+            padx=(0 if _col == 0 else 4, 0))
 
     # Database panel
     db_body = make_panel(left_panel, "Database")
