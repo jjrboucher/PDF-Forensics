@@ -812,6 +812,61 @@ REPORTS = [
         "sticky_cols": 1,
     },
 
+    # -----------------------------------------------------------------
+    # 16. Document Risk Summary
+    # -----------------------------------------------------------------
+    {
+        "id": "document_risk",
+        "name": "Document Risk Summary",
+        "description":
+            "One row per analyzed PDF, ranked by document risk score. "
+            "The document score aggregates page/document-level signals "
+            "(text overlays, font anomalies) that are not tied to any "
+            "single image, plus the presence of reviewer comments, so "
+            "these signals are visible in a ranked view rather than only "
+            "in their own detail reports. The highest page risk and the "
+            "contributing finding types are shown alongside.",
+        "query": """
+            SELECT
+                a.pdf_filename                  AS "Filename",
+                a.doc_risk_score                AS "Document Risk",
+                COALESCE(MAX(p.risk_score), 0)  AS "Highest Page Risk",
+                COALESCE((
+                    SELECT GROUP_CONCAT(DISTINCT ft.code)
+                    FROM findings f
+                    JOIN pages p2         ON p2.id = f.page_id
+                    JOIN finding_types ft ON ft.id = f.finding_type_id
+                    WHERE p2.analysis_id = a.id
+                      AND ft.code IN ('TEXT_OVERLAY', 'FONT_ANOMALY')
+                ), '')                          AS "Contributing Findings",
+                (SELECT COUNT(*) FROM comments c
+                 WHERE c.analysis_id = a.id)    AS "Comments",
+                a.total_pages                   AS "Pages",
+                a.pdf_md5                       AS "PDF MD5"
+            FROM analyses a
+            LEFT JOIN pages p ON p.analysis_id = a.id
+            GROUP BY a.id
+            ORDER BY a.doc_risk_score DESC, a.pdf_filename
+        """,
+        "columns": [
+            {"name": "Filename",              "label": "Filename",
+             "col_type": "text"},
+            {"name": "Document Risk",         "label": "Document Risk",
+             "col_type": "numeric"},
+            {"name": "Highest Page Risk",     "label": "Highest Page Risk",
+             "col_type": "numeric"},
+            {"name": "Contributing Findings", "label": "Contributing Findings",
+             "col_type": "text"},
+            {"name": "Comments",              "label": "Comments",
+             "col_type": "numeric"},
+            {"name": "Pages",                 "label": "Pages",
+             "col_type": "numeric"},
+            {"name": "PDF MD5",               "label": "PDF MD5",
+             "col_type": "hash"},
+        ],
+        "sticky_cols": 1,
+    },
+
 ]
 
 
@@ -829,6 +884,7 @@ def get_report_by_id(report_id):
 # Each entry is (group_label, [report_id, ...]).
 REPORT_GROUPS = [
     ("Document Overview & Provenance", [
+        "document_risk",
         "metadata",
         "creator_producer",
         "exif_gps",

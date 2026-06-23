@@ -1,5 +1,32 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-06-23)
+
+### Document-level risk scoring and Document Risk Summary report
+- New document-level risk dimension. Findings that describe a page or the
+  document as a whole rather than a single image — text overlays
+  (TEXT_OVERLAY) and font anomalies (FONT_ANOMALY) — are now scored
+  separately from per-image risk, alongside a small informational flag for
+  the presence of reviewer comments. Each finding type contributes to
+  exactly one dimension, so nothing is double-counted and nothing is
+  detected-but-unscored.
+- Scoring (analysis/risk.py): added compute_document_risk(), producing a
+  per-page score (sum of document-level finding weights, capped at 100) and
+  a document score (the maximum page score plus the comment flag, capped at
+  100). TEXT_OVERLAY (+35) and FONT_ANOMALY (+15) moved out of the per-image
+  weight table into DOC_RISK_WEIGHTS; COMMENT_RISK_WEIGHT is +5. Per-image
+  scores are unchanged.
+- Schema revision 6: added analyses.doc_risk_score and pages.risk_score
+  (both INTEGER DEFAULT 0). The migration is additive and idempotent;
+  opening an older database upgrades it in place with no data loss.
+- New "Document Risk Summary" report (report id document_risk): one row per
+  analyzed PDF, ranked by document risk, showing the highest page risk, the
+  contributing document-level finding types, and the comment count. It leads
+  the Document Overview & Provenance report group.
+- Documentation: the Risk Scoring guides (technical and broader) gain a
+  section on the document-level dimension and its weights; the HTML Reports
+  guides (technical and broader) document the new report.
+
 ## v1.0.0 — Update (2026-06-22b)
 
 ### Font consistency report, report reorganization, tooltips, progress bar

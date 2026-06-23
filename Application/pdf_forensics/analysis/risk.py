@@ -1,15 +1,34 @@
 """
-Per-image risk score computation.
+Risk score computation.
+
+Two independent risk dimensions are computed:
+
+  * Per-image risk (``compute_risk_scores``) scores each individual
+    image placement from findings that are tied to a specific image
+    (cropping, off-page, overlap, soft masks, DPI anomalies, ...).
+
+  * Document risk (``compute_document_risk``) scores the *document*
+    and its *pages* from findings that are not tied to any single
+    image (text overlays, font anomalies) plus the presence of
+    reviewer comments. These signals are properties of a page or the
+    document as a whole, so they cannot be attributed to one image and
+    are scored separately rather than being folded into image scores.
+
+Each finding type contributes to exactly one of the two dimensions, so
+nothing is double-counted and nothing is silently dropped.
 """
 
 # Per-finding contribution to an image's risk score.
 # Scores accumulate (capped at 100).
+#
+# Note: document/page-level finding types (TEXT_OVERLAY, FONT_ANOMALY)
+# are deliberately NOT in this table. They are not tied to a single
+# image, so they are scored by compute_document_risk instead.
 RISK_WEIGHTS = {
     "BBOX_CROP":            30,
     "EXPLICIT_CLIP":        30,
     "OFFPAGE":              25,
     "DPI_ANOMALY":          20,
-    "TEXT_OVERLAY":         35,
     "OVERLAP_BACK_FULL":    35,
     "OVERLAP_BACK_PARTIAL": 15,
     "OVERLAP_FRONT_FULL":   20,
@@ -18,6 +37,19 @@ RISK_WEIGHTS = {
     "IMAGE_SMASK":           5,
     "COMPLEX_TRANSFORM":     5,
 }
+
+# Per-finding contribution to a page's (and thus the document's) risk
+# score. These are document/page-level signals that are not attributable
+# to any single image. Scores accumulate per page (capped at 100).
+DOC_RISK_WEIGHTS = {
+    "TEXT_OVERLAY":  35,   # overlaid text/annotation — strong alteration signal
+    "FONT_ANOMALY":  15,   # out-of-place font — corroborating, higher FP rate
+}
+
+# The presence of any reviewer comments / markup annotations adds a small
+# flat amount to the document score. This is informational: comments are
+# not themselves evidence of manipulation, but they are worth surfacing.
+COMMENT_RISK_WEIGHT = 5
 
 RISK_SCORE_CAP = 100
 
@@ -83,3 +115,47 @@ def compute_risk_scores(findings, label_to_info):
     # Cap at 100
     return {label: min(s, RISK_SCORE_CAP)
             for label, s in scores.items()}
+
+
+def compute_document_risk(all_findings, comments=None):
+    """
+    Compute page-level and document-level risk scores.
+
+    These cover document/page-level finding types that are not tied to a
+    single image (so the per-image scorer cannot attribute them), plus a
+    small informational contribution for the presence of reviewer
+    comments.
+
+    Parameters:
+      all_findings : {page_number: [finding dict, ...]}
+                     the same per-page findings structure the engine
+                     builds; the page number is taken from the dict key,
+                     so individual findings need not carry a page field.
+      comments     : optional list of extracted comment/markup dicts.
+
+    Returns (page_scores, doc_score):
+      page_scores : {page_number: int 0..100} — each page's accumulated
+                    document-level finding weight, capped at 100.
+      doc_score   : int 0..100 — the most suspicious page's score plus a
+                    flat amount if any reviewer comments are present,
+                    capped at 100.
+
+    The document score intentionally uses the maximum page score (not the
+    sum across pages) so that one heavily-flagged page is not diluted by,
+    nor does it inflate the count of, other clean pages. The score answers
+    "how suspicious is the most suspicious page of this document?" rather
+    than "how many findings does the document have in total?".
+    """
+    page_scores = {}
+    for page_num, findings in all_findings.items():
+        score = 0
+        for f in findings:
+            score += DOC_RISK_WEIGHTS.get(f.get("type"), 0)
+        page_scores[page_num] = min(score, RISK_SCORE_CAP)
+
+    doc_score = max(page_scores.values(), default=0)
+    if comments:
+        doc_score += COMMENT_RISK_WEIGHT
+    doc_score = min(doc_score, RISK_SCORE_CAP)
+
+    return page_scores, doc_score

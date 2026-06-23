@@ -31,7 +31,9 @@ from pdf_forensics.analysis.detectors import (
     check_content_stream_text_overlay, check_text_over_text,
     collect_page_fonts, check_font_anomalies,
 )
-from pdf_forensics.analysis.risk import compute_risk_scores
+from pdf_forensics.analysis.risk import (
+    compute_risk_scores, compute_document_risk,
+)
 
 
 def print_report(all_findings):
@@ -312,14 +314,28 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     doc_mu.close()
     doc_pk.close()
 
+    # Document-level risk: aggregate page/document-level findings (text
+    # overlays, font anomalies) and the presence of reviewer comments
+    # into a per-page and a document-wide score. Kept separate from the
+    # per-image scores so document-level signals draw the examiner's eye
+    # in ranked views instead of being detected but invisible.
+    page_risk_scores, doc_risk = compute_document_risk(
+        all_findings, pdf_comments)
+    for pg, pd in page_data.items():
+        pd["page_risk"] = page_risk_scores.get(pg, 0)
+
     if not quiet:
         print_report(all_findings)
+        if doc_risk:
+            _out(f"  Document risk score: {doc_risk} "
+                 f"(highest page: {max(page_risk_scores.values(), default=0)})")
 
     save_to_db(conn, pdf_path, total_pages, page_data,
                pdf_metadata=pdf_metadata,
                pdf_versions=pdf_versions,
                store_images=store_images,
-               comments=pdf_comments)
+               comments=pdf_comments,
+               doc_risk=doc_risk)
     if own_conn:
         conn.close()
 

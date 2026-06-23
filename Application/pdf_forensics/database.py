@@ -81,14 +81,16 @@ def init_db(db_path, session=None):
             pdf_size_bytes INTEGER NOT NULL,
             pdf_md5       TEXT    NOT NULL,
             total_pages   INTEGER NOT NULL,
-            analyzed_at   TEXT    NOT NULL
+            analyzed_at   TEXT    NOT NULL,
+            doc_risk_score INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS pages (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             analysis_id   INTEGER NOT NULL
                           REFERENCES analyses(id) ON DELETE CASCADE,
-            page_number   INTEGER NOT NULL
+            page_number   INTEGER NOT NULL,
+            risk_score    INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS image_data (
@@ -259,6 +261,19 @@ def init_db(db_path, session=None):
         cur.execute(
             "ALTER TABLE findings ADD COLUMN obj_locator TEXT")
 
+    # Migration: document/page risk score columns (rev 6).
+    # Additive and idempotent — harmless if run against an older dev DB.
+    cur.execute("PRAGMA table_info(analyses)")
+    analyses_cols = {row[1] for row in cur.fetchall()}
+    if "doc_risk_score" not in analyses_cols:
+        cur.execute(
+            "ALTER TABLE analyses ADD COLUMN doc_risk_score INTEGER DEFAULT 0")
+    cur.execute("PRAGMA table_info(pages)")
+    pages_cols = {row[1] for row in cur.fetchall()}
+    if "risk_score" not in pages_cols:
+        cur.execute(
+            "ALTER TABLE pages ADD COLUMN risk_score INTEGER DEFAULT 0")
+
     # Migration: comments table (rev 5)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS comments (
@@ -350,8 +365,13 @@ def check_pdf_already_analyzed(conn, pdf_path):
 
 def save_to_db(conn, pdf_path, total_pages, page_data,
                pdf_metadata=None, pdf_versions=None,
-               store_images=True, comments=None):
-    """Write all analysis results to the SQLite database."""
+               store_images=True, comments=None, doc_risk=0):
+    """Write all analysis results to the SQLite database.
+
+    doc_risk : the document-level risk score (0..100). Per-page risk
+               scores are read from each page_data entry's "page_risk"
+               key (defaulting to 0 when absent).
+    """
     from pdf_forensics.analysis.metadata import extract_image_metadata
     cur = conn.cursor()
 
@@ -364,8 +384,9 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
 
     cur.execute("""
         INSERT INTO analyses (pdf_filename, pdf_path, pdf_size_bytes,
-                              pdf_md5, total_pages, analyzed_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+                              pdf_md5, total_pages, analyzed_at,
+                              doc_risk_score)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
         os.path.basename(pdf_path),
         os.path.abspath(pdf_path),
@@ -373,6 +394,7 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
         pdf_md5_hex,
         total_pages,
         datetime.now(timezone.utc).isoformat(),
+        int(doc_risk or 0),
     ))
     analysis_id = cur.lastrowid
 
@@ -422,8 +444,9 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
         pd = page_data[page_num]
 
         cur.execute("""
-            INSERT INTO pages (analysis_id, page_number) VALUES (?, ?)
-        """, (analysis_id, page_num))
+            INSERT INTO pages (analysis_id, page_number, risk_score)
+            VALUES (?, ?, ?)
+        """, (analysis_id, page_num, int(pd.get("page_risk", 0) or 0)))
         page_id = cur.lastrowid
 
         label_to_info = pd["label_to_info"]
