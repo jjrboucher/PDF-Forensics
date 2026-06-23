@@ -336,13 +336,19 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         "main":     (780, 540),
         "analysis": (1200, 860),
         "graph":    (1060, 540),
-        "reports":  (1180, 860),
+        "reports":  (1180, 1000),
     }
 
     def center_window(w, h):
-        """Position window centered horizontally, biased toward top."""
+        """Position window centered horizontally, biased toward top.
+        Clamp the requested size to the available screen so a tall window
+        (e.g. the reports menu) never extends past the display on smaller
+        laptop screens."""
         screen_w = root.winfo_screenwidth()
         screen_h = root.winfo_screenheight()
+        # Leave a margin for the OS taskbar / window chrome.
+        w = min(w, screen_w - 40)
+        h = min(h, screen_h - 80)
         x = max(0, (screen_w - w) // 2)
         y = max(0, (screen_h - h) // 4)  # 1/4 from top, not 1/2
         root.geometry(f"{w}x{h}+{x}+{y}")
@@ -370,6 +376,58 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         body = tk.Frame(inner, bg=BG_PANEL)
         body.pack(fill="x", padx=14, pady=(0, 12))
         return body
+
+    def attach_tooltip(widget, text, wraplength=320):
+        """Attach a hover tooltip to a widget. The tip appears after a
+        short delay near the cursor and disappears on leave. Reusable
+        across the reports, graph, and analysis menus."""
+        if not text:
+            return
+        state = {"tip": None, "after": None}
+
+        def show():
+            if state["tip"] is not None:
+                return
+            try:
+                x = widget.winfo_pointerx() + 14
+                y = widget.winfo_pointery() + 18
+            except Exception:
+                return
+            tip = tk.Toplevel(widget)
+            tip.wm_overrideredirect(True)
+            tip.wm_geometry(f"+{x}+{y}")
+            tip.configure(bg=BORDER)
+            lbl = tk.Label(
+                tip, text=text, justify="left", bg="#2B2B2B",
+                fg=TEXT_PRIM, font=FONT_SUBTITLE, wraplength=wraplength,
+                padx=8, pady=6, bd=0)
+            lbl.pack(padx=1, pady=1)
+            state["tip"] = tip
+
+        def schedule(_e=None):
+            cancel_after()
+            state["after"] = widget.after(450, show)
+
+        def hide(_e=None):
+            cancel_after()
+            if state["tip"] is not None:
+                try:
+                    state["tip"].destroy()
+                except Exception:
+                    pass
+                state["tip"] = None
+
+        def cancel_after():
+            if state["after"] is not None:
+                try:
+                    widget.after_cancel(state["after"])
+                except Exception:
+                    pass
+                state["after"] = None
+
+        widget.bind("<Enter>", schedule, add="+")
+        widget.bind("<Leave>", hide, add="+")
+        widget.bind("<ButtonPress>", hide, add="+")
 
     # ===================================================================
     # MAIN MENU FRAME
@@ -790,6 +848,23 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     advanced_widgets = [store_cb, versions_cb, skip_cb,
                         db_entry]
 
+    attach_tooltip(triage_cb,
+                   "Quick scan that writes a triage spreadsheet (Excel) "
+                   "instead of running the full forensic analysis \u2014 a "
+                   "fast overview of many files, with per-file metadata and "
+                   "any reviewer comments.")
+    attach_tooltip(store_cb,
+                   "Save each extracted image into the database so reports "
+                   "and the relationship graph can show image thumbnails. "
+                   "Increases database size.")
+    attach_tooltip(versions_cb,
+                   "When a PDF contains incremental updates (multiple "
+                   "%%EOF markers), extract and analyze the earlier saved "
+                   "versions as well, not just the current one.")
+    attach_tooltip(skip_cb,
+                   "Skip any PDF whose hash already exists in the selected "
+                   "database, avoiding duplicate analysis on re-runs.")
+
     # Remember pre-triage checkbox states
     _pre_triage_state = {
         "store": True,
@@ -852,6 +927,42 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     counter_label(counter_row, "Processed", count_processed, SUCCESS)
     counter_label(counter_row, "Failed", count_failed, ACCENT)
     counter_label(counter_row, "Images", count_images)
+
+    # Progress bar + per-PDF status label (GUI-03). Shown during batch
+    # analysis/triage so the operator sees overall progress and which file
+    # is being processed, instead of relying on the scrolling log alone.
+    progress_outer = tk.Frame(right_panel, bg=BORDER, padx=1, pady=1)
+    progress_outer.pack(fill="x", pady=(0, 8))
+    progress_inner = tk.Frame(progress_outer, bg=BG_PANEL)
+    progress_inner.pack(fill="x")
+    progress_status_var = tk.StringVar(value="Idle")
+    tk.Label(progress_inner, textvariable=progress_status_var,
+             bg=BG_PANEL, fg=TEXT_SEC, font=(FONT_FAMILY, 9),
+             anchor="w").pack(fill="x", padx=10, pady=(8, 2))
+    analysis_progress = ttk.Progressbar(
+        progress_inner, mode="determinate", maximum=100, value=0)
+    analysis_progress.pack(fill="x", padx=10, pady=(0, 10))
+
+    def progress_reset(total_files):
+        analysis_progress.config(mode="determinate",
+                                 maximum=max(1, total_files), value=0)
+        progress_status_var.set(
+            f"Starting \u2014 0 of {total_files} file(s)")
+        root.update_idletasks()
+
+    def progress_set_file(done, total, name, page=None, pages=None):
+        analysis_progress.config(maximum=max(1, total), value=done)
+        msg = f"File {min(done + 1, total)} of {total}: {name}"
+        if page and pages:
+            msg += f"  \u2014  page {page}/{pages}"
+        progress_status_var.set(msg)
+        root.update_idletasks()
+
+    def progress_done(processed, failed):
+        analysis_progress.config(value=analysis_progress["maximum"])
+        progress_status_var.set(
+            f"Complete \u2014 {processed} processed, {failed} failed")
+        root.update_idletasks()
 
     # Scrollable log
     log_outer = tk.Frame(right_panel, bg=BORDER, padx=1, pady=1)
@@ -964,6 +1075,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         process_queue = list(pdf_files)
         is_extracted_version = set()  # indices of extracted versions
         queue_idx = 0
+        progress_reset(len(process_queue))
 
         while queue_idx < len(process_queue):
             pdf_path = process_queue[queue_idx]
@@ -988,10 +1100,14 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             log_text.insert("end", "starting...\n", "dim")
             log_text.see("end")
             log_text.config(state="disabled")
+            # Update the progress bar / status label for this file.
+            progress_set_file(queue_idx - 1, len(process_queue), basename)
             root.update_idletasks()
 
             def on_page_progress(page_num, total_pages,
-                                 _idx=progress_idx, _name=basename):
+                                 _idx=progress_idx, _name=basename,
+                                 _done=queue_idx - 1,
+                                 _total=len(process_queue)):
                 log_text.config(state="normal")
                 log_text.delete(_idx, f"{_idx} lineend + 1 char")
                 log_text.insert(_idx,
@@ -999,6 +1115,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     f"page {page_num}/{total_pages}\n", "dim")
                 log_text.see("end")
                 log_text.config(state="disabled")
+                progress_set_file(_done, _total, _name,
+                                  page=page_num, pages=total_pages)
                 root.update_idletasks()
 
             try:
@@ -1093,6 +1211,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
         conn.close()
 
+        progress_done(processed, failed)
+
         log_to_gui("")
         log_to_gui(
             f"Done: {processed} processed, {failed} failed, "
@@ -1138,6 +1258,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         log_to_gui(f"Triage: {len(pdf_files)} PDF(s)...", "bold")
         log_to_gui(f"Output: {xlsx_path}", "dim")
         log_to_gui("")
+        progress_reset(len(pdf_files))
 
         try:
             triage_count = 0
@@ -1149,6 +1270,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 count_processed.set(str(idx))
                 log_to_gui(f"  \u25cb {filename} ({idx}/{total})",
                            "dim")
+                progress_set_file(idx - 1, total, filename)
 
             processed, skipped, out = run_triage(
                 list(pdf_files), xlsx_path,
@@ -1157,6 +1279,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
             count_processed.set(str(processed))
             count_failed.set(str(skipped))
+            progress_done(processed, skipped)
 
             log_to_gui("")
             log_to_gui(
@@ -1244,15 +1367,31 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         "cross_page": tk.BooleanVar(value=True),
         "cross_document": tk.BooleanVar(value=True),
     }
-    ttk.Checkbutton(scope_body,
-                    text="All placements (image appears 2+ times)",
-                    variable=scope_vars["all_placements"]).pack(anchor="w")
-    ttk.Checkbutton(scope_body,
-                    text="Cross-page (image on 2+ distinct pages)",
-                    variable=scope_vars["cross_page"]).pack(anchor="w")
-    ttk.Checkbutton(scope_body,
-                    text="Cross-document (image in 2+ documents)",
-                    variable=scope_vars["cross_document"]).pack(anchor="w")
+    _scope_all = ttk.Checkbutton(
+        scope_body, text="All placements (image appears 2+ times)",
+        variable=scope_vars["all_placements"])
+    _scope_all.pack(anchor="w")
+    attach_tooltip(_scope_all,
+                   "Graph every image that appears two or more times "
+                   "anywhere in the analyzed set \u2014 the broadest view "
+                   "of image reuse, including repeats within a single page.")
+    _scope_cp = ttk.Checkbutton(
+        scope_body, text="Cross-page (image on 2+ distinct pages)",
+        variable=scope_vars["cross_page"])
+    _scope_cp.pack(anchor="w")
+    attach_tooltip(_scope_cp,
+                   "Only graph images that recur on two or more different "
+                   "pages, highlighting content reused across pages of a "
+                   "document.")
+    _scope_cd = ttk.Checkbutton(
+        scope_body, text="Cross-document (image in 2+ documents)",
+        variable=scope_vars["cross_document"])
+    _scope_cd.pack(anchor="w")
+    attach_tooltip(_scope_cd,
+                   "Only graph images that appear in two or more separate "
+                   "documents \u2014 useful for spotting a shared stamp, "
+                   "signature, or template across supposedly independent "
+                   "files.")
 
     # Generate button
     action_row_g = tk.Frame(g_left, bg=BG_DARK)
@@ -1463,32 +1602,33 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     ttk.Button(rdb_row, text="Browse",
                command=choose_report_db).pack(side="left")
 
-    # Report checkboxes
-    from pdf_forensics.reports.queries import list_reports as _list_rpts
-    report_list = _list_rpts()
+    # Report checkboxes, grouped by analytical theme with tooltips.
+    from pdf_forensics.reports.queries import (
+        list_reports as _list_rpts,
+        list_report_groups as _list_rpt_groups)
 
     rpt_body = make_panel(r_left, "Select reports")
     report_vars = {}
 
-    # Two-column grid so a long list of reports stays fully visible on
-    # smaller (laptop) screens without the panel running off the bottom.
-    rpt_grid = tk.Frame(rpt_body, bg=BG_PANEL)
-    rpt_grid.pack(fill="x")
-    rpt_grid.grid_columnconfigure(0, weight=1, uniform="rptcol")
-    rpt_grid.grid_columnconfigure(1, weight=1, uniform="rptcol")
-
-    # Balance the columns: left column takes the first half (rounded up),
-    # so when the count is odd the left column is the longer one.
-    _n = len(report_list)
-    _rows_per_col = (_n + 1) // 2
-    for _i, (rid, rname, rdesc) in enumerate(report_list):
-        var = tk.BooleanVar(value=True)
-        report_vars[rid] = var
-        col = 0 if _i < _rows_per_col else 1
-        row = _i if _i < _rows_per_col else _i - _rows_per_col
-        ttk.Checkbutton(rpt_grid, text=rname,
-                        variable=var).grid(
-            row=row, column=col, sticky="w", padx=(0, 10), pady=1)
+    # Render each group: a small header, then its reports in two columns.
+    for _label, _items in _list_rpt_groups():
+        hdr = tk.Label(rpt_body, text=_label.upper(), bg=BG_PANEL,
+                       fg=ACCENT, font=(FONT_FAMILY, 8, "bold"),
+                       anchor="w")
+        hdr.pack(anchor="w", pady=(6, 1))
+        grid = tk.Frame(rpt_body, bg=BG_PANEL)
+        grid.pack(fill="x")
+        grid.grid_columnconfigure(0, weight=1, uniform="rptcol")
+        grid.grid_columnconfigure(1, weight=1, uniform="rptcol")
+        half = (len(_items) + 1) // 2
+        for _i, (rid, rname, rdesc) in enumerate(_items):
+            var = tk.BooleanVar(value=True)
+            report_vars[rid] = var
+            col = 0 if _i < half else 1
+            row = _i if _i < half else _i - half
+            cb = ttk.Checkbutton(grid, text=rname, variable=var)
+            cb.grid(row=row, column=col, sticky="w", padx=(0, 10), pady=1)
+            attach_tooltip(cb, rdesc)
 
     # Select all / none buttons
     rpt_btns = tk.Frame(rpt_body, bg=BG_PANEL)
@@ -1511,17 +1651,16 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # Visual overlay report option
     visual_opts = make_panel(r_left, "Visual report")
     visual_report_var = tk.BooleanVar(value=True)
-    ttk.Checkbutton(
+    _visual_cb = ttk.Checkbutton(
         visual_opts,
         text="Generate visual overlay report (annotated page images)",
-        variable=visual_report_var).pack(anchor="w")
-    ttk.Label(
-        visual_opts,
-        text=("Renders flagged pages with detected text/image overlays "
-              "highlighted, for non-technical review. Requires the "
-              "source PDF(s) to be accessible."),
-        style="Hint.TLabel", wraplength=380,
-        justify="left").pack(anchor="w", pady=(2, 0))
+        variable=visual_report_var)
+    _visual_cb.pack(anchor="w")
+    attach_tooltip(
+        _visual_cb,
+        "Renders flagged pages with detected text/image overlays "
+        "highlighted, for non-technical review. Requires the source "
+        "PDF(s) to be accessible.")
 
     # --- RIGHT: status log ---
     r_log_outer = tk.Frame(r_right, bg=BORDER, padx=1, pady=1)

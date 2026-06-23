@@ -778,6 +778,40 @@ REPORTS = [
         "sticky_cols": 1,
     },
 
+    # -----------------------------------------------------------------
+    # Font Consistency Analysis (ANAL-03)
+    # -----------------------------------------------------------------
+    {
+        "id": "font_anomaly",
+        "name": "Font Consistency Analysis",
+        "description":
+            "Text spans whose font is inconsistent with the document's "
+            "dominant body font. Text inserted by a different application "
+            "during an alteration commonly uses a different font, subset, "
+            "or encoding than the surrounding text, so an out-of-place "
+            "font is an independent indicator of an in-place edit.",
+        "query": """
+            SELECT
+                a.pdf_filename       AS "Filename",
+                p.page_number        AS "Page",
+                f.detail             AS "Detail",
+                a.pdf_md5            AS "PDF MD5"
+            FROM findings f
+            JOIN finding_types ft  ON ft.id = f.finding_type_id
+            JOIN pages p           ON p.id = f.page_id
+            JOIN analyses a        ON a.id = p.analysis_id
+            WHERE ft.code = 'FONT_ANOMALY'
+            ORDER BY a.pdf_filename, p.page_number
+        """,
+        "columns": [
+            {"name": "Filename", "label": "Filename", "col_type": "text"},
+            {"name": "Page",     "label": "Page",     "col_type": "numeric"},
+            {"name": "Detail",   "label": "Detail",   "col_type": "text"},
+            {"name": "PDF MD5",  "label": "PDF MD5",  "col_type": "hash"},
+        ],
+        "sticky_cols": 1,
+    },
+
 ]
 
 
@@ -789,6 +823,77 @@ def get_report_by_id(report_id):
     return None
 
 
+# Canonical grouping / ordering of reports, arranged to follow an
+# examiner's workflow: document provenance first, then signs of
+# alteration, then image-specific findings, then cross-document / review.
+# Each entry is (group_label, [report_id, ...]).
+REPORT_GROUPS = [
+    ("Document Overview & Provenance", [
+        "metadata",
+        "creator_producer",
+        "exif_gps",
+        "incremental_updates",
+    ]),
+    ("Manipulation & Alteration", [
+        "manipulation_detail",
+        "text_overlay",
+        "font_anomaly",
+        "overlap_concealment",
+        "dpi_analysis",
+    ]),
+    ("Image Analysis", [
+        "high_risk",
+        "offpage",
+        "stamp_reuse",
+    ]),
+    ("Cross-Document & Review", [
+        "cross_document",
+        "doc_comparison",
+        "document_comments",
+    ]),
+]
+
+
+def _ordered_report_ids():
+    """Report ids in canonical (grouped) order, with any report not listed
+    in REPORT_GROUPS appended at the end so nothing is ever dropped."""
+    ordered = [rid for _label, ids in REPORT_GROUPS for rid in ids]
+    known = set(ordered)
+    for r in REPORTS:
+        if r["id"] not in known:
+            ordered.append(r["id"])
+    return ordered
+
+
 def list_reports():
-    """Return a list of (id, name, description) tuples."""
-    return [(r["id"], r["name"], r["description"]) for r in REPORTS]
+    """Return a list of (id, name, description) tuples in canonical order."""
+    by_id = {r["id"]: r for r in REPORTS}
+    out = []
+    for rid in _ordered_report_ids():
+        r = by_id.get(rid)
+        if r:
+            out.append((r["id"], r["name"], r["description"]))
+    return out
+
+
+def list_report_groups():
+    """Return [(group_label, [(id, name, description), ...]), ...] in
+    canonical order, for grouped display in the UI."""
+    by_id = {r["id"]: r for r in REPORTS}
+    groups = []
+    placed = set()
+    for label, ids in REPORT_GROUPS:
+        items = []
+        for rid in ids:
+            r = by_id.get(rid)
+            if r:
+                items.append((r["id"], r["name"], r["description"]))
+                placed.add(rid)
+        if items:
+            groups.append((label, items))
+    # Any reports not assigned to a group go in a trailing "Other" group.
+    leftovers = [(r["id"], r["name"], r["description"])
+                 for r in REPORTS if r["id"] not in placed]
+    if leftovers:
+        groups.append(("Other", leftovers))
+    return groups

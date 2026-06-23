@@ -29,6 +29,7 @@ from pdf_forensics.analysis.detectors import (
     check_image_smasks, check_offpage_images,
     check_dpi_anomalies, check_text_overlays,
     check_content_stream_text_overlay, check_text_over_text,
+    collect_page_fonts, check_font_anomalies,
 )
 from pdf_forensics.analysis.risk import compute_risk_scores
 
@@ -171,6 +172,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     all_findings = {}
     page_data = {}
     total_extracted = 0
+    doc_font_spans = []   # accumulated across pages for font analysis (ANAL-03)
 
     for page_idx in range(total_pages):
         page_num = page_idx + 1
@@ -251,6 +253,9 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
             page_pk, page_mu, page_num, findings)
         check_text_over_text(page_mu, page_num, findings, page_pk=page_pk)
 
+        # Collect font usage for document-level font consistency analysis
+        doc_font_spans.extend(collect_page_fonts(page_mu, page_num))
+
         # Compute per-image risk scores from the findings on this page
         risk_scores = compute_risk_scores(findings, label_to_info)
 
@@ -277,6 +282,22 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 else:
                     all_findings[pg] = [df]
                 # Recompute risk scores for affected pages
+                page_data[pg]["risk_scores"] = compute_risk_scores(
+                    page_data[pg]["findings"],
+                    page_data[pg]["label_to_info"])
+
+    # Document-level font consistency analysis (ANAL-03), runs after all
+    # pages so the dominant body font can be established document-wide.
+    font_findings = check_font_anomalies(doc_font_spans)
+    if font_findings:
+        for ff in font_findings:
+            pg = ff["page_num"]
+            if pg in page_data:
+                page_data[pg]["findings"].append(ff)
+                if pg in all_findings:
+                    all_findings[pg].append(ff)
+                else:
+                    all_findings[pg] = [ff]
                 page_data[pg]["risk_scores"] = compute_risk_scores(
                     page_data[pg]["findings"],
                     page_data[pg]["label_to_info"])

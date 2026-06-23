@@ -50,6 +50,7 @@ FINDING_TYPE_DEFS = {
     "OFFPAGE":              ("Image extends beyond page boundary",      "HIGH"),
     "DPI_ANOMALY":          ("Inconsistent image resolution",           "HIGH"),
     "TEXT_OVERLAY":         ("Annotation overlaid on page text",        "HIGH"),
+    "FONT_ANOMALY":         ("Font inconsistent with document body",    "MEDIUM"),
     "SOFT_MASK":            ("Soft mask on Form XObject",               "INFO"),
     "IMAGE_SMASK":          ("Soft mask on Image XObject",              "INFO"),
     "COMPLEX_TRANSFORM":    ("Complex transform (manual review needed)","INFO"),

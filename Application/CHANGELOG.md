@@ -1,5 +1,28 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-06-22b)
+
+### Font consistency report, report reorganization, tooltips, progress bar
+- New "Font Consistency Analysis" report (ANAL-03): a document-level
+  detector flags text spans whose font is inconsistent with the
+  document's dominant body font, an independent indicator of in-place
+  edits. Added a FONT_ANOMALY finding type (Medium severity); the report
+  is selected by default in the Reports menu.
+- The Reports list is reorganized into a logical, workflow-based order
+  grouped under headings: Document Overview & Provenance, Manipulation &
+  Alteration, Image Analysis, and Cross-Document & Review. The Visual
+  Report panel moves down to accommodate the grouped list.
+- Hover tooltips with brief descriptions were added to every report in the
+  Reports menu, to the graph scope options, and to the analysis options in
+  the PDF analysis menu.
+- GUI-03: batch analysis and triage now show a determinate progress bar
+  with a per-file status label (file N of M, and current page), replacing
+  the text-only progress indication.
+- Fixed the Reports window being too short for the grouped report list:
+  the window is taller, the Visual Report panel's description moved to a
+  hover tooltip to reclaim space, and window sizes are now clamped to the
+  display so a tall window never extends off smaller laptop screens.
+
 ## v1.0.0 — Update (2026-06-22)
 
 ### Add a folder of PDFs

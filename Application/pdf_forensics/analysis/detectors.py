@@ -1322,3 +1322,164 @@ def check_text_over_text(page_mu, page_num, findings, page_pk=None):
         added += 1
 
     return added
+
+# ===================================================================
+# Font consistency analysis (ANAL-03)
+# ===================================================================
+# A document body is normally typeset in one dominant font (with a small
+# number of related faces for bold/italic/headings). Text inserted by a
+# different application during an alteration frequently uses a different
+# font or encoding. This detector flags text spans whose font is
+# inconsistent with the document's dominant body font.
+#
+# To keep false positives low it:
+#   * measures "dominant" by total character count across the whole
+#     document (not per page),
+#   * normalizes font names so bold/italic/weight variants of the same
+#     family are treated as the same family (a heading in the bold variant
+#     of the body font is not an anomaly),
+#   * ignores very rare incidental glyphs and whitespace-only spans,
+#   * only flags fonts whose share of document text is below a threshold,
+#     i.e. genuinely out-of-place rather than a second legitimate face.
+
+FONT_ANOMALY_MAX_SHARE = 0.05      # flag fonts used for < 5% of body text
+FONT_ANOMALY_MIN_CHARS = 3         # ignore spans shorter than this
+FONT_ANOMALY_MIN_DOC_CHARS = 200   # skip tiny docs (not enough body to
+                                   # establish a dominant font reliably)
+
+
+def _normalize_font_family(font_name):
+    """
+    Reduce a PDF font name to a comparable family key by stripping the
+    subset prefix (e.g. "ABCDEF+") and common style suffixes so that
+    bold/italic/weight variants of one family compare equal.
+    """
+    if not font_name:
+        return ""
+    name = str(font_name)
+    # Strip subset prefix "ABCDEF+Arial"
+    if "+" in name:
+        name = name.split("+", 1)[1]
+    # Drop everything after the first comma or hyphen (style descriptors)
+    for sep in (",", "-"):
+        if sep in name:
+            name = name.split(sep, 1)[0]
+    name = name.lower().strip()
+    # Remove trailing style words that may be glued on (ArialBold, etc.)
+    for suffix in ("bold", "italic", "oblique", "regular", "light",
+                   "medium", "semibold", "demibold", "black", "heavy",
+                   "thin", "book", "roman", "mt", "ps"):
+        while name.endswith(suffix) and len(name) > len(suffix):
+            name = name[: -len(suffix)]
+    return name.strip()
+
+
+def collect_page_fonts(page_mu, page_num):
+    """
+    Collect per-span font usage for a single page.
+
+    Returns a list of span records:
+        {"page_num", "font", "family", "text", "nchars", "bbox", "size"}
+    bbox is in PyMuPDF top-left coordinates. Whitespace-only spans are
+    skipped. This is gathered during the page loop and analysed later by
+    check_font_anomalies (a document-level pass).
+    """
+    spans = []
+    try:
+        data = page_mu.get_text("dict")
+    except Exception:
+        return spans
+
+    for block in data.get("blocks", []):
+        if block.get("type", 0) != 0:   # 0 == text block
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text = span.get("text", "")
+                stripped = text.strip()
+                if not stripped:
+                    continue
+                font = span.get("font", "") or ""
+                bbox = span.get("bbox", None)
+                spans.append({
+                    "page_num": page_num,
+                    "font": font,
+                    "family": _normalize_font_family(font),
+                    "text": text,
+                    "nchars": len(stripped),
+                    "bbox": tuple(bbox) if bbox else None,
+                    "size": round(float(span.get("size", 0.0)), 1),
+                })
+    return spans
+
+
+def check_font_anomalies(page_spans):
+    """
+    Document-level font consistency analysis.
+
+    Parameters:
+      page_spans: list of span records produced by collect_page_fonts
+                  across every page of the document.
+
+    Returns a list of finding dicts (each with a "page_num" key) of type
+    FONT_ANOMALY, one per contiguous run of out-of-place spans.
+    """
+    findings = []
+    if not page_spans:
+        return findings
+
+    total_chars = sum(s["nchars"] for s in page_spans)
+    if total_chars < FONT_ANOMALY_MIN_DOC_CHARS:
+        return findings
+
+    # Character counts per normalized family.
+    fam_chars = {}
+    for s in page_spans:
+        fam = s["family"]
+        if not fam:
+            continue
+        fam_chars[fam] = fam_chars.get(fam, 0) + s["nchars"]
+    if not fam_chars:
+        return findings
+
+    dominant_family = max(fam_chars, key=fam_chars.get)
+    dominant_share = fam_chars[dominant_family] / total_chars
+
+    # If no single family dominates the document, font variety is normal
+    # (e.g. a designed brochure); don't flag.
+    if dominant_share < 0.5:
+        return findings
+
+    for s in page_spans:
+        fam = s["family"]
+        if not fam or fam == dominant_family:
+            continue
+        if s["nchars"] < FONT_ANOMALY_MIN_CHARS:
+            continue
+        share = fam_chars.get(fam, 0) / total_chars
+        if share >= FONT_ANOMALY_MAX_SHARE:
+            # A second, well-used face: likely a legitimate heading/label
+            # font, not an inserted anomaly.
+            continue
+
+        snippet = s["text"].strip()
+        if len(snippet) > 40:
+            snippet = snippet[:40] + "\u2026"
+        detail = (
+            f"Text uses font \"{s['font']}\" (family \"{fam}\"), which is "
+            f"inconsistent with the document's dominant body font "
+            f"\"{dominant_family}\" "
+            f"({dominant_share * 100:.0f}% of text). This span accounts "
+            f"for only {share * 100:.1f}% of document text. Text inserted "
+            f"by a different application during an alteration commonly uses "
+            f"a different font or encoding. Snippet: \"{snippet}\"."
+        )
+        findings.append({
+            "page_num": s["page_num"],
+            "type": "FONT_ANOMALY",
+            "image": None,
+            "detail": detail,
+            "bbox": s["bbox"],
+        })
+
+    return findings
