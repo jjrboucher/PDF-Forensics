@@ -371,12 +371,23 @@ REPORTS = [
         "name": "Incremental Updates (%%EOF Analysis)",
         "description":
             "Documents with multiple %%EOF markers, indicating "
-            "post-creation modifications via incremental save.",
+            "post-creation modifications via incremental save. "
+            "Linearized (web-optimized) files carry two markers by "
+            "specification, so linearized files appear here only with "
+            "three or more; the Linearized column shows each file's "
+            "detected state ('indeterminate' if the file head could "
+            "not be read).",
         "query": """
             SELECT
                 a.pdf_filename       AS "Filename",
                 a.pdf_size_bytes     AS "File Size",
                 COUNT(v.id)          AS "Versions",
+                COALESCE((
+                    SELECT m.value FROM pdf_metadata m
+                    WHERE m.analysis_id = a.id
+                      AND m.source = 'catalog'
+                      AND m.key = 'linearized'
+                ), 'unknown')        AS "Linearized",
                 MIN(v.eof_offset)    AS "First EOF Offset",
                 MAX(v.eof_offset)    AS "Last EOF Offset",
                 a.pdf_md5            AS "PDF MD5",
@@ -385,12 +396,19 @@ REPORTS = [
             JOIN analyses a ON a.id = v.analysis_id
             GROUP BY a.id
             HAVING COUNT(v.id) > 1
+               AND NOT (COUNT(v.id) = 2 AND COALESCE((
+                    SELECT m.value FROM pdf_metadata m
+                    WHERE m.analysis_id = a.id
+                      AND m.source = 'catalog'
+                      AND m.key = 'linearized'
+                ), '') = 'True')
             ORDER BY COUNT(v.id) DESC
         """,
         "columns": [
             {"name": "Filename",         "label": "Filename",         "col_type": "text"},
             {"name": "File Size",        "label": "File Size (bytes)","col_type": "numeric"},
             {"name": "Versions",         "label": "Versions",         "col_type": "numeric"},
+            {"name": "Linearized",       "label": "Linearized",       "col_type": "text"},
             {"name": "First EOF Offset", "label": "First EOF",        "col_type": "numeric"},
             {"name": "Last EOF Offset",  "label": "Last EOF",         "col_type": "numeric"},
             {"name": "PDF MD5",          "label": "PDF MD5",          "col_type": "hash"},

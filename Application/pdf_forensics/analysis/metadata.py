@@ -77,6 +77,29 @@ def extract_pdf_metadata(doc_pk, doc_mu):
     return metadata
 
 
+def detect_linearization(pdf_path):
+    """
+    Determine whether the PDF is linearized (web-optimized).
+
+    Linearized PDFs contain a /Linearized parameter dictionary within
+    the first 1024 bytes of the file (the marker is required to appear
+    at the head of the file) and, by specification, carry TWO %%EOF
+    markers in a single-generation file. A linearized file with exactly
+    two %%EOF markers has therefore NOT been incrementally updated.
+
+    Returns one of:
+      True    — /Linearized marker found in the file head
+      False   — marker absent
+      None    — the file could not be read (indeterminate)
+    """
+    try:
+        with open(pdf_path, "rb") as f:
+            head = f.read(1024)
+    except Exception:
+        return None
+    return b"/Linearized" in head
+
+
 def detect_pdf_versions(pdf_path):
     """
     Scan the PDF file for %%EOF markers. Each marker represents an

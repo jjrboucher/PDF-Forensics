@@ -15,7 +15,7 @@ from pdf_forensics.database import (
     check_pdf_already_analyzed,
 )
 from pdf_forensics.analysis.metadata import (
-    extract_pdf_metadata, detect_pdf_versions,
+    extract_pdf_metadata, detect_pdf_versions, detect_linearization,
 )
 from pdf_forensics.analysis.images import (
     find_image_placements, build_image_map,
@@ -165,6 +165,14 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     # Extract PDF metadata and detect prior versions
     pdf_metadata = extract_pdf_metadata(doc_pk, doc_mu)
     pdf_versions = detect_pdf_versions(pdf_path)
+    # Linearized (web-optimized) files legitimately carry two %%EOF
+    # markers; record the linearization state so the %%EOF count can be
+    # interpreted correctly downstream. If the file head could not be
+    # read the state is recorded as 'indeterminate' rather than guessed.
+    linearized = detect_linearization(pdf_path)
+    pdf_metadata.append(("catalog", "linearized",
+                         "indeterminate" if linearized is None
+                         else str(linearized)))
     _out(f"  Metadata: {len(pdf_metadata)} entries")
     _out(f"  Versions: {len(pdf_versions)} %%EOF marker(s)"
          + (" — incremental updates present!"

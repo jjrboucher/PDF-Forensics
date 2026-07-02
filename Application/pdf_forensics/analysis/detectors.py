@@ -67,16 +67,98 @@ def _page_content_objgen(page_pk):
         return (None, None)
 
 
+def _mat_multiply(m1, m2):
+    """Multiply two PDF affine matrices (a,b,c,d,e,f): result = m1 x m2."""
+    a1, b1, c1, d1, e1, f1 = m1
+    a2, b2, c2, d2, e2, f2 = m2
+    return (a1*a2 + b1*c2, a1*b2 + b1*d2,
+            c1*a2 + d1*c2, c1*b2 + d1*d2,
+            e1*a2 + f1*c2 + e2, e1*b2 + f1*d2 + f2)
+
+
+def _unit_square_rect(ctm):
+    """
+    Axis-aligned bounding rect of the unit square transformed by ctm,
+    plus whether the transform is axis-aligned (no rotation/shear).
+    Returns ((x0, y0, x1, y1), axis_aligned).
+    """
+    a, b, c, d, e, f = ctm
+    pts = [(e, f), (a + e, b + f), (c + e, d + f), (a + c + e, b + d + f)]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    axis_aligned = (abs(b) < 1e-6 and abs(c) < 1e-6)
+    return (min(xs), min(ys), max(xs), max(ys)), axis_aligned
+
+
+def _rect_hidden_fraction(inner, outer, tol):
+    """
+    How much of rect `inner` lies outside rect `outer`.
+    Returns (hidden_pct, edges) where edges is a list of
+    (edge_name, hidden_pts) for each edge exceeding tol.
+    """
+    ix0, iy0, ix1, iy1 = inner
+    ox0, oy0, ox1, oy1 = outer
+    edges = []
+    h_left = ox0 - ix0
+    h_right = ix1 - ox1
+    h_bottom = oy0 - iy0
+    h_top = iy1 - oy1
+    if h_left > tol:
+        edges.append(("Left", h_left))
+    if h_right > tol:
+        edges.append(("Right", h_right))
+    if h_bottom > tol:
+        edges.append(("Bottom", h_bottom))
+    if h_top > tol:
+        edges.append(("Top", h_top))
+    area = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+    vis_w = max(0.0, min(ix1, ox1) - max(ix0, ox0))
+    vis_h = max(0.0, min(iy1, oy1) - max(iy0, oy0))
+    hidden_pct = ((area - vis_w * vis_h) / area * 100.0) if area > 0 else 0.0
+    return hidden_pct, edges
+
+
 def analyze_form_xobject(form_xobj, xobj_name, page_num, findings,
                          image_labels):
-    """Analyze a Form XObject for image cropping/clipping/offset."""
+    """
+    Analyze a Form XObject for image cropping and clipping.
+
+    The content stream is walked with full graphics-state tracking:
+    the CTM is composed through q/Q/cm (not read from isolated cm
+    operators), and clipping paths (W / W*) are carried as part of the
+    saved/restored graphics state, as the PDF imaging model requires.
+    Findings are evaluated at each image Do against the state actually
+    in force at that point:
+
+      - BBOX_CROP is emitted only when the image's placement rectangle,
+        computed from the composed CTM, extends beyond the Form's /BBox.
+      - EXPLICIT_CLIP is emitted only when an active clipping path
+        actually excludes part of the image. A rectangular clip that
+        fully contains the image conceals nothing and is not reported.
+        A non-rectangular clip's coverage cannot be computed exactly
+        from the path operators alone; it is reported with an explicit
+        note that the extent of concealment is undetermined and
+        requires manual review.
+      - COMPLEX_TRANSFORM is emitted for image placements whose CTM
+        includes rotation/shear; BBox-crop assessment for these uses
+        the axis-aligned bounding box of the rotated placement and is
+        reported as approximate.
+    """
     label_str = ", ".join(image_labels) if image_labels else str(xobj_name)
 
     bbox_raw = form_xobj.get("/BBox")
     if not bbox_raw:
         return
     bbox = [float(x) for x in bbox_raw]
-    bbox_x0, bbox_y0, bbox_x1, bbox_y1 = bbox
+    bbox_x0, bbox_y0 = min(bbox[0], bbox[2]), min(bbox[1], bbox[3])
+    bbox_x1, bbox_y1 = max(bbox[0], bbox[2]), max(bbox[1], bbox[3])
+    bbox_rect = (bbox_x0, bbox_y0, bbox_x1, bbox_y1)
+
+    # The Form's optional /Matrix maps form space onto the parent
+    # coordinate system; /BBox is expressed in form space, and so must
+    # image placements be for the comparison to be valid. Content
+    # stream coordinates ARE form space, so the identity is the
+    # correct starting CTM here regardless of /Matrix.
 
     try:
         ops = pikepdf.parse_content_stream(form_xobj)
@@ -88,119 +170,206 @@ def analyze_form_xobject(form_xobj, xobj_name, page_num, findings,
         })
         return
 
-    clip_rects = []
-    cm_matrices = []
-    has_clip = False
-    current_rect = None
-    image_refs = []
+    # Resolve which XObject names inside this Form are images, so Do
+    # operators can be classified. Names that cannot be resolved are
+    # treated as potential images and noted as such (accuracy: better
+    # to review an uncertain placement than to silently skip it).
+    image_names = set()
+    unresolved_names = set()
+    try:
+        res = form_xobj.get("/Resources")
+        xobjs = res.get("/XObject") if res is not None else None
+        if xobjs is not None:
+            for name, ref in xobjs.items():
+                try:
+                    subtype = str(ref.get("/Subtype"))
+                    if subtype == "/Image":
+                        image_names.add(str(name))
+                except Exception:
+                    unresolved_names.add(str(name))
+    except Exception:
+        pass
+
+    IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    ctm = IDENTITY
+    # Clip state: list of clip entries active in the current gstate.
+    # Each entry: ("rect", (x0,y0,x1,y1)) in form space, or
+    # ("complex", description) when the path is not a plain rectangle
+    # or the CTM at clip time was rotated (rect no longer expressible).
+    clips = []
+    gstack = []
+
+    # Current path accumulation (between path construction and W).
+    path_rects = []
+    path_has_nonrect = False
+
+    tol = HIDDEN_THRESHOLD_PTS
+    image_dos = []   # (name, ctm, clips-at-do, resolved)
 
     for operands, operator in ops:
         op = str(operator)
-        if op == "cm":
-            cm_matrices.append([float(x) for x in operands])
+        if op == "q":
+            gstack.append((ctm, list(clips)))
+        elif op == "Q":
+            if gstack:
+                ctm, clips = gstack.pop()
+        elif op == "cm":
+            try:
+                vals = [float(x) for x in operands]
+                if len(vals) == 6:
+                    ctm = _mat_multiply(tuple(vals), ctm)
+            except (ValueError, TypeError):
+                pass
         elif op == "re":
-            current_rect = [float(x) for x in operands]
+            try:
+                rx, ry, rw, rh = (float(x) for x in operands[:4])
+                path_rects.append((rx, ry, rw, rh))
+            except (ValueError, TypeError):
+                path_has_nonrect = True
+        elif op in ("m", "l", "c", "v", "y", "h"):
+            path_has_nonrect = True
         elif op in ("W", "W*"):
-            has_clip = True
-            if current_rect:
-                clip_rects.append(current_rect)
+            # Current path becomes (part of) the clip. Express it in
+            # form space via the CTM in force now.
+            a, b, c, d, _, _ = ctm
+            rotated = not (abs(b) < 1e-6 and abs(c) < 1e-6)
+            if path_has_nonrect or not path_rects:
+                clips.append(("complex",
+                              "non-rectangular path"
+                              if path_has_nonrect else
+                              "path not visible to parser"))
+            elif rotated:
+                clips.append(("complex",
+                              "rectangular path under a rotated/skewed "
+                              "transform"))
+            else:
+                for (rx, ry, rw, rh) in path_rects:
+                    # axis-aligned: transform both corners directly
+                    cx0 = a * rx + ctm[4]
+                    cy0 = d * ry + ctm[5]
+                    cx1 = a * (rx + rw) + ctm[4]
+                    cy1 = d * (ry + rh) + ctm[5]
+                    clips.append(("rect",
+                                  (min(cx0, cx1), min(cy0, cy1),
+                                   max(cx0, cx1), max(cy0, cy1))))
+        elif op in ("n", "f", "F", "f*", "B", "B*", "b", "b*", "S", "s"):
+            # Path-painting operators end the current path.
+            path_rects = []
+            path_has_nonrect = False
         elif op == "Do":
-            image_refs.append(str(operands[0]))
+            name = str(operands[0])
+            if name in image_names:
+                image_dos.append((name, ctm, list(clips), True))
+            elif name in unresolved_names:
+                image_dos.append((name, ctm, list(clips), False))
 
-    if not image_refs:
+    if not image_dos:
         return
 
-    # --- Explicit clipping paths ---
-    if has_clip:
-        for cr in clip_rects:
+    for (name, do_ctm, do_clips, resolved) in image_dos:
+        img_rect, axis_aligned = _unit_square_rect(do_ctm)
+        a, b, c, d, e, f = do_ctm
+        unresolved_note = (
+            "" if resolved else
+            "\n    Note: this XObject's subtype could not be resolved; "
+            "it is analyzed as a potential image placement.")
+
+        # ---- BBox crop assessment ----
+        hidden_pct, edges = _rect_hidden_fraction(img_rect, bbox_rect, tol)
+        if edges:
+            edge_details = [
+                f"{edge}: {pts:.3f} pts hidden" for edge, pts in edges]
+            approx_note = (
+                "" if axis_aligned else
+                "\n    Note: the placement is rotated/skewed; the "
+                "comparison uses its axis-aligned bounding box, so the "
+                "hidden percentage is an upper-bound approximation. "
+                "Manual review required to confirm actual concealment.")
             findings.append({
                 "image": label_str,
-                "type": "EXPLICIT_CLIP",
+                "type": "BBOX_CROP",
                 "detail": (
-                    f"Clipping rectangle applied before image is painted.\n"
-                    f"    Clip rect: x={cr[0]:.3f} y={cr[1]:.3f} "
-                    f"w={cr[2]:.3f} h={cr[3]:.3f}\n"
+                    f"Image {name} extends beyond Form XObject BBox. "
+                    f"~{hidden_pct:.1f}% of the placement is hidden.\n"
+                    f"    CTM at Do: [{a:.3f}, {b:.3f}, {c:.3f}, "
+                    f"{d:.3f}, {e:.3f}, {f:.3f}]\n"
+                    f"    Placement: ({img_rect[0]:.3f}, {img_rect[1]:.3f})"
+                    f" to ({img_rect[2]:.3f}, {img_rect[3]:.3f})\n"
                     f"    BBox:      ({bbox_x0:.3f}, {bbox_y0:.3f}) to "
                     f"({bbox_x1:.3f}, {bbox_y1:.3f})\n"
-                    f"    Content outside the clip rectangle is hidden."
+                    f"    Hidden edges:\n"
+                    + "\n".join(f"      - {ed}" for ed in edge_details)
+                    + approx_note + unresolved_note
                 ),
             })
 
-    # --- Transformation matrix vs BBox ---
-    for cm in cm_matrices:
-        a, b, c, d, e, f = cm
-
-        if b == 0.0 and c == 0.0:
-            img_x0, img_y0 = e, f
-            img_x1, img_y1 = e + a, f + d
-
-            hidden_left = max(0, bbox_x0 - img_x0)
-            hidden_right = max(0, img_x1 - bbox_x1)
-            hidden_bottom = max(0, bbox_y0 - img_y0)
-            hidden_top = max(0, img_y1 - bbox_y1)
-
-            if any(h > HIDDEN_THRESHOLD_PTS
-                   for h in (hidden_left, hidden_right,
-                             hidden_bottom, hidden_top)):
-
-                edge_details = []
-                if hidden_bottom > HIDDEN_THRESHOLD_PTS:
-                    edge_details.append(
-                        f"Bottom: {hidden_bottom:.3f} pts hidden "
-                        f"(image starts at y={img_y0:.3f}, "
-                        f"BBox starts at y={bbox_y0:.3f})")
-                if hidden_top > HIDDEN_THRESHOLD_PTS:
-                    edge_details.append(
-                        f"Top: {hidden_top:.3f} pts hidden "
-                        f"(image ends at y={img_y1:.3f}, "
-                        f"BBox ends at y={bbox_y1:.3f})")
-                if hidden_left > HIDDEN_THRESHOLD_PTS:
-                    edge_details.append(
-                        f"Left: {hidden_left:.3f} pts hidden "
-                        f"(image starts at x={img_x0:.3f}, "
-                        f"BBox starts at x={bbox_x0:.3f})")
-                if hidden_right > HIDDEN_THRESHOLD_PTS:
-                    edge_details.append(
-                        f"Right: {hidden_right:.3f} pts hidden "
-                        f"(image ends at x={img_x1:.3f}, "
-                        f"BBox ends at x={bbox_x1:.3f})")
-
-                img_area = abs(a * d)
-                visible_w = min(img_x1, bbox_x1) - max(img_x0, bbox_x0)
-                visible_h = min(img_y1, bbox_y1) - max(img_y0, bbox_y0)
-                visible_area = max(0, visible_w) * max(0, visible_h)
-                hidden_pct = ((img_area - visible_area) / img_area * 100
-                              if img_area > 0 else 0)
-
-                findings.append({
-                    "image": label_str,
-                    "type": "BBOX_CROP",
-                    "detail": (
-                        f"Image extends beyond Form XObject BBox. "
-                        f"~{hidden_pct:.1f}% of image is hidden.\n"
-                        f"    Transformation matrix: "
-                        f"[{a:.3f}, {b:.3f}, {c:.3f}, "
-                        f"{d:.3f}, {e:.3f}, {f:.3f}]\n"
-                        f"    Image area:  ({img_x0:.3f}, {img_y0:.3f}) to "
-                        f"({img_x1:.3f}, {img_y1:.3f})\n"
-                        f"    BBox area:   ({bbox_x0:.3f}, {bbox_y0:.3f}) to "
-                        f"({bbox_x1:.3f}, {bbox_y1:.3f})\n"
-                        f"    Hidden edges:\n"
-                        + "\n".join(f"      - {ed}" for ed in edge_details)
-                    ),
-                })
-        else:
+        # ---- Rotation / shear ----
+        if not axis_aligned:
             findings.append({
                 "image": label_str,
                 "type": "COMPLEX_TRANSFORM",
                 "detail": (
-                    f"Non-trivial transformation matrix detected: "
-                    f"[{a:.3f}, {b:.3f}, {c:.3f}, "
+                    f"Image {name} is placed with a rotated or skewed "
+                    f"transformation matrix: [{a:.3f}, {b:.3f}, {c:.3f}, "
                     f"{d:.3f}, {e:.3f}, {f:.3f}].\n"
-                    f"    Image may be rotated or skewed. "
-                    f"Manual review recommended."
+                    f"    Geometry checks for this placement use its "
+                    f"axis-aligned bounding box and are approximate. "
+                    f"Manual review recommended." + unresolved_note
                 ),
             })
+
+        # ---- Clip assessment: only clips active AT this Do ----
+        for kind, payload in do_clips:
+            if kind == "rect":
+                clip_rect = payload
+                c_hidden_pct, c_edges = _rect_hidden_fraction(
+                    img_rect, clip_rect, tol)
+                if not c_edges:
+                    # Clip fully contains the image placement: nothing
+                    # is concealed. Accurate behaviour is to stay
+                    # silent rather than flag a harmless clip.
+                    continue
+                approx_note = (
+                    "" if axis_aligned else
+                    "\n    Note: rotated placement — coverage computed "
+                    "from its axis-aligned bounding box (approximate).")
+                findings.append({
+                    "image": label_str,
+                    "type": "EXPLICIT_CLIP",
+                    "detail": (
+                        f"Clipping rectangle active when image {name} "
+                        f"is painted excludes part of the image "
+                        f"(~{c_hidden_pct:.1f}% of the placement "
+                        f"hidden).\n"
+                        f"    Clip rect (form space): "
+                        f"({clip_rect[0]:.3f}, {clip_rect[1]:.3f}) to "
+                        f"({clip_rect[2]:.3f}, {clip_rect[3]:.3f})\n"
+                        f"    Placement: ({img_rect[0]:.3f}, "
+                        f"{img_rect[1]:.3f}) to ({img_rect[2]:.3f}, "
+                        f"{img_rect[3]:.3f})\n"
+                        f"    Content outside the clip is present in "
+                        f"the file but not rendered."
+                        + approx_note + unresolved_note
+                    ),
+                })
+            else:
+                findings.append({
+                    "image": label_str,
+                    "type": "EXPLICIT_CLIP",
+                    "detail": (
+                        f"A clipping path ({payload}) is active when "
+                        f"image {name} is painted. The clip geometry "
+                        f"cannot be reduced to a rectangle from the "
+                        f"path operators, so the extent of concealment "
+                        f"is UNDETERMINED by automated analysis.\n"
+                        f"    Placement: ({img_rect[0]:.3f}, "
+                        f"{img_rect[1]:.3f}) to ({img_rect[2]:.3f}, "
+                        f"{img_rect[3]:.3f})\n"
+                        f"    Manual review of the clip path and the "
+                        f"image content is required to determine what, "
+                        f"if anything, is hidden." + unresolved_note
+                    ),
+                })
 
     # --- Soft mask on Form XObject ---
     if "/SMask" in form_xobj:
@@ -239,6 +408,103 @@ def assess_concealment(front_opacity, front_blend_mode, front_has_smask):
         return "NONE — front image is fully transparent."
 
 
+def _mat6(m):
+    """Coerce a matrix-like object (PyMuPDF Matrix or sequence) to a
+    6-tuple (a, b, c, d, e, f). Returns None if it cannot be read."""
+    try:
+        vals = tuple(float(x) for x in m)
+        if len(vals) == 6:
+            return vals
+    except Exception:
+        pass
+    try:
+        return (float(m.a), float(m.b), float(m.c),
+                float(m.d), float(m.e), float(m.f))
+    except Exception:
+        return None
+
+
+def _quad_from_matrix(m6):
+    """The image unit square [0,1]x[0,1] transformed by the placement
+    matrix — the actual rendered footprint of the image, as a list of
+    4 (x, y) points in drawing order."""
+    a, b, c, d, e, f = m6
+    return [(e, f), (a + e, b + f),
+            (a + c + e, b + d + f), (c + e, d + f)]
+
+
+def _poly_area(pts):
+    """Absolute area of a simple polygon (shoelace formula)."""
+    n = len(pts)
+    if n < 3:
+        return 0.0
+    s = 0.0
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        s += x1 * y2 - x2 * y1
+    return abs(s) / 2.0
+
+
+def _ensure_ccw(pts):
+    """Return pts in counter-clockwise winding (required by the
+    polygon clipper's inside test)."""
+    s = 0.0
+    n = len(pts)
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        s += x1 * y2 - x2 * y1
+    return list(pts) if s >= 0 else list(reversed(pts))
+
+
+def _poly_clip(subject, clip):
+    """
+    Sutherland–Hodgman clipping of polygon `subject` against CONVEX
+    polygon `clip` (both lists of (x, y)). Returns the intersection
+    polygon (possibly empty). Exact for convex-convex input such as
+    two transformed image quads.
+    """
+    clip = _ensure_ccw(clip)
+    output = _ensure_ccw(subject)
+
+    for i in range(len(clip)):
+        if not output:
+            return []
+        cx1, cy1 = clip[i]
+        cx2, cy2 = clip[(i + 1) % len(clip)]
+
+        def inside(p):
+            # left of (or on) the directed clip edge for CCW winding
+            return ((cx2 - cx1) * (p[1] - cy1)
+                    - (cy2 - cy1) * (p[0] - cx1)) >= -1e-9
+
+        def intersect(p1, p2):
+            x1, y1 = p1
+            x2, y2 = p2
+            dcx, dcy = cx2 - cx1, cy2 - cy1
+            dpx, dpy = x2 - x1, y2 - y1
+            denom = dcx * dpy - dcy * dpx
+            if abs(denom) < 1e-12:
+                return p2
+            # Solve cross(dc, p1 + t*dp - c1) = 0 for t:
+            t = (dcy * (x1 - cx1) - dcx * (y1 - cy1)) / denom
+            return (x1 + t * dpx, y1 + t * dpy)
+
+        input_pts = output
+        output = []
+        for j in range(len(input_pts)):
+            cur = input_pts[j]
+            prev = input_pts[j - 1]
+            if inside(cur):
+                if not inside(prev):
+                    output.append(intersect(prev, cur))
+                output.append(cur)
+            elif inside(prev):
+                output.append(intersect(prev, cur))
+    return output
+
+
 def check_overlapping_images(page_mu, page_num, findings,
                              label_to_info, transparency):
     """
@@ -246,7 +512,10 @@ def check_overlapping_images(page_mu, page_num, findings,
     Uses PyMuPDF get_image_rects for rendered positions, then maps
     back to our label system.
     """
-    # Build list of (label, xref, rect) for every placement
+    # Build list of (label, rect, matrix) for every placement. The
+    # placement matrix lets rotated images be compared by their actual
+    # rendered footprint rather than the axis-aligned bounding box,
+    # which over-reports overlap for rotated content.
     rects = []
     mu_images = page_mu.get_images(full=True)
 
@@ -258,11 +527,19 @@ def check_overlapping_images(page_mu, page_num, findings,
     for label, info in sorted(label_to_info.items()):
         xref = info["xref"]
         if xref not in xref_rects_cache:
+            entries = []
             try:
-                xref_rects_cache[xref] = list(
-                    page_mu.get_image_rects(xref))
+                for item in page_mu.get_image_rects(xref, transform=True):
+                    rect, mat = item
+                    entries.append((rect, _mat6(mat)))
             except Exception:
-                xref_rects_cache[xref] = []
+                # Older PyMuPDF or failure: rects without transforms.
+                try:
+                    entries = [(r, None)
+                               for r in page_mu.get_image_rects(xref)]
+                except Exception:
+                    entries = []
+            xref_rects_cache[xref] = entries
 
     # Assign rects to labels. When multiple labels share the same xref,
     # assign rects in order.
@@ -274,21 +551,62 @@ def check_overlapping_images(page_mu, page_num, findings,
         idx = xref_rect_idx.get(xref, 0)
 
         if idx < len(available):
-            rect = available[idx]
+            rect, mat = available[idx]
             xref_rect_idx[xref] = idx + 1
             if not rect.is_infinite and not rect.is_empty:
-                rects.append((label, rect))
+                rects.append((label, rect, mat))
+
+    def _is_rotated(mat):
+        return (mat is not None and
+                (abs(mat[1]) > 1e-6 or abs(mat[2]) > 1e-6))
 
     # Check all pairs for overlap
-    for (label_a, rect_a), (label_b, rect_b) in combinations(rects, 2):
+    for (label_a, rect_a, mat_a), (label_b, rect_b, mat_b) in \
+            combinations(rects, 2):
         intersection = rect_a & rect_b
         if intersection.is_empty:
             continue
-        overlap_area = intersection.get_area()
-        if overlap_area < OVERLAP_THRESHOLD_SQPTS:
-            continue
 
-        smaller_area = min(rect_a.get_area(), rect_b.get_area())
+        rotated_pair = _is_rotated(mat_a) or _is_rotated(mat_b)
+        geometry_note = ""
+
+        if rotated_pair and mat_a is not None and mat_b is not None:
+            # Exact footprint comparison for rotated placements: clip
+            # the two transformed image quads against each other.
+            quad_a = _quad_from_matrix(mat_a)
+            quad_b = _quad_from_matrix(mat_b)
+            inter_poly = _poly_clip(quad_a, quad_b)
+            overlap_area = _poly_area(inter_poly)
+            if overlap_area < OVERLAP_THRESHOLD_SQPTS:
+                # AABBs intersect but the actual rotated footprints do
+                # not — this was previously a false positive.
+                continue
+            smaller_area = min(_poly_area(quad_a), _poly_area(quad_b))
+            geometry_note = (
+                "\n    Geometry: one or both images are rotated; the "
+                "overlap was computed from the actual rotated "
+                "footprints (exact for the placement rectangles).")
+        elif rotated_pair:
+            # Rotation detected but a placement matrix was unavailable:
+            # AABB comparison only. Per forensic practice, state the
+            # approximation explicitly rather than presenting the
+            # figure as exact.
+            overlap_area = intersection.get_area()
+            if overlap_area < OVERLAP_THRESHOLD_SQPTS:
+                continue
+            smaller_area = min(rect_a.get_area(), rect_b.get_area())
+            geometry_note = (
+                "\n    Geometry: a rotated placement is involved but "
+                "its transform could not be recovered; the overlap "
+                "figures use axis-aligned bounding boxes and are an "
+                "UPPER BOUND. The images may overlap less than stated "
+                "or not at all. Manual verification required.")
+        else:
+            overlap_area = intersection.get_area()
+            if overlap_area < OVERLAP_THRESHOLD_SQPTS:
+                continue
+            smaller_area = min(rect_a.get_area(), rect_b.get_area())
+
         overlap_pct = (overlap_area / smaller_area * 100
                        if smaller_area > 0 else 0)
 
@@ -327,6 +645,7 @@ def check_overlapping_images(page_mu, page_num, findings,
                 f"    Overlap covers ~{overlap_pct:.1f}% of the "
                 f"smaller image.\n"
                 f"    Concealment: {concealment}"
+                + geometry_note
             ),
             "_overlap": {
                 "front_label": front_label,
@@ -926,10 +1245,13 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num, findings):
 
     for i, (op, operands) in enumerate(operators):
         if op == 'q':
-            ctm_stack.append(ctm)
+            # Fill colour is part of the graphics state and must be
+            # saved/restored with it, or a white fill set inside a
+            # q...Q block would incorrectly persist afterwards.
+            ctm_stack.append((ctm, fill_color))
         elif op == 'Q':
             if ctm_stack:
-                ctm = ctm_stack.pop()
+                ctm, fill_color = ctm_stack.pop()
         elif op == 'cm':
             try:
                 vals = tuple(float(str(x)) for x in operands)
@@ -946,17 +1268,48 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num, findings):
                         float(str(x)) for x in operands[:3])
             except Exception:
                 pass
-        elif op in ('RG', 'G'):
-            pass  # stroke colour — not fill
-        elif op == 'sc' or op == 'SC':
+        elif op == 'k':
+            # CMYK non-stroking colour. White = 0 0 0 0 k. Convert to
+            # RGB so the single white test below applies.
             try:
-                vals = [float(str(x)) for x in operands]
-                if len(vals) == 1:
-                    fill_color = (vals[0],) * 3
-                elif len(vals) >= 3:
-                    fill_color = tuple(vals[:3])
+                cc, mm, yy, kk = (float(str(x)) for x in operands[:4])
+                fill_color = ((1 - cc) * (1 - kk),
+                              (1 - mm) * (1 - kk),
+                              (1 - yy) * (1 - kk))
             except Exception:
                 pass
+        elif op == 'cs':
+            # Setting the non-stroking colour space resets the
+            # non-stroking colour to the space's initial value
+            # (black in device spaces). Named/ICC spaces cannot be
+            # resolved here, so conservatively treat the colour as
+            # non-white until explicitly set.
+            fill_color = (0.0, 0.0, 0.0)
+        elif op in ('RG', 'G', 'K', 'CS', 'SC', 'SCN'):
+            pass  # stroking-colour operators — do not affect fill
+        elif op in ('sc', 'scn'):
+            # Non-stroking colour in the current colour space:
+            # 1 component = grey, 3 = RGB, 4 = CMYK. A trailing
+            # pattern name (scn) or unknown component count cannot be
+            # evaluated; conservatively treat as non-white rather than
+            # risk a false white-box finding.
+            try:
+                vals = [float(str(x)) for x in operands]
+            except Exception:
+                fill_color = (0.0, 0.0, 0.0)
+                vals = None
+            if vals is not None:
+                if len(vals) == 1:
+                    fill_color = (vals[0],) * 3
+                elif len(vals) == 3:
+                    fill_color = tuple(vals)
+                elif len(vals) == 4:
+                    cc, mm, yy, kk = vals
+                    fill_color = ((1 - cc) * (1 - kk),
+                                  (1 - mm) * (1 - kk),
+                                  (1 - yy) * (1 - kk))
+                else:
+                    fill_color = (0.0, 0.0, 0.0)
         elif op == 're':
             if i + 1 < len(operators):
                 next_op = operators[i + 1][0]

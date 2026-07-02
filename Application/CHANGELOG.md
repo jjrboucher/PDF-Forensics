@@ -1,5 +1,48 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-07-02)
+
+### Detection accuracy fixes
+- Linearization-aware incremental update analysis. Linearized
+  (web-optimized) PDFs legitimately carry two %%EOF markers; the file
+  head is now checked for the /Linearized marker, the state is recorded
+  in pdf_metadata (True/False/indeterminate), and the Incremental
+  Updates report excludes linearized files with exactly two markers and
+  shows a Linearized column. Previously every web-optimized PDF was a
+  false positive in this report.
+- Form XObject analysis rewritten with correct graphics-state tracking.
+  The CTM is now composed through q/Q/cm (previously each cm operator
+  was tested in isolation, mis-locating images under nested transforms
+  and flagging matrices unrelated to any image), and clipping paths are
+  carried as part of the saved/restored graphics state. BBOX_CROP is
+  evaluated per image Do using the composed placement geometry.
+- EXPLICIT_CLIP is now geometry-aware. A rectangular clip that fully
+  contains the image is no longer reported (it conceals nothing); a
+  cropping clip reports the hidden percentage; and non-rectangular clip
+  paths — previously not reported at all due to a rect-only code path —
+  are reported with an explicit note that the extent of concealment is
+  undetermined and requires manual review.
+- White-box overlay detection: fill colour is tracked correctly. CMYK
+  white (0 0 0 0 k) and scn-set colours are now recognized; SC/SCN
+  (stroking-colour operators) are no longer misread as fill; the fill
+  colour is saved/restored with q/Q; and setting a colour space (cs)
+  conservatively resets the colour to non-white.
+- Overlap detection uses exact rotated footprints. When one or both
+  images are rotated, the overlap is computed by convex-polygon
+  intersection of the transformed placement rectangles, eliminating the
+  documented false positives from axis-aligned bounding boxes on
+  rotated content. Where a transform cannot be recovered, the finding
+  explicitly states its figures are an upper bound requiring manual
+  verification.
+- Findings now state uncertainty explicitly wherever geometry cannot be
+  fully determined (rotated placements assessed by bounding box,
+  non-rectangular clips, unresolved XObject subtypes).
+- Documentation aligned with implemented behaviour: the Technical
+  Reference Guide and the Risk Scoring Technical guide now state the
+  actual thresholds (HIDDEN_THRESHOLD_PTS = 0.5; text-over-text overlap
+  ratio 0.55 with 1.5-point same-glyph exclusion), the sixteen-report
+  count, schema revision 6, and the new clip/overlap semantics.
+
 ## v1.0.0 — Update (2026-06-23)
 
 ### Document-level risk scoring and Document Risk Summary report
