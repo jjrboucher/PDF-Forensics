@@ -257,7 +257,8 @@ def _cli_graph(args, session):
     visualize_graph(
         G, image_meta, thumbnails, args.database,
         doc_meta=doc_meta, output_path=out_path,
-        case_number=session.case_number)
+        case_number=session.case_number,
+        scope=args.scope)
 
     session.register_output("graph", out_path)
     graph_print_summary(rows, G, len(thumbnails))

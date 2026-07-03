@@ -42,8 +42,18 @@ RISK_WEIGHTS = {
 # score. These are document/page-level signals that are not attributable
 # to any single image. Scores accumulate per page (capped at 100).
 DOC_RISK_WEIGHTS = {
-    "TEXT_OVERLAY":  35,   # overlaid text/annotation — strong alteration signal
-    "FONT_ANOMALY":  15,   # out-of-place font — corroborating, higher FP rate
+    # page-level (carried in the per-page findings)
+    "TEXT_OVERLAY":     35,  # overlaid text/annotation — strong alteration signal
+    "FONT_ANOMALY":     15,  # out-of-place font — corroborating, higher FP rate
+    "REDACT_UNAPPLIED": 35,  # marked-for-redaction content still recoverable
+    # document-level (produced by analysis/doc_checks.py, not tied to a page)
+    "SIGNED_THEN_MODIFIED":  35,  # bytes appended after the last signature
+    "METADATA_DATE_ANOMALY": 25,  # ModDate precedes CreationDate
+    "METADATA_MISMATCH":     15,  # Info dict vs XMP disagreement (per field)
+    "MIXED_CAMERA":          15,  # images from 2+ distinct capture devices
+    "VERSION_MISMATCH":       5,  # header vs Catalog version differ
+    "XMP_ID_ANOMALY":         5,  # DocumentID == InstanceID
+    "STRUCTURAL_WARNING":     5,  # qpdf structural warnings present
 }
 
 # The presence of any reviewer comments / markup annotations adds a small
@@ -117,7 +127,7 @@ def compute_risk_scores(findings, label_to_info):
             for label, s in scores.items()}
 
 
-def compute_document_risk(all_findings, comments=None):
+def compute_document_risk(all_findings, comments=None, doc_findings=None):
     """
     Compute page-level and document-level risk scores.
 
@@ -132,19 +142,25 @@ def compute_document_risk(all_findings, comments=None):
                      builds; the page number is taken from the dict key,
                      so individual findings need not carry a page field.
       comments     : optional list of extracted comment/markup dicts.
+      doc_findings : optional list of DOCUMENT-level finding dicts
+                     (metadata anomalies, signature coverage, structural
+                     warnings, mixed cameras) that belong to no page.
+                     Their weights add to the document score directly
+                     and never to any page score.
 
     Returns (page_scores, doc_score):
       page_scores : {page_number: int 0..100} — each page's accumulated
                     document-level finding weight, capped at 100.
-      doc_score   : int 0..100 — the most suspicious page's score plus a
-                    flat amount if any reviewer comments are present,
+      doc_score   : int 0..100 — the most suspicious page's score, plus
+                    the summed weights of document-level findings, plus
+                    a flat amount if any reviewer comments are present,
                     capped at 100.
 
-    The document score intentionally uses the maximum page score (not the
-    sum across pages) so that one heavily-flagged page is not diluted by,
-    nor does it inflate the count of, other clean pages. The score answers
-    "how suspicious is the most suspicious page of this document?" rather
-    than "how many findings does the document have in total?".
+    The page component intentionally uses the maximum page score (not
+    the sum across pages) so that one heavily-flagged page is not
+    diluted by, nor inflated by the count of, other clean pages.
+    Document-level findings are summed because each is an independent
+    signal about the document itself.
     """
     page_scores = {}
     for page_num, findings in all_findings.items():
@@ -154,6 +170,8 @@ def compute_document_risk(all_findings, comments=None):
         page_scores[page_num] = min(score, RISK_SCORE_CAP)
 
     doc_score = max(page_scores.values(), default=0)
+    for f in (doc_findings or []):
+        doc_score += DOC_RISK_WEIGHTS.get(f.get("type"), 0)
     if comments:
         doc_score += COMMENT_RISK_WEIGHT
     doc_score = min(doc_score, RISK_SCORE_CAP)

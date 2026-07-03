@@ -25,6 +25,7 @@ from pdf_forensics.analysis.transparency import (
     get_zorder_and_graphics_state,
 )
 from pdf_forensics.analysis.detectors import (
+    extract_page_text,
     analyze_form_xobject, check_overlapping_images,
     check_image_smasks, check_offpage_images,
     check_dpi_anomalies, check_text_overlays,
@@ -33,6 +34,11 @@ from pdf_forensics.analysis.detectors import (
 )
 from pdf_forensics.analysis.risk import (
     compute_risk_scores, compute_document_risk,
+)
+from pdf_forensics.analysis.doc_checks import (
+    check_metadata_consistency, check_signature_coverage,
+    check_structural_integrity, check_mixed_cameras,
+    check_unapplied_redactions, extract_camera_info,
 )
 
 
@@ -183,16 +189,30 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     page_data = {}
     total_extracted = 0
     doc_font_spans = []   # accumulated across pages for font analysis (ANAL-03)
+    doc_cameras = {}      # {label: (make, model)} for mixed-camera check
 
     for page_idx in range(total_pages):
         page_num = page_idx + 1
         page_mu = doc_mu[page_idx]
         page_pk = doc_pk.pages[page_idx]
 
+        # Parse the page content stream ONCE and extract page text
+        # ONCE; both are shared by every consumer below instead of
+        # each detector re-doing the work (previously 3 parses and
+        # 3 text extractions per page). On failure the shared value
+        # is None and each consumer falls back to its own
+        # extraction, preserving its original error behaviour.
+        try:
+            page_ops = list(pikepdf.parse_content_stream(page_pk))
+        except Exception:
+            page_ops = None
+        page_text = extract_page_text(page_mu)
+
         # Build image map from content stream
         placements, label_to_info, xref_to_labels, \
             form_xref_to_labels = \
-            build_image_map(page_pk, page_num, page_pad, doc_mu)
+            build_image_map(page_pk, page_num, page_pad, doc_mu,
+                            content_ops=page_ops)
 
         img_count = len(label_to_info)
         _out(f"  Page {page_num}: {img_count} image(s)")
@@ -209,7 +229,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 total_extracted += 1
 
         # Z-order and graphics state
-        gstate_per_do = get_zorder_and_graphics_state(page_pk)
+        gstate_per_do = get_zorder_and_graphics_state(
+            page_pk, content_ops=page_ops)
         transparency = enrich_image_transparency(
             label_to_info, placements, gstate_per_do, page_pk
         )
@@ -258,13 +279,27 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                                  label_to_info, transparency)
         check_image_smasks(page_pk, page_num, findings, label_to_info)
         check_offpage_images(page_mu, page_num, findings, label_to_info)
-        check_text_overlays(page_pk, page_mu, page_num, findings)
+        check_text_overlays(page_pk, page_mu, page_num, findings,
+                            text_page=page_text)
         check_content_stream_text_overlay(
-            page_pk, page_mu, page_num, findings)
-        check_text_over_text(page_mu, page_num, findings, page_pk=page_pk)
+            page_pk, page_mu, page_num, findings,
+            content_ops=page_ops)
+        check_text_over_text(page_mu, page_num, findings,
+                             page_pk=page_pk, text_page=page_text)
+        findings.extend(check_unapplied_redactions(page_pk, page_num))
+
+        # Collect EXIF capture-device info for the document-level
+        # mixed-camera check (cheap: reads only Make/Model tags).
+        for label in label_to_info:
+            cam = extract_camera_info(
+                label_to_info[label].get("image_bytes"),
+                label_to_info[label].get("ext"))
+            if cam:
+                doc_cameras[label] = cam
 
         # Collect font usage for document-level font consistency analysis
-        doc_font_spans.extend(collect_page_fonts(page_mu, page_num))
+        doc_font_spans.extend(collect_page_fonts(
+            page_mu, page_num, text_page=page_text))
 
         # Compute per-image risk scores from the findings on this page
         risk_scores = compute_risk_scores(findings, label_to_info)
@@ -319,18 +354,51 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     except Exception:
         pdf_comments = []
 
+    # Document-level checks (analysis/doc_checks.py): metadata
+    # consistency, signature ByteRange coverage, structural integrity,
+    # and cross-image capture-device consistency. Run before the
+    # documents close (signature/structural checks need doc_pk).
+    doc_findings = []
+    doc_findings.extend(check_metadata_consistency(pdf_metadata))
+    doc_findings.extend(check_signature_coverage(doc_pk, pdf_path))
+    doc_findings.extend(check_structural_integrity(doc_pk))
+    doc_findings.extend(check_mixed_cameras(doc_cameras))
+    if doc_findings and session:
+        for df in doc_findings:
+            session.log(f"  Document-level finding: {df['type']}")
+            for w in df.get("_all_warnings", []):
+                session.log(f"    qpdf: {w}")
+
     doc_mu.close()
     doc_pk.close()
 
     # Document-level risk: aggregate page/document-level findings (text
-    # overlays, font anomalies) and the presence of reviewer comments
-    # into a per-page and a document-wide score. Kept separate from the
+    # overlays, font anomalies, unapplied redactions) and document-wide
+    # findings (metadata anomalies, signature coverage, mixed cameras,
+    # structural warnings) plus the presence of reviewer comments into a
+    # per-page and a document-wide score. Kept separate from the
     # per-image scores so document-level signals draw the examiner's eye
     # in ranked views instead of being detected but invisible.
     page_risk_scores, doc_risk = compute_document_risk(
-        all_findings, pdf_comments)
+        all_findings, pdf_comments, doc_findings)
     for pg, pd in page_data.items():
         pd["page_risk"] = page_risk_scores.get(pg, 0)
+
+    # Document-level findings carry no page of their own; they are
+    # stored attached to page 1 (their detail text identifies them as
+    # document-level) so they appear in the findings reports. They are
+    # deliberately merged AFTER risk computation so they never count
+    # toward page 1's page-level score.
+    if doc_findings:
+        first_page = min(page_data.keys(), default=None)
+        if first_page is not None:
+            for df in doc_findings:
+                df.pop("_all_warnings", None)
+            page_data[first_page]["findings"].extend(doc_findings)
+            all_findings.setdefault(first_page, []).extend(doc_findings)
+        elif session:
+            session.log("  Warning: document-level findings could not "
+                        "be stored (document has no pages).")
 
     if not quiet:
         print_report(all_findings)

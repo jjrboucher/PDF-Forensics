@@ -9,6 +9,50 @@ from pikepdf import Name
 from itertools import combinations
 
 
+def extract_page_text(page_mu):
+    """
+    Single per-page text extraction shared by the text detectors
+    (check_text_overlays, check_text_over_text, collect_page_fonts),
+    replacing three separate get_text() calls per page.
+
+    Extracts once in "rawdict" mode -- a superset of "dict" that adds
+    per-character geometry -- using the library's own default flag set
+    so behaviour matches a plain get_text("rawdict") call. Span-level
+    "text" is synthesized from the per-character data so consumers of
+    the "dict" shape work unchanged.
+
+    Returns the enriched rawdict, or None if extraction fails (each
+    consumer then falls back to its own extraction, preserving its
+    original error behaviour).
+    """
+    try:
+        flags = getattr(pymupdf, "TEXTFLAGS_RAWDICT", None)
+        if flags is None:
+            raw = page_mu.get_text("rawdict")
+        else:
+            raw = page_mu.get_text("rawdict", flags=flags)
+    except Exception:
+        return None
+    return _synthesize_span_text(raw)
+
+
+def _synthesize_span_text(raw):
+    """Add a dict-style "text" key to every rawdict span (joined from
+    its per-character entries) so dict-shape consumers can share the
+    rawdict extraction. Additive only; chars are left untouched."""
+    try:
+        for block in raw.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    if "text" not in span:
+                        span["text"] = "".join(
+                            ch.get("c", "")
+                            for ch in span.get("chars", []))
+    except Exception:
+        pass
+    return raw
+
+
 OVERLAP_THRESHOLD_SQPTS = 1.0
 OFFPAGE_THRESHOLD_PTS = 1.0
 HIDDEN_THRESHOLD_PTS = 0.5
@@ -1008,7 +1052,8 @@ def _has_opaque_background(annot_obj):
     return False
 
 
-def check_text_overlays(page_pk, page_mu, page_num, findings):
+def check_text_overlays(page_pk, page_mu, page_num, findings,
+                        text_page=None):
     """
     Detect text boxes / annotations placed over existing page text.
 
@@ -1041,7 +1086,9 @@ def check_text_overlays(page_pk, page_mu, page_num, findings):
 
     # Collect text bounding boxes from PyMuPDF
     try:
-        blocks = page_mu.get_text("dict", flags=pymupdf.TEXT_PRESERVE_WHITESPACE)
+        blocks = (text_page if text_page is not None else
+                  page_mu.get_text(
+                      "dict", flags=pymupdf.TEXT_PRESERVE_WHITESPACE))
         text_rects = []
         for block in blocks.get("blocks", []):
             if block.get("type") != 0:   # type 0 = text
@@ -1182,7 +1229,8 @@ def check_text_overlays(page_pk, page_mu, page_num, findings):
     return added
 
 
-def check_content_stream_text_overlay(page_pk, page_mu, page_num, findings):
+def check_content_stream_text_overlay(page_pk, page_mu, page_num,
+                                      findings, content_ops=None):
     """
     Detect text overlays implemented directly in the content stream:
     white (or near-white) filled rectangles followed by text drawn
@@ -1215,7 +1263,8 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num, findings):
     cs_objnum, cs_objgen = _page_content_objgen(page_pk)
 
     try:
-        ops = list(pikepdf.parse_content_stream(page_pk))
+        ops = (content_ops if content_ops is not None
+               else list(pikepdf.parse_content_stream(page_pk)))
         operators = [(str(op), operands) for operands, op in ops]
     except Exception:
         return 0
@@ -1449,7 +1498,8 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num, findings):
     return added
 
 
-def check_text_over_text(page_mu, page_num, findings, page_pk=None):
+def check_text_over_text(page_mu, page_num, findings, page_pk=None,
+                         text_page=None):
     """
     Detect text drawn directly on top of other text (text-over-text
     overlay) — a manipulation method that does not use a covering
@@ -1491,7 +1541,8 @@ def check_text_over_text(page_mu, page_num, findings, page_pk=None):
                             if page_pk is not None else (None, None))
 
     try:
-        raw = page_mu.get_text("rawdict")
+        raw = (text_page if text_page is not None
+               else page_mu.get_text("rawdict"))
     except Exception:
         return 0
 
@@ -1727,7 +1778,7 @@ def _normalize_font_family(font_name):
     return name.strip()
 
 
-def collect_page_fonts(page_mu, page_num):
+def collect_page_fonts(page_mu, page_num, text_page=None):
     """
     Collect per-span font usage for a single page.
 
@@ -1739,7 +1790,8 @@ def collect_page_fonts(page_mu, page_num):
     """
     spans = []
     try:
-        data = page_mu.get_text("dict")
+        data = (text_page if text_page is not None
+                else page_mu.get_text("dict"))
     except Exception:
         return spans
 

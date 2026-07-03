@@ -55,6 +55,16 @@ FINDING_TYPE_DEFS = {
     "IMAGE_SMASK":          ("Soft mask on Image XObject",              "INFO"),
     "COMPLEX_TRANSFORM":    ("Complex transform (manual review needed)","INFO"),
     "PARSE_ERROR":          ("Stream parse error",                      "INFO"),
+    # Document-level finding types (analysis/doc_checks.py). Seeded via
+    # INSERT OR IGNORE, so existing databases gain them on next open.
+    "METADATA_DATE_ANOMALY": ("ModDate precedes CreationDate",          "HIGH"),
+    "METADATA_MISMATCH":    ("Info dictionary / XMP disagreement",      "MEDIUM"),
+    "VERSION_MISMATCH":     ("Header / Catalog PDF version differ",     "INFO"),
+    "XMP_ID_ANOMALY":       ("XMP DocumentID equals InstanceID",        "INFO"),
+    "MIXED_CAMERA":         ("Images from multiple capture devices",    "MEDIUM"),
+    "REDACT_UNAPPLIED":     ("Unapplied redaction (content recoverable)","HIGH"),
+    "SIGNED_THEN_MODIFIED": ("File modified after digital signature",   "HIGH"),
+    "STRUCTURAL_WARNING":   ("Structural integrity warnings (qpdf)",    "INFO"),
 }
 
 

@@ -51,7 +51,7 @@ def find_images_in_form(form_obj):
     return image_xrefs
 
 
-def find_image_placements(page_pk):
+def find_image_placements(page_pk, content_ops=None):
     """
     Parse the page content stream and return a list of image placements
     in painting order. Each placement is a dict:
@@ -80,10 +80,13 @@ def find_image_placements(page_pk):
         except Exception:
             continue
 
-    try:
-        ops = pikepdf.parse_content_stream(page_pk)
-    except Exception:
-        return placements
+    if content_ops is not None:
+        ops = content_ops
+    else:
+        try:
+            ops = pikepdf.parse_content_stream(page_pk)
+        except Exception:
+            return placements
 
     # Track the current transformation matrix (CTM).
     # Identity matrix: a=1, b=0, c=0, d=1, e=0, f=0
@@ -193,7 +196,8 @@ def _compute_effective_dpi(pixel_w, pixel_h, ctm):
     return dpi_x, dpi_y, round(display_w, 2), round(display_h, 2)
 
 
-def build_image_map(page_pk, page_num, page_pad, doc_mu):
+def build_image_map(page_pk, page_num, page_pad, doc_mu,
+                    content_ops=None):
     """
     Build image naming map by parsing the content stream, matching
     the enumeration order used by extract_pdf_images.py.
@@ -205,7 +209,8 @@ def build_image_map(page_pk, page_num, page_pad, doc_mu):
         xref_to_labels : {xref: ["01_1", "01_2"]}  (xref may map to multiple labels)
         form_xref_to_labels : {form_xref: ["01_1"]}
     """
-    placements = find_image_placements(page_pk)
+    placements = find_image_placements(page_pk,
+                                       content_ops=content_ops)
 
     label_to_info = {}
     xref_to_labels = {}

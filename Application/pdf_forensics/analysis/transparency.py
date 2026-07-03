@@ -34,7 +34,7 @@ def parse_ext_gstates(page_pk):
     return gstate_props
 
 
-def get_zorder_and_graphics_state(page_pk):
+def get_zorder_and_graphics_state(page_pk, content_ops=None):
     """
     Parse the page content stream to determine the active graphics
     state (opacity, blend mode, SMask) at each Do operator.
@@ -44,10 +44,13 @@ def get_zorder_and_graphics_state(page_pk):
     """
     gstate_props = parse_ext_gstates(page_pk)
 
-    try:
-        ops = pikepdf.parse_content_stream(page_pk)
-    except Exception:
-        return []
+    if content_ops is not None:
+        ops = content_ops
+    else:
+        try:
+            ops = pikepdf.parse_content_stream(page_pk)
+        except Exception:
+            return []
 
     default_gstate = {"ca": 1.0, "BM": "/Normal", "SMask": False}
     current_gstate = dict(default_gstate)

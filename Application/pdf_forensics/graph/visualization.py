@@ -91,10 +91,31 @@ def select_output_path(db_path, conn,
         return path if path else suggested
 
 
+# Scope names → (display label, plain-language definition). Embedded in
+# each generated graph so the exhibit self-describes which filter
+# produced it — two scopes can legitimately yield the same relationship
+# set, and the file itself must say what it is.
+SCOPE_INFO = {
+    "all_placements": (
+        "All Placements",
+        "images whose content (MD5) appears in two or more placements "
+        "anywhere, including repeats on the same page"),
+    "cross_page": (
+        "Cross-Page",
+        "images whose content (MD5) appears on two or more distinct "
+        "pages, in the same or different documents"),
+    "cross_document": (
+        "Cross-Document",
+        "images whose content (MD5) appears in two or more distinct "
+        "documents"),
+}
+
+
 def visualize_graph(G, image_meta, thumbnails, db_path,
                     doc_meta=None,
                     output_path="image_relationship_graph.html",
-                    case_number=None):
+                    case_number=None,
+                    scope=None):
     # pyvis versions vary in what they accept for height/width.
     # Try CSS units first, then pixel strings, then bare integers.
     net = None
@@ -163,16 +184,33 @@ def visualize_graph(G, image_meta, thumbnails, db_path,
     except TypeError:
         net.write_html(output_path)
 
+    # Generation provenance is captured NOW — at write time — so the
+    # exhibit carries the true generation timestamp. (Previously the
+    # 'Generated' line was computed by JavaScript when the file was
+    # VIEWED, which misrepresents an exhibit's creation time.)
+    from datetime import datetime
+    generated_at = datetime.now().astimezone().strftime(
+        "%Y-%m-%d %H:%M:%S %Z")
+    graph_stats = {
+        "nodes": G.number_of_nodes(),
+        "edges": G.number_of_edges(),
+        "unique_images": len(image_meta or {}),
+        "documents": len(doc_meta or {}),
+    }
+
     # Inject our custom JavaScript for right-click exclude and
     # the excluded images panel
     inject_custom_ui(output_path, image_meta, thumbnails, db_path,
-                     doc_meta=doc_meta or {}, case_number=case_number)
+                     doc_meta=doc_meta or {}, case_number=case_number,
+                     scope=scope, generated_at=generated_at,
+                     graph_stats=graph_stats)
 
     return os.path.abspath(output_path)
 
 
 def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
-                     doc_meta=None, case_number=None):
+                     doc_meta=None, case_number=None,
+                     scope=None, generated_at=None, graph_stats=None):
     """
     Inject CSS, HTML panel, and JavaScript into the pyvis-generated
     HTML for right-click exclude, freeze physics after stabilization,
@@ -217,6 +255,9 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     from pdf_forensics.database import compute_file_md5
     from pdf_forensics import __version__ as _ver, __tool_name__ as _tn
     _bcfg = _branding.load_branding()
+    _scope_label, _scope_def = SCOPE_INFO.get(
+        scope or "", (scope or "", ""))
+    _stats = graph_stats or {}
     branding_payload = {
         "agency_logo":   _branding.get_agency_logo_data_uri(_bcfg) or "",
         "info_pairs":    _branding.case_info_pairs(case_number, _bcfg),
@@ -227,11 +268,25 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
         "case_number":   case_number or "",
         "db_md5":        compute_file_md5(db_path) if db_path else "",
         "tool_label":    f"{_tn} v{_ver}",
+        "generated_at":  generated_at or "",
+        "scope":         scope or "",
+        "scope_label":   _scope_label,
+        "scope_definition": _scope_def,
+        "graph_nodes":   _stats.get("nodes", ""),
+        "graph_edges":   _stats.get("edges", ""),
+        "unique_images": _stats.get("unique_images", ""),
+        "documents":     _stats.get("documents", ""),
     }
     branding_json = json.dumps(branding_payload)
 
     css = """
     <style>
+      #toolbar .scope-badge {
+        display: inline-block; margin-left: 8px; padding: 1px 8px;
+        border: 1px solid #E24B4A; border-radius: 3px;
+        color: #F0F0F0; font-size: 11px; letter-spacing: 0.5px;
+        vertical-align: middle; cursor: help;
+      }
       body { margin: 0; background: #1B1B1B; overflow: hidden; }
       #toolbar {
         position: fixed; top: 0; left: 0; right: 0; height: 48px;
@@ -450,9 +505,21 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     </style>
     """
 
+    def _attr_esc(s):
+        return (str(s).replace("&", "&amp;").replace('"', "&quot;")
+                .replace("<", "&lt;").replace(">", "&gt;"))
+
+    _scope_suffix = ""
+    if _scope_label:
+        _scope_suffix = (
+            ' <span class="scope-badge" title="Scope: '
+            + _attr_esc(_scope_label) + " \u2014 " + _attr_esc(_scope_def)
+            + ". Generated " + _attr_esc(generated_at or "unknown")
+            + '.">' + _attr_esc(_scope_label) + "</span>")
+
     toolbar_html = f"""
     <div id="toolbar">
-      <div class="title">{logo_html}<span class="accent">PDF</span> FORENSICS — Image Graph</div>
+      <div class="title">{logo_html}<span class="accent">PDF</span> FORENSICS — Image Graph{_scope_suffix}</div>
       <div class="legend">
         <span class="legend-item" data-risk="low" title="Right-click for options"><span class="dot" style="background:#5DCAA5"></span>Low</span>
         <span class="legend-item" data-risk="mid" title="Right-click for options"><span class="dot" style="background:#EF9F27"></span>Mid</span>
@@ -1401,6 +1468,9 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
       ).join("");
       let md5Line = BRANDING.db_md5
         ? ` &middot; DB MD5: <span class="mono">${{esc(BRANDING.db_md5)}}</span>` : "";
+      let scopeLine = BRANDING.scope_label
+        ? `<br>Scope: ${{esc(BRANDING.scope_label)}} \u2014 ${{esc(BRANDING.scope_definition)}}`
+        : "";
       let coverHtml = `
   ${{classificationHtml}}
   <div class="cover-page">
@@ -1413,8 +1483,8 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     <div class="cover-subtitle">Image Duplication &amp; Reuse Analysis</div>
     <table class="cover-meta"><tbody>${{metaRows}}</tbody></table>
     <div class="cover-foot">
-      Generated ${{esc(timestamp)}} &middot; ${{esc(BRANDING.tool_label || "")}}${{md5Line}}<br>
-      Database: ${{esc(DB_NAME)}} &middot; Images in report: ${{reportImages.size}}
+      Generated ${{esc(BRANDING.generated_at || timestamp)}} &middot; ${{esc(BRANDING.tool_label || "")}}${{md5Line}}<br>
+      Database: ${{esc(DB_NAME)}} &middot; Images in report: ${{reportImages.size}}${{scopeLine}}
     </div>
   </div>`;
       let footerHtml = (BRANDING.footer_text || BRANDING.db_md5)
@@ -1427,7 +1497,7 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
 <html>
 <head>
 <meta charset="utf-8">
-<title>PDF Forensics Report</title>
+<title>PDF Forensics Report${{BRANDING.scope_label ? " \u2014 " + BRANDING.scope_label : ""}}</title>
 <style>
   @page {{
     size: letter; margin: 0.75in;

@@ -839,7 +839,9 @@ REPORTS = [
         "description":
             "One row per analyzed PDF, ranked by document risk score. "
             "The document score aggregates page/document-level signals "
-            "(text overlays, font anomalies) that are not tied to any "
+            "(text overlays, font anomalies, unapplied redactions, "
+            "metadata anomalies, post-signature modification, mixed "
+            "capture devices, structural warnings) not tied to any "
             "single image, plus the presence of reviewer comments, so "
             "these signals are visible in a ranked view rather than only "
             "in their own detail reports. The highest page risk and the "
@@ -855,7 +857,11 @@ REPORTS = [
                     JOIN pages p2         ON p2.id = f.page_id
                     JOIN finding_types ft ON ft.id = f.finding_type_id
                     WHERE p2.analysis_id = a.id
-                      AND ft.code IN ('TEXT_OVERLAY', 'FONT_ANOMALY')
+                      AND ft.code IN ('TEXT_OVERLAY', 'FONT_ANOMALY',
+                                    'REDACT_UNAPPLIED', 'SIGNED_THEN_MODIFIED',
+                                    'METADATA_DATE_ANOMALY', 'METADATA_MISMATCH',
+                                    'MIXED_CAMERA', 'VERSION_MISMATCH',
+                                    'XMP_ID_ANOMALY', 'STRUCTURAL_WARNING')
                 ), '')                          AS "Contributing Findings",
                 (SELECT COUNT(*) FROM comments c
                  WHERE c.analysis_id = a.id)    AS "Comments",

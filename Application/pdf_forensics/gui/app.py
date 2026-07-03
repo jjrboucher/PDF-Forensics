@@ -1476,6 +1476,13 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             g_log("")
 
             generated = []
+            # Scopes are nested filters over the same duplicate-
+            # image data, so two scopes can legitimately select
+            # the identical dataset (e.g. no image repeats solely
+            # within a single page). Track each scope's dataset so
+            # the coincidence is reported at generation time
+            # instead of being discovered later by hashing files.
+            dataset_seen = {}
             for scope in scopes:
                 session.log(f"Generating graph: scope={scope}")
                 g_log(f"  Loading data for {scope}...")
@@ -1489,6 +1496,18 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 md5_set = {row[6] for row in rows}
                 g_log(f"  {len(rows)} placements, "
                       f"{len(md5_set)} unique images")
+
+                dataset_key = tuple(rows)
+                same_as = dataset_seen.get(dataset_key)
+                if same_as:
+                    note = (f"Note: {scope} selected the identical "
+                            f"dataset as {same_as} for this "
+                            f"database \u2014 the two graphs show "
+                            f"the same relationships.")
+                    g_log(f"  \u24d8 {note}", "dim")
+                    session.log(f"  {note}")
+                else:
+                    dataset_seen[dataset_key] = scope
 
                 image_bytes = load_image_bytes(conn, md5_set)
                 findings_by_md5 = load_findings_for_md5s(conn, md5_set)
@@ -1519,7 +1538,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     doc_meta=doc_meta,
                     output_path=out_path,
                     case_number=(session.case_number
-                                 if session else None))
+                                 if session else None),
+                    scope=scope)
 
                 session.register_output("graph", out_path)
                 generated.append((scope, out_path))
@@ -1712,9 +1732,15 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
         selected = [rid for rid, var in report_vars.items()
                     if var.get()]
-        if not selected:
-            messagebox.showerror("No reports",
-                                 "Please select at least one report.")
+        # The visual overlay report can be run on its own — an
+        # examiner who generated the standard reports earlier
+        # should not have to re-select one to run the visual
+        # report afterwards.
+        if not selected and not visual_report_var.get():
+            messagebox.showerror(
+                "No reports",
+                "Please select at least one report, or enable "
+                "the visual overlay report.")
             return
 
         run_btn_r.config(state="disabled")
@@ -1795,6 +1821,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     if n > 0:
                         r_log(f"  \u2713 Visual overlay report — "
                               f"{n} finding(s)", "success")
+                        if not results:
+                            status_var.set(
+                                "Done. Visual overlay report "
+                                "generated.")
+                            status_label.config(fg=SUCCESS)
                     else:
                         r_log("  No overlay findings to visualize.",
                               "dim")

@@ -1,5 +1,117 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-07-03)
+
+### Documentation refresh
+- All seven in-app guides brought current with the 2026-07-02 code
+  changes. Getting Started notes the visual-only report run. Risk
+  Scoring guides: false-positive conditions for the document-level
+  detections (technical); extended document-score description, an
+  unapplied-redaction entry in 4.7, a new plain-language section 4.8
+  on document-record checks, and updated weight rationale (broader).
+  HTML Reports guides: Incremental Updates report sections document
+  the Linearized column, updated SQL, and the linearization exclusion
+  rule; Document Risk Summary sections state the full document-score
+  formula (page maximum + document-level weights + comment flag) and
+  correct the previous comment-flag-only difference explanation.
+- The standalone Technical Reference Guide was updated separately to
+  Version 1.1 (July 2026) with the same content changes.
+
+## v1.0.0 — Update (2026-07-02d)
+
+### Per-page processing speed
+- Page text is now extracted once per page instead of three times.
+  A single rawdict extraction (using the library's default flag set,
+  with span-level text synthesized from the per-character data) is
+  shared by the annotation-overlay, text-over-text, and font-
+  collection detectors. Each detector keeps a self-extraction
+  fallback, so standalone use and per-detector error behaviour are
+  unchanged. Shared-vs-fallback outputs verified identical by test.
+- The page content stream is now parsed once per page instead of
+  three times. The engine parses once and shares the operator list
+  with image-placement mapping, z-order/graphics-state analysis, and
+  the white-box overlay detector (each with a self-parse fallback).
+  Benchmark on a 48,000-operator page: the parse workload drops
+  ~3x (measured 5-9x wall-clock on the parsing portion depending on
+  cache warmth); savings scale with content-stream size.
+- Behaviour note: the annotation-overlay detector previously
+  extracted text with only the preserve-whitespace flag; it now
+  shares the default-flag extraction, which additionally preserves
+  ligatures and applies the library's default MediaBox clipping.
+  Effect: ligature glyphs appear unexpanded in overlap details, and
+  text lying entirely outside the MediaBox (which is never rendered,
+  so cannot be visually concealed by an annotation) is no longer
+  considered. Detection outcomes are otherwise identical.
+
+## v1.0.0 — Update (2026-07-02c)
+
+### New document-level detections (analysis/doc_checks.py)
+- METADATA_DATE_ANOMALY (HIGH, +25): Info dictionary ModDate precedes
+  CreationDate. Dates are parsed timezone-aware; unparseable values
+  produce no comparison, and comparisons that relied on assuming UTC
+  for a designator-less date say so in the finding.
+- METADATA_MISMATCH (MEDIUM, +15 per field): Info dictionary and XMP
+  stream disagree on Producer, CreationDate, or ModDate. Dates are
+  compared as instants, so equivalent times in different timezones do
+  not false-positive.
+- VERSION_MISMATCH (INFO, +5): header %PDF-N.M differs from the
+  Document Catalog /Version entry.
+- XMP_ID_ANOMALY (INFO, +5): xmpMM:DocumentID equals xmpMM:InstanceID.
+- MIXED_CAMERA (MEDIUM, +15): images carry EXIF Make/Model from two or
+  more distinct capture devices (guide 8.3 previously required this
+  comparison to be done manually). EXIF-less images are not counted
+  either way and the finding states how many images were assessable.
+- REDACT_UNAPPLIED (HIGH, +35, page-level): /Redact annotation present
+  but not applied — the covered content remains recoverable in the
+  file. One finding per annotation with rect and object locator.
+- SIGNED_THEN_MODIFIED (HIGH, +35): file bytes extend beyond the last
+  digital signature's /ByteRange coverage — content was appended
+  after signing. Structural check only (no cryptographic validation,
+  which remains out of scope); a signature whose ByteRange cannot be
+  evaluated is reported as explicitly INDETERMINATE.
+- STRUCTURAL_WARNING (INFO, +5): the qpdf structural check reported
+  warnings (stream /Length discrepancies, damaged xref data, etc.);
+  up to ten are listed in the finding, all in the session log.
+- Document-level findings add their weights directly to the document
+  risk score (doc_risk = MIN(MAX(page score) + SUM(document-level
+  weights) + comment flag, 100)) and are stored attached to page 1,
+  identified as document-level in their detail text and excluded from
+  page 1's page-level score by construction. The Document Risk
+  Summary report's Contributing Findings column includes the new
+  codes. New finding types are seeded with INSERT OR IGNORE, so
+  existing databases gain them on next open (no schema change).
+
+### GUI fix
+- The visual overlay report can now be run on its own from the HTML
+  report menu. Previously at least one standard report had to be
+  selected even when only the visual report was wanted; the validation
+  now requires a standard report OR the visual report, and the status
+  line correctly reports success for a visual-only run.
+
+## v1.0.0 — Update (2026-07-02b)
+
+### Graph exhibit provenance and scope transparency
+- Graph HTML files now self-describe. Each generated graph embeds its
+  scope name, the scope definition, the generation timestamp, and
+  node/edge/image/document counts. The scope appears as a badge in the
+  toolbar (hover for the definition and generation time) and on the
+  printable report cover, whose title also names the scope.
+- The "Generated" timestamp on the printable cover is now captured at
+  file-generation time and embedded in the exhibit. Previously it was
+  computed by JavaScript when the file was VIEWED, so every viewing of
+  an exhibit displayed a fresh "generated" time — misleading for a
+  file that may be presented in proceedings.
+- The GUI now reports when two selected scopes select the identical
+  dataset for a database (the scopes are nested filters, so this is
+  legitimate — e.g. All Placements and Cross-Page coincide when no
+  image repeats solely within a single page). The coincidence is
+  stated in the generation log and session log instead of being left
+  to be discovered by hashing the output files.
+- Because the scope is embedded, identical datasets no longer produce
+  byte-identical files across scopes; each file identifies itself.
+- Graph guides (technical and broader) now explain the nested-scope
+  relationship and the embedded provenance.
+
 ## v1.0.0 — Update (2026-07-02)
 
 ### Detection accuracy fixes
