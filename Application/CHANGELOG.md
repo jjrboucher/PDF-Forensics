@@ -1,5 +1,28 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-07-03b)
+
+### Triage: prior-version metadata in the Excel output
+- The triage spreadsheet now includes the metadata of prior
+  (incremental-update) versions, matching the coverage the HTML
+  metadata report already had. For each triaged PDF that contains
+  two or more %%EOF markers, every prior version is reconstructed in
+  memory (byte-identical to what the version-extraction feature
+  writes to disk) and scanned by the same method as the current
+  version, so its metadata appears as its own row.
+- A new Source column on the pdf-triage, pdf-metadata, and comments
+  worksheets labels each row "Current" or "Prior v1", "Prior v2",
+  etc. Prior-version rows use the filename basename_versionN.pdf, the
+  same convention as the extracted-version files.
+- triage_pdf was refactored into a bytes-based core (triage_pdf_bytes)
+  so prior versions are scanned from memory without writing temporary
+  files. A reconstruct_prior_versions() helper mirrors the existing
+  extract_prior_versions() truncation logic exactly.
+- Enabled by default; the CLI gains --no-prior-versions to opt out.
+  Reviewer comments are also extracted per prior version.
+- Getting Started guide updated to describe the Source column and
+  prior-version rows.
+
 ## v1.0.0 — Update (2026-07-03)
 
 ### Documentation refresh

@@ -12,6 +12,7 @@ overlap detection). Uses only PyMuPDF for speed.
 """
 
 import os
+import io
 import hashlib
 from datetime import datetime
 
@@ -39,16 +40,47 @@ def _safe_str(val):
 
 def triage_pdf(pdf_path):
     """
-    Fast scan of a single PDF. Returns a dict with triage data,
+    Fast scan of a single PDF file. Returns a dict with triage data,
     or None if the file can't be opened.
     """
     if not os.path.isfile(pdf_path):
         return None
+    try:
+        with open(pdf_path, "rb") as f:
+            data = f.read()
+    except Exception:
+        return None
+    return triage_pdf_bytes(data, os.path.basename(pdf_path),
+                            os.path.abspath(pdf_path))
+
+
+def triage_pdf_bytes(data, filename, path, source="Current",
+                     version_number=None):
+    """
+    Fast scan of a PDF held in memory. Used both for files on disk
+    (via triage_pdf) and for prior versions reconstructed in memory,
+    so that prior-version metadata is extracted by exactly the same
+    method as the current version and appears in the same worksheet.
+
+    Parameters:
+      data           : the raw PDF bytes
+      filename       : display filename for the row
+      path           : source path (the parent file's path for a
+                       reconstructed prior version)
+      source         : "Current" or a prior-version label
+      version_number : the version number for a prior version, else None
+
+    Returns a triage result dict, or None if the bytes can't be parsed.
+    """
+    if not data:
+        return None
 
     result = {
-        "path": os.path.abspath(pdf_path),
-        "filename": os.path.basename(pdf_path),
-        "size_bytes": os.path.getsize(pdf_path),
+        "path": path,
+        "filename": filename,
+        "source": source,
+        "version_number": version_number,
+        "size_bytes": len(data),
         "pages": 0,
         "image_count": 0,
         "font_count": 0,
@@ -69,20 +101,16 @@ def triage_pdf(pdf_path):
         "metadata": {},
     }
 
-    # MD5 hash
-    h = hashlib.md5()
+    # MD5 hash (over the exact bytes triaged — for a prior version this
+    # equals the MD5 of the file the version-extraction feature would
+    # write to disk, so the two agree)
     try:
-        with open(pdf_path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                h.update(chunk)
-        result["md5"] = h.hexdigest()
+        result["md5"] = hashlib.md5(data).hexdigest()
     except Exception:
         pass
 
-    # %%EOF version count
+    # %%EOF version count within these bytes
     try:
-        with open(pdf_path, "rb") as f:
-            data = f.read()
         pos = 0
         eof_count = 0
         while True:
@@ -97,7 +125,7 @@ def triage_pdf(pdf_path):
 
     # PyMuPDF scan
     try:
-        doc = pymupdf.open(pdf_path)
+        doc = pymupdf.open(stream=data, filetype="pdf")
         result["pages"] = len(doc)
         result["encrypted"] = doc.is_encrypted
 
@@ -167,7 +195,7 @@ def triage_pdf(pdf_path):
     # pikepdf metadata
     if HAS_PIKEPDF:
         try:
-            doc_pk = pikepdf.open(pdf_path)
+            doc_pk = pikepdf.open(io.BytesIO(data))
             if doc_pk.docinfo:
                 for k, v in doc_pk.docinfo.items():
                     key = _safe_str(k).lstrip("/")
@@ -189,18 +217,64 @@ def triage_pdf(pdf_path):
     return result
 
 
+def reconstruct_prior_versions(data):
+    """
+    Reconstruct the bytes of each prior version of a PDF from its
+    incremental-update structure, in memory.
+
+    Each %%EOF marker delimits a version. The bytes up to and
+    including the Nth %%EOF (plus trailing whitespace) are version N;
+    the final %%EOF corresponds to the current file, which is not
+    returned here. This mirrors extract_prior_versions() exactly, so a
+    reconstructed version's bytes are byte-identical to the file that
+    feature writes to disk.
+
+    Returns a list of (version_number, version_bytes), empty when the
+    file has one or zero %%EOF markers (i.e. no prior versions).
+    """
+    if not data:
+        return []
+    offsets = []
+    pos = 0
+    while True:
+        idx = data.find(b"%%EOF", pos)
+        if idx == -1:
+            break
+        offsets.append(idx)
+        pos = idx + 5
+    if len(offsets) <= 1:
+        return []
+
+    versions = []
+    # All markers except the last (the last is the current file)
+    for version_num, eof_offset in enumerate(offsets[:-1], start=1):
+        end_pos = eof_offset + 5  # len(b"%%EOF")
+        while end_pos < len(data) and data[end_pos:end_pos + 1] in (
+                b"\r", b"\n", b" "):
+            end_pos += 1
+        versions.append((version_num, data[:end_pos]))
+    return versions
+
+
 def run_triage(pdf_paths, output_path, session=None,
-               progress_callback=None):
+               progress_callback=None, include_prior_versions=True):
     """
     Triage a list of PDFs and write results to an Excel file.
 
     Parameters:
-      pdf_paths         : list of PDF file paths
-      output_path       : path for the output .xlsx file
-      session           : optional Session for logging
-      progress_callback : callable(index, total, filename) per PDF
+      pdf_paths              : list of PDF file paths
+      output_path            : path for the output .xlsx file
+      session                : optional Session for logging
+      progress_callback      : callable(index, total, filename) per PDF
+      include_prior_versions : when True (default), any PDF containing
+                               incremental updates (2+ %%EOF markers)
+                               also contributes one row per prior
+                               version, so the prior versions' metadata
+                               appears in the spreadsheet alongside the
+                               current version's.
 
-    Returns (processed_count, skipped_count, output_path).
+    Returns (processed_count, skipped_count, output_path). The
+    processed count includes prior-version rows.
     """
     from openpyxl import Workbook
     from openpyxl.styles import (
@@ -211,37 +285,93 @@ def run_triage(pdf_paths, output_path, session=None,
     skipped = 0
     all_comments = []   # flat list across all triaged PDFs
 
+    def _extract_comments(data_or_path, row):
+        """Append this row's reviewer comments to all_comments,
+        tagged with the row's filename/path/source. Accepts a path
+        (str) or raw bytes."""
+        try:
+            import pikepdf
+            from pdf_forensics.analysis.comments import extract_comments
+            if isinstance(data_or_path, (bytes, bytearray)):
+                ctx = pikepdf.open(io.BytesIO(data_or_path))
+            else:
+                ctx = pikepdf.open(data_or_path)
+            with ctx as _cpdf:
+                for c in extract_comments(_cpdf):
+                    c = dict(c)
+                    c["filename"] = row["filename"]
+                    c["path"] = row["path"]
+                    c["source"] = row.get("source", "Current")
+                    all_comments.append(c)
+        except Exception as e:
+            if session:
+                session.log(
+                    f"  Could not extract comments from "
+                    f"{row['filename']}: {e}", "warning")
+
     for i, pdf_path in enumerate(pdf_paths):
         if progress_callback:
             progress_callback(i + 1, len(pdf_paths),
                               os.path.basename(pdf_path))
 
         try:
-            triage = triage_pdf(pdf_path)
+            # Read once; reuse the bytes for the current-version triage,
+            # prior-version reconstruction, and comment extraction.
+            file_data = None
+            try:
+                with open(pdf_path, "rb") as fh:
+                    file_data = fh.read()
+            except Exception:
+                file_data = None
+
+            if file_data is not None:
+                triage = triage_pdf_bytes(
+                    file_data, os.path.basename(pdf_path),
+                    os.path.abspath(pdf_path))
+            else:
+                triage = triage_pdf(pdf_path)
+
             if triage:
                 results.append(triage)
-                # Extract reviewer comments / markup annotations
-                try:
-                    import pikepdf
-                    from pdf_forensics.analysis.comments import (
-                        extract_comments)
-                    with pikepdf.open(pdf_path) as _cpdf:
-                        for c in extract_comments(_cpdf):
-                            c = dict(c)
-                            c["filename"] = triage["filename"]
-                            c["path"] = triage["path"]
-                            all_comments.append(c)
-                except Exception as e:
-                    if session:
-                        session.log(
-                            f"  Could not extract comments from "
-                            f"{os.path.basename(pdf_path)}: {e}",
-                            "warning")
+                _extract_comments(
+                    file_data if file_data is not None else pdf_path,
+                    triage)
                 if session:
                     session.log(
                         f"  Triaged: {os.path.basename(pdf_path)} "
                         f"({triage['pages']} pages, "
                         f"{triage['image_count']} images)")
+
+                # Prior versions: reconstruct in memory and triage each
+                # with the same method, so their metadata lands in the
+                # spreadsheet just as it does in the HTML metadata report.
+                if include_prior_versions and file_data is not None:
+                    base = os.path.splitext(
+                        os.path.basename(pdf_path))[0]
+                    try:
+                        priors = reconstruct_prior_versions(file_data)
+                    except Exception as e:
+                        priors = []
+                        if session:
+                            session.log(
+                                f"  Could not reconstruct prior "
+                                f"versions of "
+                                f"{os.path.basename(pdf_path)}: {e}",
+                                "warning")
+                    for vnum, vbytes in priors:
+                        vname = f"{base}_version{vnum}.pdf"
+                        vtriage = triage_pdf_bytes(
+                            vbytes, vname,
+                            os.path.abspath(pdf_path),
+                            source=f"Prior v{vnum}",
+                            version_number=vnum)
+                        if vtriage:
+                            results.append(vtriage)
+                            _extract_comments(vbytes, vtriage)
+                            if session:
+                                session.log(
+                                    f"    \u21b3 Prior version {vnum} "
+                                    f"metadata included ({vname})")
             else:
                 skipped += 1
                 if session:
@@ -272,7 +402,7 @@ def run_triage(pdf_paths, output_path, session=None,
     ws1.title = "pdf-triage"
 
     triage_headers = [
-        "Filename", "Path", "Size (bytes)", "Pages",
+        "Filename", "Source", "Path", "Size (bytes)", "Pages",
         "Images", "Fonts", "Versions (%%EOF)",
         "DPI Min", "DPI Max", "Mixed DPI",
         "Created", "Modified", "Author", "Creator",
@@ -289,7 +419,8 @@ def run_triage(pdf_paths, output_path, session=None,
 
     for row_idx, r in enumerate(results, 2):
         values = [
-            r["filename"], r["path"], r["size_bytes"],
+            r["filename"], r.get("source", "Current"), r["path"],
+            r["size_bytes"],
             r["pages"], r["image_count"], r["font_count"],
             r["version_count"],
             r["dpi_min"], r["dpi_max"], r["dpi_mixed"],
@@ -318,7 +449,7 @@ def run_triage(pdf_paths, output_path, session=None,
         col_letter = get_column_letter(col_idx)
         ws1.column_dimensions[col_letter].width = max_len + 3
 
-    ws1.freeze_panes = "B2"
+    ws1.freeze_panes = "C2"
     last_col = get_column_letter(len(triage_headers))
     ws1.auto_filter.ref = f"A1:{last_col}{len(results) + 1}"
 
@@ -334,7 +465,7 @@ def run_triage(pdf_paths, output_path, session=None,
                 all_meta_keys.append(k)
                 seen_keys.add(k)
 
-    meta_headers = ["Filename", "Path"] + all_meta_keys
+    meta_headers = ["Filename", "Source", "Path"] + all_meta_keys
 
     for col, hdr in enumerate(meta_headers, 1):
         cell = ws2.cell(row=1, column=col, value=_safe_str(hdr))
@@ -347,10 +478,12 @@ def run_triage(pdf_paths, output_path, session=None,
         ws2.cell(row=row_idx, column=1,
                  value=r["filename"]).font = cell_font
         ws2.cell(row=row_idx, column=2,
+                 value=r.get("source", "Current")).font = cell_font
+        ws2.cell(row=row_idx, column=3,
                  value=r["path"]).font = cell_font
         for col_offset, key in enumerate(all_meta_keys):
             val = _safe_str(r["metadata"].get(key, ""))
-            cell = ws2.cell(row=row_idx, column=col_offset + 3,
+            cell = ws2.cell(row=row_idx, column=col_offset + 4,
                             value=val)
             cell.font = cell_font
             cell.border = border
@@ -368,7 +501,7 @@ def run_triage(pdf_paths, output_path, session=None,
         col_letter = get_column_letter(col_idx)
         ws2.column_dimensions[col_letter].width = max_len + 3
 
-    ws2.freeze_panes = "B2"
+    ws2.freeze_panes = "C2"
     if meta_headers:
         last_col = get_column_letter(len(meta_headers))
         ws2.auto_filter.ref = f"A1:{last_col}{len(results) + 1}"
@@ -377,7 +510,7 @@ def run_triage(pdf_paths, output_path, session=None,
     if all_comments:
         ws3 = wb.create_sheet("comments")
         comment_headers = [
-            "Filename", "Path", "Page", "Type", "Author",
+            "Filename", "Source", "Path", "Page", "Type", "Author",
             "Date/Time", "Created", "Modified", "Comment", "Object",
         ]
         for col, hdr in enumerate(comment_headers, 1):
@@ -396,6 +529,7 @@ def run_triage(pdf_paths, output_path, session=None,
             dt = c.get("modified_date") or c.get("created_date") or ""
             row_vals = [
                 c.get("filename", ""),
+                c.get("source", "Current"),
                 c.get("path", ""),
                 c.get("page_number", ""),
                 c.get("annot_subtype", ""),
@@ -423,7 +557,7 @@ def run_triage(pdf_paths, output_path, session=None,
             ws3.column_dimensions[
                 get_column_letter(col_idx)].width = max_len + 3
 
-        ws3.freeze_panes = "B2"
+        ws3.freeze_panes = "C2"
         last_col = get_column_letter(len(comment_headers))
         ws3.auto_filter.ref = f"A1:{last_col}{len(all_comments) + 1}"
 

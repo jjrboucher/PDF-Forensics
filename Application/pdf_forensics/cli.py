@@ -90,6 +90,11 @@ def main_cli():
                           help="Text file with PDF paths")
     p_triage.add_argument("-o", "--output", default=None,
                           help="Output Excel file path")
+    p_triage.add_argument("--no-prior-versions", action="store_true",
+                          help="Do not include prior-version metadata "
+                               "for PDFs with incremental updates "
+                               "(by default each prior version's "
+                               "metadata is added as its own row)")
 
     args = parser.parse_args()
 
@@ -361,7 +366,8 @@ def _cli_triage(args, session, case):
 
     processed, skipped, out = run_triage(
         valid, xlsx_path, session=session,
-        progress_callback=progress)
+        progress_callback=progress,
+        include_prior_versions=not args.no_prior_versions)
 
     print(f"\nTriage complete: {processed} processed, "
           f"{skipped} skipped")
