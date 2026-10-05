@@ -65,6 +65,13 @@ def main_cli():
                          help="Scope for duplicate detection")
     p_graph.add_argument("-o", "--output", default=None,
                          help="Output HTML file path")
+    p_graph.add_argument("--separate-versions", action="store_true",
+                         help="Treat each extracted prior version as a "
+                              "separate document in cross-document scope "
+                              "(default: group a document with its own "
+                              "prior versions by lineage, so within-"
+                              "version reuse is not counted as "
+                              "cross-document)")
 
     # --- report subcommand ---
     p_report = sub.add_parser("report",
@@ -234,7 +241,9 @@ def _cli_graph(args, session):
     conn = sqlite3.connect(args.database)
     validate_database(conn)
 
-    rows = load_data(conn, scope=args.scope)
+    group_versions = not args.separate_versions
+    rows = load_data(conn, scope=args.scope,
+                     group_versions=group_versions)
     if not rows:
         print(f"No data for scope: {args.scope}")
         conn.close()
@@ -263,7 +272,7 @@ def _cli_graph(args, session):
         G, image_meta, thumbnails, args.database,
         doc_meta=doc_meta, output_path=out_path,
         case_number=session.case_number,
-        scope=args.scope)
+        scope=args.scope, group_versions=group_versions)
 
     session.register_output("graph", out_path)
     graph_print_summary(rows, G, len(thumbnails))

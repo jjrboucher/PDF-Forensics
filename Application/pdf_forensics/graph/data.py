@@ -6,7 +6,7 @@ import sqlite3
 from collections import defaultdict
 
 
-def load_data(conn, scope="cross_document"):
+def load_data(conn, scope="cross_document", group_versions=True):
     """
     Load image placements that appear more than once.
 
@@ -14,15 +14,55 @@ def load_data(conn, scope="cross_document"):
       'all_placements'  : md5 appears in 2+ image placements
       'cross_page'      : md5 appears on 2+ distinct pages
       'cross_document'  : md5 appears in 2+ distinct documents
+
+    group_versions (cross_document only): when True (default), a
+    document and the prior versions extracted from it are treated as a
+    single lineage, so an image shared only among versions of the SAME
+    document is NOT counted as cross-document reuse. When False, every
+    version counts as its own document (legacy behaviour). Reuse that
+    spans two distinct lineages is always cross-document either way.
+
+    Each returned row carries, after risk_score:
+      source_analysis_id (11), version_number (12), lineage_root (13)
+    so the graph builder can distinguish genuine cross-lineage reuse
+    from within-lineage (version) reuse.
     """
+    # The risk_score column was added in a later schema version.
+    cur = conn.execute("PRAGMA table_info(images)")
+    has_risk = any(row[1] == "risk_score" for row in cur.fetchall())
+    risk_select = "i.risk_score AS risk_score" if has_risk \
+        else "0 AS risk_score"
+
+    # Lineage columns arrived in schema revision 7. Degrade gracefully
+    # on older databases: every document is then its own lineage.
+    cur = conn.execute("PRAGMA table_info(analyses)")
+    acols = {row[1] for row in cur.fetchall()}
+    has_lineage = ("source_analysis_id" in acols
+                   and "version_number" in acols)
+    if has_lineage:
+        lineage_root_expr = "COALESCE(a.source_analysis_id, a.id)"
+        source_select = "a.source_analysis_id AS source_analysis_id"
+        version_select = "a.version_number AS version_number"
+    else:
+        lineage_root_expr = "a.id"
+        source_select = "NULL AS source_analysis_id"
+        version_select = "NULL AS version_number"
+
+    # Grouping affects only the cross-document distinctness test.
+    if group_versions and has_lineage:
+        cross_doc_key = lineage_root_expr
+    else:
+        cross_doc_key = "p.analysis_id"
+
     if scope == "cross_document":
-        dup_filter = """
+        dup_filter = f"""
             SELECT idata.md5_hash
             FROM image_data idata
             JOIN images i ON i.image_data_id = idata.id
             JOIN pages p ON p.id = i.page_id
+            JOIN analyses a ON a.id = p.analysis_id
             GROUP BY idata.md5_hash
-            HAVING COUNT(DISTINCT p.analysis_id) > 1
+            HAVING COUNT(DISTINCT {cross_doc_key}) > 1
         """
     elif scope == "cross_page":
         dup_filter = """
@@ -41,13 +81,6 @@ def load_data(conn, scope="cross_document"):
             HAVING COUNT(i.id) > 1
         """
 
-    # The risk_score column was added in a later schema version.
-    # Detect whether it exists so we degrade gracefully.
-    cur = conn.execute("PRAGMA table_info(images)")
-    has_risk = any(row[1] == "risk_score" for row in cur.fetchall())
-    risk_select = "i.risk_score AS risk_score" if has_risk \
-        else "0 AS risk_score"
-
     query = f"""
         SELECT
             a.id AS analysis_id,
@@ -60,7 +93,10 @@ def load_data(conn, scope="cross_document"):
             idata.format_ext,
             idata.width_px,
             idata.height_px,
-            {risk_select}
+            {risk_select},
+            {source_select},
+            {version_select},
+            {lineage_root_expr} AS lineage_root
         FROM image_data idata
         JOIN images i   ON i.image_data_id = idata.id
         JOIN pages p    ON p.id = i.page_id

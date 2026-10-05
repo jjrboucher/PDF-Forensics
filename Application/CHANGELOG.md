@@ -1,5 +1,54 @@
 # PDF Forensics Suite — Changelog
 
+## v1.0.0 — Update (2026-07-09b)
+
+### Documentation correction
+- Graph guides (technical and broader): the cross-document image
+  border was described as "orange (#FFA500), width 3" but the tool
+  actually renders it bright red (#FA0F00, width 4) — the colour
+  the examiner sees in the legend and graph. Corrected all border
+  references (body text, the vis.js code snippet, manual-validation
+  step) and retitled two broader-guide headings ("The Orange Border"
+  -> "The Cross-Document Border"; "Red-with-Orange-Border Nodes" ->
+  "High-Risk Cross-Document Nodes"). The MID risk-tier colour, which
+  is genuinely amber/orange (#EF9F27), is unchanged. The broader
+  guide's table of contents should be refreshed in Word (the two
+  retitled headings).
+
+## v1.0.0 — Update (2026-07-09)
+
+### Graph: prior-version lineage handling
+- Image reuse in the relationship graph is now classified by
+  LINEAGE rather than raw document count. A document and the prior
+  versions extracted from it form one lineage; an image shared only
+  within a lineage is treated as version reuse, not cross-document
+  reuse, so an expected overlap between a document and its own
+  versions no longer appears as a false cross-document flag.
+- Schema revision 7 adds analyses.source_analysis_id and
+  analyses.version_number, recording each extracted version's parent
+  and version number at analysis time (additive, idempotent
+  migration). Lineage is recorded explicitly rather than inferred
+  from filenames. save_to_db now returns the analysis id;
+  analyze_pdf accepts and records the lineage.
+- Cross-document scope groups prior versions by lineage by default
+  (COUNT(DISTINCT COALESCE(source_analysis_id, id)) > 1). A toggle
+  reverts to the legacy per-document count: GUI "Group prior
+  versions by lineage" (on by default); CLI --separate-versions.
+- Within-lineage (version) reuse is shown, not hidden: a violet
+  dashed border on the image node, dashed edges for any placement in
+  a prior version, and a muted-blue "(prior vN)" label on
+  prior-version document nodes. This preserves the forensically
+  useful case of an image present in a prior version but removed
+  from the current one (a shared node reaching only into the dashed
+  version subtree).
+- New legend entries (Version reuse, Prior version) and a cross-doc
+  tooltip clarifying it means cross-lineage. The grouping state,
+  prior-version document count, and version-reuse / cross-document
+  image counts are embedded in each exhibit (toolbar + printable
+  cover) per the exhibit-provenance discipline.
+- Graph guides (technical and broader) document the lineage grouping,
+  the version-reuse visual encoding, and the toggle.
+
 ## v1.0.0 — Update (2026-07-03b)
 
 ### Triage: prior-version metadata in the Excel output

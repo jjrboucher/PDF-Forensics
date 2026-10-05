@@ -3,6 +3,7 @@ Main application GUI — unified launcher with main menu and sub-menus.
 """
 
 import os
+import re
 import sys
 import sqlite3
 import tkinter as tk
@@ -1074,12 +1075,16 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         # cascade (extract versions from versions).
         process_queue = list(pdf_files)
         is_extracted_version = set()  # indices of extracted versions
+        # queue index -> (parent_analysis_id, version_number) for
+        # extracted prior versions, so lineage is recorded in the DB.
+        version_lineage = {}
         queue_idx = 0
         progress_reset(len(process_queue))
 
         while queue_idx < len(process_queue):
             pdf_path = process_queue[queue_idx]
             this_is_version = queue_idx in is_extracted_version
+            this_lineage = version_lineage.get(queue_idx)
             queue_idx += 1
             basename = os.path.basename(pdf_path)
 
@@ -1144,7 +1149,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     quiet=True,
                     progress_callback=on_page_progress,
                     skip_duplicates=False,
-                    force=True)
+                    force=True,
+                    source_analysis_id=(this_lineage[0]
+                                        if this_lineage else None),
+                    version_number=(this_lineage[1]
+                                    if this_lineage else None))
 
                 # Replace progress line with final result
                 log_text.config(state="normal")
@@ -1178,11 +1187,16 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                                 f"    \u21b3 {len(version_paths)} prior "
                                 f"version(s) extracted, queued",
                                 "dim")
+                            parent_aid = summary.get("analysis_id")
                             start_idx = len(process_queue)
                             process_queue.extend(version_paths)
-                            for vi in range(start_idx,
-                                            len(process_queue)):
+                            for off, vpath in enumerate(version_paths):
+                                vi = start_idx + off
                                 is_extracted_version.add(vi)
+                                m = re.search(r"_version(\d+)\.pdf$",
+                                              os.path.basename(vpath))
+                                vnum = int(m.group(1)) if m else None
+                                version_lineage[vi] = (parent_aid, vnum)
                 else:
                     failed += 1
                     log_text.insert(progress_idx,
@@ -1387,6 +1401,23 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         scope_body, text="Cross-document (image in 2+ documents)",
         variable=scope_vars["cross_document"])
     _scope_cd.pack(anchor="w")
+
+    group_versions_var = tk.BooleanVar(value=True)
+    _grp = ttk.Checkbutton(
+        scope_body,
+        text="Group prior versions by lineage (recommended)",
+        variable=group_versions_var)
+    _grp.pack(anchor="w", pady=(6, 0))
+    attach_tooltip(_grp,
+                   "In cross-document scope, treat a document and the prior "
+                   "versions extracted from it as one lineage, so an image "
+                   "shared only between a document and its own versions is "
+                   "shown as version reuse (violet, dashed) rather than "
+                   "counted as cross-document reuse. Uncheck to treat every "
+                   "version as a separate document. Version placements are "
+                   "always drawn with dashed edges regardless of this "
+                   "setting.")
+
     attach_tooltip(_scope_cd,
                    "Only graph images that appear in two or more separate "
                    "documents \u2014 useful for spotting a shared stamp, "
@@ -1487,7 +1518,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 session.log(f"Generating graph: scope={scope}")
                 g_log(f"  Loading data for {scope}...")
 
-                rows = load_data(conn, scope=scope)
+                rows = load_data(
+                    conn, scope=scope,
+                    group_versions=group_versions_var.get())
                 if not rows:
                     g_log(f"  \u2298 {scope} — no data", "dim")
                     session.log(f"  No data for scope {scope}")
@@ -1539,7 +1572,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     output_path=out_path,
                     case_number=(session.case_number
                                  if session else None),
-                    scope=scope)
+                    scope=scope,
+                    group_versions=group_versions_var.get())
 
                 session.register_output("graph", out_path)
                 generated.append((scope, out_path))

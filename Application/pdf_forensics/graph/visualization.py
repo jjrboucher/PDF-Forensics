@@ -115,7 +115,7 @@ def visualize_graph(G, image_meta, thumbnails, db_path,
                     doc_meta=None,
                     output_path="image_relationship_graph.html",
                     case_number=None,
-                    scope=None):
+                    scope=None, group_versions=True):
     # pyvis versions vary in what they accept for height/width.
     # Try CSS units first, then pixel strings, then bare integers.
     net = None
@@ -191,11 +191,24 @@ def visualize_graph(G, image_meta, thumbnails, db_path,
     from datetime import datetime
     generated_at = datetime.now().astimezone().strftime(
         "%Y-%m-%d %H:%M:%S %Z")
+    _version_reuse = sum(
+        1 for d in (image_meta or {}).values()
+        if d.get("is_version_reuse"))
+    _cross_doc = sum(
+        1 for d in (image_meta or {}).values()
+        if d.get("is_cross_doc"))
+    _version_docs = sum(
+        1 for d in (doc_meta or {}).values()
+        if d.get("is_version"))
     graph_stats = {
         "nodes": G.number_of_nodes(),
         "edges": G.number_of_edges(),
         "unique_images": len(image_meta or {}),
         "documents": len(doc_meta or {}),
+        "cross_doc_images": _cross_doc,
+        "version_reuse_images": _version_reuse,
+        "version_documents": _version_docs,
+        "group_versions": bool(group_versions),
     }
 
     # Inject our custom JavaScript for right-click exclude and
@@ -276,6 +289,10 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
         "graph_edges":   _stats.get("edges", ""),
         "unique_images": _stats.get("unique_images", ""),
         "documents":     _stats.get("documents", ""),
+        "cross_doc_images":     _stats.get("cross_doc_images", ""),
+        "version_reuse_images": _stats.get("version_reuse_images", ""),
+        "version_documents":    _stats.get("version_documents", ""),
+        "group_versions":       _stats.get("group_versions", True),
     }
     branding_json = json.dumps(branding_payload)
 
@@ -314,6 +331,13 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
       }
       #toolbar .legend .dot.ring {
         background: #555; border: 2px solid #FA0F00;
+      }
+      #toolbar .legend .dot.version-ring {
+        background: #555; border: 2px dashed #8E7CC3;
+      }
+      #toolbar .legend .dash {
+        display: inline-block; width: 16px; height: 0;
+        border-top: 2px dashed #6C8EBF; vertical-align: middle;
       }
       #toolbar button {
         background: #363636; color: #F0F0F0; border: 1px solid #3D3D3D;
@@ -524,7 +548,9 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
         <span class="legend-item" data-risk="low" title="Right-click for options"><span class="dot" style="background:#5DCAA5"></span>Low</span>
         <span class="legend-item" data-risk="mid" title="Right-click for options"><span class="dot" style="background:#EF9F27"></span>Mid</span>
         <span class="legend-item" data-risk="high" title="Right-click for options"><span class="dot" style="background:#E24B4A"></span>High</span>
-        <span class="legend-item" data-risk="crossdoc" title="Right-click for options"><span class="dot ring"></span>Cross-doc</span>
+        <span class="legend-item" data-risk="crossdoc" title="Genuine cross-document reuse (spans 2+ lineages). Right-click for options"><span class="dot ring"></span>Cross-doc</span>
+        <span class="legend-item" title="Within-lineage reuse: an image shared only between a document and its own prior versions (expected, not cross-document)"><span class="dot version-ring"></span>Version reuse</span>
+        <span class="legend-item" title="A placement that lives in a prior version of a document is drawn with a dashed edge"><span class="dash"></span>Prior version</span>
       </div>
       <div class="spacer"></div>
       <button id="exclude-all-btn">Exclude all images</button>
@@ -1471,6 +1497,18 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
       let scopeLine = BRANDING.scope_label
         ? `<br>Scope: ${{esc(BRANDING.scope_label)}} \u2014 ${{esc(BRANDING.scope_definition)}}`
         : "";
+      let versionLine = "";
+      if (BRANDING.version_documents) {{
+        const grp = BRANDING.group_versions
+          ? "prior versions grouped by lineage (a document and its own "
+            + "versions are treated as one; reuse within a lineage is shown "
+            + "as version reuse, not cross-document)"
+          : "each prior version treated as a separate document";
+        versionLine = `<br>Prior versions: ${{esc(String(BRANDING.version_documents))}} `
+          + `version document(s) in view; ${{esc(grp)}}. `
+          + `Version-reuse images: ${{esc(String(BRANDING.version_reuse_images || 0))}}; `
+          + `cross-document images: ${{esc(String(BRANDING.cross_doc_images || 0))}}.`;
+      }}
       let coverHtml = `
   ${{classificationHtml}}
   <div class="cover-page">
@@ -1484,7 +1522,7 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     <table class="cover-meta"><tbody>${{metaRows}}</tbody></table>
     <div class="cover-foot">
       Generated ${{esc(BRANDING.generated_at || timestamp)}} &middot; ${{esc(BRANDING.tool_label || "")}}${{md5Line}}<br>
-      Database: ${{esc(DB_NAME)}} &middot; Images in report: ${{reportImages.size}}${{scopeLine}}
+      Database: ${{esc(DB_NAME)}} &middot; Images in report: ${{reportImages.size}}${{scopeLine}}${{versionLine}}
     </div>
   </div>`;
       let footerHtml = (BRANDING.footer_text || BRANDING.db_md5)

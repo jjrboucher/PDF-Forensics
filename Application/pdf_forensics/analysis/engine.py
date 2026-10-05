@@ -87,7 +87,8 @@ def print_report(all_findings):
 def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 store_images=True, conn=None, session=None,
                 skip_duplicates=True, force=False,
-                quiet=False, progress_callback=None):
+                quiet=False, progress_callback=None,
+                source_analysis_id=None, version_number=None):
     """
     Analyze a single PDF.
 
@@ -406,12 +407,14 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
             _out(f"  Document risk score: {doc_risk} "
                  f"(highest page: {max(page_risk_scores.values(), default=0)})")
 
-    save_to_db(conn, pdf_path, total_pages, page_data,
-               pdf_metadata=pdf_metadata,
-               pdf_versions=pdf_versions,
-               store_images=store_images,
-               comments=pdf_comments,
-               doc_risk=doc_risk)
+    analysis_id = save_to_db(conn, pdf_path, total_pages, page_data,
+                             pdf_metadata=pdf_metadata,
+                             pdf_versions=pdf_versions,
+                             store_images=store_images,
+                             comments=pdf_comments,
+                             doc_risk=doc_risk,
+                             source_analysis_id=source_analysis_id,
+                             version_number=version_number)
     if own_conn:
         conn.close()
 
@@ -453,6 +456,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     return {
         "pdf": pdf_path,
         "db": os.path.abspath(db_path),
+        "analysis_id": analysis_id,
+        "version_number": version_number,
         "extract_dir": (os.path.abspath(extract_dir)
                         if extract_dir else None),
         "total_pages": total_pages,

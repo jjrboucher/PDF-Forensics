@@ -92,7 +92,10 @@ def init_db(db_path, session=None):
             pdf_md5       TEXT    NOT NULL,
             total_pages   INTEGER NOT NULL,
             analyzed_at   TEXT    NOT NULL,
-            doc_risk_score INTEGER DEFAULT 0
+            doc_risk_score INTEGER DEFAULT 0,
+            source_analysis_id INTEGER
+                         REFERENCES analyses(id) ON DELETE SET NULL,
+            version_number INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS pages (
@@ -278,6 +281,14 @@ def init_db(db_path, session=None):
     if "doc_risk_score" not in analyses_cols:
         cur.execute(
             "ALTER TABLE analyses ADD COLUMN doc_risk_score INTEGER DEFAULT 0")
+    # Lineage columns (rev 7): link an extracted prior version to
+    # the analysis of its parent document. Additive and idempotent.
+    if "source_analysis_id" not in analyses_cols:
+        cur.execute(
+            "ALTER TABLE analyses ADD COLUMN source_analysis_id INTEGER")
+    if "version_number" not in analyses_cols:
+        cur.execute(
+            "ALTER TABLE analyses ADD COLUMN version_number INTEGER")
     cur.execute("PRAGMA table_info(pages)")
     pages_cols = {row[1] for row in cur.fetchall()}
     if "risk_score" not in pages_cols:
@@ -375,12 +386,20 @@ def check_pdf_already_analyzed(conn, pdf_path):
 
 def save_to_db(conn, pdf_path, total_pages, page_data,
                pdf_metadata=None, pdf_versions=None,
-               store_images=True, comments=None, doc_risk=0):
+               store_images=True, comments=None, doc_risk=0,
+               source_analysis_id=None, version_number=None):
     """Write all analysis results to the SQLite database.
 
     doc_risk : the document-level risk score (0..100). Per-page risk
                scores are read from each page_data entry's "page_risk"
                key (defaulting to 0 when absent).
+    source_analysis_id : when this PDF is an extracted prior version,
+               the analyses.id of the parent document (establishes the
+               version lineage). None for originals.
+    version_number : the prior-version number when this is an extracted
+               version, else None.
+
+    Returns the analyses.id of the newly inserted row.
     """
     from pdf_forensics.analysis.metadata import extract_image_metadata
     cur = conn.cursor()
@@ -395,8 +414,9 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
     cur.execute("""
         INSERT INTO analyses (pdf_filename, pdf_path, pdf_size_bytes,
                               pdf_md5, total_pages, analyzed_at,
-                              doc_risk_score)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+                              doc_risk_score, source_analysis_id,
+                              version_number)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         os.path.basename(pdf_path),
         os.path.abspath(pdf_path),
@@ -405,6 +425,8 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
         total_pages,
         datetime.now(timezone.utc).isoformat(),
         int(doc_risk or 0),
+        source_analysis_id,
+        version_number,
     ))
     analysis_id = cur.lastrowid
 
@@ -626,3 +648,4 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
                             """, (finding_id, img_id))
 
     conn.commit()
+    return analysis_id
