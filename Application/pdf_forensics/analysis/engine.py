@@ -39,6 +39,7 @@ from pdf_forensics.analysis.doc_checks import (
     check_metadata_consistency, check_signature_coverage,
     check_structural_integrity, check_mixed_cameras,
     check_unapplied_redactions, extract_camera_info,
+    check_version_anachronism,
 )
 
 
@@ -364,6 +365,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     doc_findings.extend(check_signature_coverage(doc_pk, pdf_path))
     doc_findings.extend(check_structural_integrity(doc_pk))
     doc_findings.extend(check_mixed_cameras(doc_cameras))
+    doc_findings.extend(check_version_anachronism(
+        doc_pk, pdf_path, pdf_metadata))
     if doc_findings and session:
         for df in doc_findings:
             session.log(f"  Document-level finding: {df['type']}")
@@ -395,6 +398,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
         if first_page is not None:
             for df in doc_findings:
                 df.pop("_all_warnings", None)
+                df.pop("_temporal", None)
             page_data[first_page]["findings"].extend(doc_findings)
             all_findings.setdefault(first_page, []).extend(doc_findings)
         elif session:

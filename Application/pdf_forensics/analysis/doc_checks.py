@@ -479,6 +479,271 @@ def check_mixed_cameras(camera_by_label):
 # Unapplied redaction annotations (guide §2.5, /Redact)
 # ---------------------------------------------------------------------
 
+## ---------------------------------------------------------------------
+## Version anachronism (features exceeding the declared PDF version)
+## ---------------------------------------------------------------------
+
+# Publication year of each PDF version, used to turn a required-feature
+# floor into an earliest-possible date for the temporal check.
+PDF_VERSION_YEAR = {
+    (1, 0): 1993, (1, 1): 1996, (1, 2): 1996, (1, 3): 2000,
+    (1, 4): 2001, (1, 5): 2003, (1, 6): 2004, (1, 7): 2006,
+    (2, 0): 2017,
+}
+
+# Some features ride on a base version through an extension published
+# later than that base version, so their earliest-possible YEAR is later
+# than the base version's publication year. The version floor is left
+# unchanged (the feature is valid at that base version); only the
+# temporal year differs. Keyed by feature name (as it appears below).
+_FEATURE_YEAR_OVERRIDE = {
+    # AES-256 shipped in Acrobat 9 / "Extension Level 3" (2008) on top of
+    # PDF 1.7 (2006), and was only folded into the core standard in PDF
+    # 2.0 (2017). Its true earliest date is therefore 2008, not 2006.
+    "AES-256 encryption (/AESV3)": 2008,
+}
+
+
+def _feature_year(min_version, name):
+    """Earliest-possible year a feature could have existed: an explicit
+    per-feature override when the feature post-dates its base version
+    (e.g. AES-256), otherwise the base version's publication year."""
+    if name in _FEATURE_YEAR_OVERRIDE:
+        return _FEATURE_YEAR_OVERRIDE[name]
+    return PDF_VERSION_YEAR.get(min_version, 0)
+
+
+def _parse_pdf_version(value):
+    """Parse a version string ('1.7', 'PDF 1.5', '%PDF-1.4', '/1.6') into
+    a (major, minor) tuple, or None if it cannot be parsed."""
+    if value is None:
+        return None
+    m = re.search(r"(\d)\.(\d)", str(value))
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)))
+
+
+def _ver_str(v):
+    return f"{v[0]}.{v[1]}" if v else "unknown"
+
+
+# Raw-byte feature signatures. Each: (compiled regex, min_version,
+# feature name, reliability, basis).
+#
+# Two sub-classes with different detection guarantees:
+#   * Storage / cross-reference / encryption markers (/ObjStm, /XRef,
+#     /AESV2, /AESV3) live in structures that MUST be plaintext -- the
+#     xref stream is how the file is navigated, and the /Encrypt dict
+#     must be readable to decrypt anything -- so a raw scan sees them
+#     reliably with no false negatives.
+#   * Image filter names (/JBIG2Decode, /JPXDecode) are names in an
+#     image XObject dictionary. The stream DATA cannot live in a
+#     compressed object stream, but the XObject DICTIONARY can, in
+#     which case the filter name is itself compressed and a raw scan
+#     will not see it. Detection is therefore best-effort: a positive
+#     match is definitive (the name only appears when the filter is
+#     used), but the scan may UNDER-report (never over-report) when the
+#     dictionary sits inside an /ObjStm. This is a conservative,
+#     safe-direction limitation.
+_RAW_FEATURE_SIGS = [
+    (re.compile(rb"/Type\s*/ObjStm"), (1, 5),
+     "Compressed object streams (/ObjStm)", "high",
+     "Objects are packed into 1.5 compressed object streams; the file "
+     "cannot be parsed without supporting them."),
+    (re.compile(rb"/Type\s*/XRef"), (1, 5),
+     "Cross-reference streams (/Type /XRef)", "high",
+     "The file is navigated through a 1.5 cross-reference stream rather "
+     "than a classic xref table."),
+    (re.compile(rb"/JBIG2Decode"), (1, 4),
+     "JBIG2 image compression", "high",
+     "A JBIG2-compressed image is present; the filter was introduced in "
+     "1.4 and cannot be decoded by an earlier reader."),
+    (re.compile(rb"/JPXDecode"), (1, 5),
+     "JPEG2000 image compression (JPXDecode)", "high",
+     "A JPEG2000-compressed image is present; the filter was introduced "
+     "in 1.5."),
+    (re.compile(rb"/AESV3"), (1, 7),
+     "AES-256 encryption (/AESV3)", "high",
+     "The file is encrypted with AES-256 (PDF 1.7 Extension Level 3, "
+     "standardised in 2.0); it cannot be decrypted by an earlier "
+     "scheme."),
+    (re.compile(rb"/AESV2"), (1, 6),
+     "AES-128 encryption (/AESV2)", "high",
+     "The file is encrypted with AES-128 crypt filters, introduced in "
+     "1.6."),
+]
+
+
+def _scan_catalog_features(doc_pk):
+    """Catalog-level features whose presence requires a minimum version.
+    Returns a list of (min_version, name, reliability, basis)."""
+    found = []
+    try:
+        root = doc_pk.Root
+    except Exception:
+        return found
+    try:
+        if root.get("/OCProperties") is not None:
+            found.append(((1, 5), "Optional content / layers (/OCProperties)",
+                          "high",
+                          "The document defines optional-content groups "
+                          "(layers), a 1.5 feature."))
+    except Exception:
+        pass
+    try:
+        if root.get("/Collection") is not None:
+            found.append(((1, 7), "Portfolio / collection (/Collection)",
+                          "high",
+                          "The document is a 1.7 portfolio (collection)."))
+    except Exception:
+        pass
+    try:
+        acro = root.get("/AcroForm")
+        if acro is not None and acro.get("/XFA") is not None:
+            found.append(((1, 5), "XFA forms (/AcroForm /XFA)", "medium",
+                          "The form uses XFA, introduced in 1.5."))
+    except Exception:
+        pass
+    return found
+
+
+def check_version_anachronism(doc_pk, pdf_path, pdf_metadata):
+    """
+    Detect PDF features that require a newer version than the file
+    declares. The declared version can be edited trivially (the header
+    string, the Catalog /Version, XMP pdf:PDFVersion); the structural
+    features actually present cannot be lowered without re-authoring the
+    file, so they establish a hard minimum version -- and, via each
+    feature's publication year, an earliest-possible date.
+
+    Comparison is conservative: the effective floor is compared against
+    the HIGHEST version the file declares anywhere (header, Catalog
+    /Version, XMP), so a finding fires only when the structure exceeds
+    every declared value. A single VERSION_ANACHRONISM finding is
+    emitted, listing the declared versions, the effective floor, and the
+    feature(s) forcing it with their reliability, plus an explicit
+    temporal contradiction when the claimed creation date predates the
+    feature's introduction.
+
+    Note: this is distinct from VERSION_MISMATCH (header vs Catalog).
+    """
+    # --- declared versions ---
+    header_v = None
+    try:
+        with open(pdf_path, "rb") as f:
+            head = f.read(1024)
+        m = re.match(rb"%PDF-(\d)\.(\d)", head)
+        if m:
+            header_v = (int(m.group(1)), int(m.group(2)))
+    except Exception:
+        header_v = None
+
+    catalog_v = None
+    try:
+        cv = doc_pk.Root.get("/Version")
+        catalog_v = _parse_pdf_version(str(cv)) if cv is not None else None
+    except Exception:
+        catalog_v = None
+
+    xmp_v = _parse_pdf_version(
+        _meta_lookup(pdf_metadata, "xmp", "pdfversion"))
+
+    declared_candidates = [v for v in (header_v, catalog_v, xmp_v)
+                           if v is not None]
+    if not declared_candidates:
+        # Nothing to compare against; do not guess.
+        return []
+    declared = max(declared_candidates)
+
+    # --- detected features ---
+    features = []  # (min_version, name, reliability, basis)
+    try:
+        with open(pdf_path, "rb") as f:
+            data = f.read()
+        for rx, minv, name, rel, basis in _RAW_FEATURE_SIGS:
+            if rx.search(data):
+                features.append((minv, name, rel, basis))
+    except Exception:
+        pass
+    features.extend(_scan_catalog_features(doc_pk))
+
+    # Keep only features that EXCEED the declared version.
+    exceeding = [(minv, name, rel, basis)
+                 for (minv, name, rel, basis) in features
+                 if minv > declared]
+    if not exceeding:
+        return []
+
+    effective = max(minv for (minv, _, _, _) in exceeding)
+    # Order the evidence strongest/highest-version first.
+    rel_rank = {"high": 0, "medium": 1, "low": 2}
+    exceeding.sort(key=lambda t: (-( t[0][0]*10 + t[0][1]),
+                                  rel_rank.get(t[2], 3)))
+
+    # --- temporal contradiction ---
+    created_raw = (_meta_lookup(pdf_metadata, "info_dict", "creationdate")
+                   or _meta_lookup(pdf_metadata, "xmp", "createdate"))
+    created = parse_pdf_date(created_raw)
+    temporal_note = ""
+    feature_year = max(
+        (_feature_year(minv, name) for (minv, name, _, _) in exceeding),
+        default=0)
+    if created is not None and feature_year and created.year < feature_year:
+        temporal_note = (
+            f"\n    TEMPORAL CONTRADICTION: the document's declared "
+            f"creation date ({created_raw}) is {feature_year - created.year} "
+            f"year(s) before the required feature(s) could have existed "
+            f"(~{feature_year}; PDF {_ver_str(effective)}), so the content "
+            f"could not have been produced on that date regardless of the "
+            f"version string. This is independent of the version "
+            f"declaration and is a strong indicator that the creation "
+            f"date, the version, or both were altered.")
+
+    # --- compose ---
+    decl_lines = [
+        f"header {_ver_str(header_v)}" if header_v else "header (unreadable)",
+        f"Catalog /Version {_ver_str(catalog_v)}" if catalog_v
+        else "no Catalog /Version",
+        f"XMP pdf:PDFVersion {_ver_str(xmp_v)}" if xmp_v
+        else "no XMP version",
+    ]
+    feat_lines = []
+    for (minv, name, rel, basis) in exceeding:
+        fy = _feature_year(minv, name)
+        feat_lines.append(
+            f"    - requires \u2265 {_ver_str(minv)} "
+            f"(~{fy or '?'}, {rel} reliability): "
+            f"{name}. {basis}")
+
+    detail = (
+        "Document-level finding: the file uses features that require a "
+        f"newer PDF version ({_ver_str(effective)}) than it declares "
+        f"({_ver_str(declared)}).\n"
+        f"    Declared: {'; '.join(decl_lines)}\n"
+        f"    Effective minimum from structure: {_ver_str(effective)}\n"
+        "    Features exceeding the declared version:\n"
+        + "\n".join(feat_lines)
+        + temporal_note
+        + "\n    Caveat: a version gap on its own is not proof of "
+        "tampering. Some producers emit a fixed or conservative version "
+        "string (for example a tool hard-coded to an older header that "
+        "was never updated when its engine was upgraded) while writing "
+        "newer structures, so a small gap with no temporal contradiction "
+        "is common in benign files and should be treated as "
+        "requires-review. The finding is strongest when the gap is large, "
+        "the version was lowered in more than one place, or the claimed "
+        "creation date predates the required feature (see above)."
+    )
+
+    return [{
+        "image": None,
+        "type": "VERSION_ANACHRONISM",
+        "detail": detail,
+        "_temporal": bool(temporal_note),
+    }]
+
+
 def check_unapplied_redactions(page_pk, page_num):
     """
     Detect /Redact annotations. A redaction annotation only MARKS

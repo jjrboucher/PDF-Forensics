@@ -1115,62 +1115,49 @@ def check_text_overlays(page_pk, page_mu, page_num, findings,
     except Exception:
         page_h = 792.0
 
+    OVERLAY_SUBTYPES = ("/FreeText", "/Widget", "/Square", "/Redact",
+                        "/Stamp")
+    ALWAYS_OPAQUE = ("/Square", "/Redact")
+    SUBTYPE_LABEL = {
+        "/FreeText": "FreeText annotation (text box)",
+        "/Widget":   "Widget annotation (form field)",
+        "/Square":   "Square/rectangle annotation",
+        "/Redact":   "Redaction annotation",
+        "/Stamp":    "Stamp annotation",
+    }
+
+    # ---- Pass 1: gather candidate overlay annotations -----------------
+    # Collect every annotation whose subtype can act as an overlay and
+    # that is large enough to matter, recording its geometry, whether it
+    # has an opaque background, and its text content (which, for a
+    # replacement-value layer, IS the fabricated value).
+    candidates = []
     for annot_ref in annots:
         try:
-            annot_obj = (annot_ref.obj
-                         if hasattr(annot_ref, "obj")
+            annot_obj = (annot_ref.obj if hasattr(annot_ref, "obj")
                          else annot_ref)
             if not hasattr(annot_obj, "get"):
                 continue
-
             subtype = str(annot_obj.get("/Subtype") or "")
-
-            # Only examine annotation types that can overlay text
-            if subtype not in ("/FreeText", "/Widget",
-                               "/Square", "/Redact"):
+            if subtype not in OVERLAY_SUBTYPES:
                 continue
-
             rect_raw = annot_obj.get("/Rect")
             if rect_raw is None:
                 continue
-
-            annot_rect = _rect_to_fitz(rect_raw)
+            annot_rect = _rect_to_fitz(rect_raw)   # PDF coords
             if annot_rect is None:
                 continue
-
             area = ((annot_rect[2] - annot_rect[0]) *
                     (annot_rect[3] - annot_rect[1]))
             if area < TEXT_OVERLAY_MIN_AREA_SQPTS:
                 continue
-
-            # Convert annotation rect from PDF coords (bottom-left
-            # origin) to PyMuPDF coords (top-left origin)
-            ax0 = annot_rect[0]
-            ay0 = page_h - annot_rect[3]
-            ax1 = annot_rect[2]
-            ay1 = page_h - annot_rect[1]
-            annot_mu_rect = (ax0, ay0, ax1, ay1)
-
-            # Check for opaque background (mandatory for FreeText /
-            # Widget; Redact and Square are always opaque by nature)
-            if subtype in ("/FreeText", "/Widget"):
-                if not _has_opaque_background(annot_obj):
-                    continue
-
-            # Check for overlap with page text
-            overlapping_text = []
-            for tr in text_rects:
-                tx0, ty0, tx1, ty1, txt = tr
-                if _rects_overlap(annot_mu_rect, (tx0, ty0, tx1, ty1)):
-                    overlap = _overlap_area(
-                        annot_mu_rect, (tx0, ty0, tx1, ty1))
-                    if overlap >= TEXT_OVERLAY_MIN_AREA_SQPTS:
-                        overlapping_text.append(txt[:80])
-
-            if not overlapping_text:
-                continue
-
-            # Build detail string
+            # PDF (bottom-left) -> PyMuPDF (top-left) for text comparison
+            annot_mu_rect = (annot_rect[0], page_h - annot_rect[3],
+                             annot_rect[2], page_h - annot_rect[1])
+            if subtype in ALWAYS_OPAQUE:
+                is_opaque = True
+            else:
+                is_opaque = _has_opaque_background(annot_obj)
             annot_contents = ""
             try:
                 c = annot_obj.get("/Contents")
@@ -1178,28 +1165,6 @@ def check_text_overlays(page_pk, page_mu, page_num, findings,
                     annot_contents = str(c)[:120]
             except Exception:
                 pass
-
-            subtype_label = {
-                "/FreeText": "FreeText annotation (text box)",
-                "/Widget":   "Widget annotation (form field)",
-                "/Square":   "Square/rectangle annotation",
-                "/Redact":   "Redaction annotation",
-            }.get(subtype, subtype)
-
-            covered = "; ".join(
-                f'"{t}"' for t in overlapping_text[:5])
-            if len(overlapping_text) > 5:
-                covered += f" (+{len(overlapping_text)-5} more)"
-
-            detail = (
-                f"{subtype_label} at "
-                f"({annot_rect[0]:.1f}, {annot_rect[1]:.1f}) to "
-                f"({annot_rect[2]:.1f}, {annot_rect[3]:.1f}) "
-                f"overlaps existing page text: {covered}."
-            )
-            if annot_contents:
-                detail += f" Annotation text: \"{annot_contents}\"."
-
             obj_num = obj_gen = None
             locator = None
             try:
@@ -1210,21 +1175,89 @@ def check_text_overlays(page_pk, page_mu, page_num, findings,
                            f"(/Subtype {subtype})")
             except Exception:
                 pass
-
-            findings.append({
-                "type":   "TEXT_OVERLAY",
-                "detail": detail,
-                "image":  None,   # not image-specific
-                "bbox":   annot_mu_rect,   # (x0,y0,x1,y1) top-left origin
-                "overlay_kind": "annotation",
-                "obj_num": obj_num,
-                "obj_gen": obj_gen,
-                "obj_locator": locator,
+            candidates.append({
+                "subtype": subtype, "rect_pdf": annot_rect,
+                "rect_mu": annot_mu_rect, "is_opaque": is_opaque,
+                "contents": annot_contents, "obj_num": obj_num,
+                "obj_gen": obj_gen, "locator": locator,
             })
-            added += 1
-
         except Exception:
             continue
+
+    # ---- Detect stacking ---------------------------------------------
+    # Two overlay annotations occupying the same region, at least one of
+    # them opaque, is the signature of box-and-replace tampering: an
+    # opaque box hides the original value and a (often transparent) text
+    # annotation supplies the replacement on top. Flagging on this means
+    # the replacement-value layer is caught even though it has no opaque
+    # background of its own (which the single-annotation rule requires).
+    for i, c in enumerate(candidates):
+        c["stacks"] = False
+        c["stack_partners"] = set()
+        for j, o in enumerate(candidates):
+            if i == j:
+                continue
+            if (_rects_overlap(c["rect_mu"], o["rect_mu"]) and
+                    _overlap_area(c["rect_mu"], o["rect_mu"])
+                    >= TEXT_OVERLAY_MIN_AREA_SQPTS and
+                    (c["is_opaque"] or o["is_opaque"])):
+                c["stacks"] = True
+                c["stack_partners"].add(o["subtype"].lstrip("/"))
+
+    # ---- Pass 2: decide and build findings ---------------------------
+    for c in candidates:
+        overlapping_text = []
+        for tr in text_rects:
+            tx0, ty0, tx1, ty1, txt = tr
+            if _rects_overlap(c["rect_mu"], (tx0, ty0, tx1, ty1)):
+                if (_overlap_area(c["rect_mu"], (tx0, ty0, tx1, ty1))
+                        >= TEXT_OVERLAY_MIN_AREA_SQPTS):
+                    overlapping_text.append(txt[:80])
+        over_text = bool(overlapping_text)
+
+        # Existing rule: opaque background AND overlaps page text.
+        flag_existing = c["is_opaque"] and over_text
+        # New rule: stacked with another overlay annotation.
+        flag_stack = c["stacks"]
+        if not (flag_existing or flag_stack):
+            continue
+
+        label = SUBTYPE_LABEL.get(c["subtype"], c["subtype"])
+        r = c["rect_pdf"]
+        detail = (f"{label} at ({r[0]:.1f}, {r[1]:.1f}) to "
+                  f"({r[2]:.1f}, {r[3]:.1f})")
+        if over_text:
+            covered = "; ".join(f'"{t}"' for t in overlapping_text[:5])
+            if len(overlapping_text) > 5:
+                covered += f" (+{len(overlapping_text) - 5} more)"
+            detail += f" overlaps existing page text: {covered}."
+        else:
+            detail += "."
+        if flag_stack:
+            partners = ", ".join(sorted(c["stack_partners"])) or "another overlay"
+            detail += (f" STACKED with another overlay annotation "
+                       f"({partners}) in the same region — "
+                       f"characteristic of box-and-replace tampering, where "
+                       f"an opaque box hides the original and a text "
+                       f"annotation supplies a replacement value.")
+            if not c["is_opaque"]:
+                detail += (" This annotation has no opaque background of "
+                           "its own, consistent with a replacement-value "
+                           "layer drawn on top of a covering box.")
+        if c["contents"]:
+            detail += ' Annotation text: "' + c["contents"] + '".'
+
+        findings.append({
+            "type":   "TEXT_OVERLAY",
+            "detail": detail,
+            "image":  None,
+            "bbox":   c["rect_mu"],
+            "overlay_kind": "annotation",
+            "obj_num": c["obj_num"],
+            "obj_gen": c["obj_gen"],
+            "obj_locator": c["locator"],
+        })
+        added += 1
 
     return added
 

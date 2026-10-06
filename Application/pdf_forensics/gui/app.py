@@ -10,7 +10,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from datetime import datetime
 
-from pdf_forensics import __version__, __tool_name__, SCHEMA_REVISION
+from pdf_forensics import (__version__, __tool_name__, SCHEMA_REVISION,
+                           BUILD_DATE)
 from pdf_forensics.session import Session, load_config, save_config
 from pdf_forensics.database import (
     validate_database, init_db, check_pdf_already_analyzed,
@@ -119,8 +120,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     title_block.pack(side="left", padx=(14, 0))
     tk.Label(title_block, text="PDF FORENSICS SUITE", bg=BG_DARK,
              fg=TEXT_PRIM, font=(FONT_FAMILY, 18, "bold")).pack(anchor="w")
-    tk.Label(title_block, text=f"v{__version__}", bg=BG_DARK,
-             fg=TEXT_DIM, font=FONT_SUBTITLE).pack(anchor="w")
+    tk.Label(title_block, text=f"v{__version__} · build {BUILD_DATE}",
+             bg=BG_DARK, fg=TEXT_DIM,
+             font=FONT_SUBTITLE).pack(anchor="w")
 
     # Case + agency/investigator identity block (right side of header).
     # Showing these on every menu lets the operator visually confirm that
@@ -200,6 +202,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                  bg=BG_DARK, fg=TEXT_PRIM,
                  font=(FONT_FAMILY, 15, "bold")).pack(
                      anchor="w", padx=20, pady=(18, 2))
+        tk.Label(dlg,
+                 text=f"Build {BUILD_DATE} · schema rev {SCHEMA_REVISION}",
+                 bg=BG_DARK, fg=TEXT_DIM,
+                 font=FONT_SUBTITLE).pack(
+                     anchor="w", padx=20, pady=(0, 6))
 
         # Scrollable body
         body = tk.Frame(dlg, bg=BG_DARK)

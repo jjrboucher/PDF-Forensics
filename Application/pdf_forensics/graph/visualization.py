@@ -266,7 +266,8 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
     # Branding payload for the printable report cover + footer
     from pdf_forensics import branding as _branding
     from pdf_forensics.database import compute_file_md5
-    from pdf_forensics import __version__ as _ver, __tool_name__ as _tn
+    from pdf_forensics import (__version__ as _ver, __tool_name__ as _tn,
+                               BUILD_DATE as _bd)
     _bcfg = _branding.load_branding()
     _scope_label, _scope_def = SCOPE_INFO.get(
         scope or "", (scope or "", ""))
@@ -280,7 +281,7 @@ def inject_custom_ui(html_path, image_meta, thumbnails, db_path,
         "unit_name":     (_bcfg.get("unit_name") or "").strip(),
         "case_number":   case_number or "",
         "db_md5":        compute_file_md5(db_path) if db_path else "",
-        "tool_label":    f"{_tn} v{_ver}",
+        "tool_label":    f"{_tn} v{_ver} · build {_bd}",
         "generated_at":  generated_at or "",
         "scope":         scope or "",
         "scope_label":   _scope_label,

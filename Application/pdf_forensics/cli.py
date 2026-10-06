@@ -13,7 +13,7 @@ import os
 import sqlite3
 from datetime import datetime
 
-from pdf_forensics import __version__, __tool_name__
+from pdf_forensics import __version__, __tool_name__, BUILD_DATE
 from pdf_forensics.session import Session
 
 
@@ -23,9 +23,9 @@ def main_cli():
 
     parser = argparse.ArgumentParser(
         prog="pdf_forensics",
-        description=f"{__tool_name__} v{__version__}")
+        description=f"{__tool_name__} v{__version__} (build {BUILD_DATE})")
     parser.add_argument("--version", action="version",
-                        version=f"%(prog)s {__version__}")
+                        version=f"%(prog)s {__version__} (build {BUILD_DATE})")
     parser.add_argument("--gui", action="store_true",
                         help="Launch GUI mode")
     parser.add_argument("--case", default=None,

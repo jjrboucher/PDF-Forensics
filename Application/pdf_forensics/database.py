@@ -65,6 +65,7 @@ FINDING_TYPE_DEFS = {
     "REDACT_UNAPPLIED":     ("Unapplied redaction (content recoverable)","HIGH"),
     "SIGNED_THEN_MODIFIED": ("File modified after digital signature",   "HIGH"),
     "STRUCTURAL_WARNING":   ("Structural integrity warnings (qpdf)",    "INFO"),
+    "VERSION_ANACHRONISM":  ("Features exceed declared PDF version",     "MEDIUM"),
 }
 
 

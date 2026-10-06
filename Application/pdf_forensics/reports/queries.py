@@ -891,6 +891,143 @@ REPORTS = [
         "sticky_cols": 1,
     },
 
+    # -----------------------------------------------------------------
+    # 17. Version Anachronism
+    # -----------------------------------------------------------------
+    {
+        "id": "version_anachronism",
+        "name": "Version Anachronism",
+        "description":
+            "Documents that use PDF features requiring a newer version "
+            "than they declare. The declared version (header, Catalog "
+            "/Version, XMP) is trivially editable; the structural "
+            "features present cannot be lowered without re-authoring the "
+            "file, so they set a hard minimum version and, via each "
+            "feature's publication year, an earliest-possible date. The "
+            "Detail gives the declared versions, the effective minimum, "
+            "the feature(s) forcing it with their reliability, any "
+            "temporal contradiction with the claimed creation date, and "
+            "the benign-cause caveat. A version gap alone is not proof "
+            "of tampering (see the Detail); it is strongest when large, "
+            "declared in more than one place, or contradicted by the "
+            "creation date.",
+        "query": """
+            SELECT
+                a.pdf_filename       AS "Filename",
+                ft.severity          AS "Severity",
+                f.detail             AS "Detail",
+                a.pdf_md5            AS "PDF MD5"
+            FROM findings f
+            JOIN finding_types ft  ON ft.id = f.finding_type_id
+            JOIN pages p           ON p.id = f.page_id
+            JOIN analyses a        ON a.id = p.analysis_id
+            WHERE ft.code = 'VERSION_ANACHRONISM'
+            ORDER BY a.pdf_filename
+        """,
+        "columns": [
+            {"name": "Filename", "label": "Filename", "col_type": "text"},
+            {"name": "Severity", "label": "Severity", "col_type": "text"},
+            {"name": "Detail",   "label": "Detail",   "col_type": "text"},
+            {"name": "PDF MD5",  "label": "PDF MD5",  "col_type": "hash"},
+        ],
+        "sticky_cols": 1,
+    },
+
+    # -----------------------------------------------------------------
+    # 18. Document Risk Dossier (aggregate)
+    # -----------------------------------------------------------------
+    {
+        "id": "risk_dossier",
+        "name": "Document Risk Dossier",
+        "description":
+            "One row per analyzed document composing every document-level "
+            "signal behind its risk score into a single view, so the "
+            "score is legible as the sum of named, independently-detected "
+            "contributions rather than an opaque number. Each column "
+            "counts findings of one category; the Document Risk column is "
+            "the composed score (see the Risk Scoring reference, section "
+            "4.4). No single signal is proof on its own \u2014 the value "
+            "is in the combination, and each category's caveats apply "
+            "(read the dedicated detail reports for specifics). "
+            "Cross-document and version-reuse image signals are scope-"
+            "dependent and are shown in the graph reports rather than "
+            "counted here.",
+        "query": """
+            SELECT
+                a.pdf_filename   AS "Filename",
+                a.doc_risk_score AS "Document Risk",
+                (SELECT COUNT(*) FROM findings f
+                   JOIN finding_types ft ON ft.id = f.finding_type_id
+                   JOIN pages p ON p.id = f.page_id
+                   WHERE p.analysis_id = a.id AND ft.code IN
+                     ('METADATA_DATE_ANOMALY','METADATA_MISMATCH',
+                      'XMP_ID_ANOMALY'))                AS "Metadata",
+                (SELECT COUNT(*) FROM findings f
+                   JOIN finding_types ft ON ft.id = f.finding_type_id
+                   JOIN pages p ON p.id = f.page_id
+                   WHERE p.analysis_id = a.id AND ft.code IN
+                     ('VERSION_MISMATCH','VERSION_ANACHRONISM'))  AS "Version",
+                (SELECT COUNT(*) FROM findings f
+                   JOIN finding_types ft ON ft.id = f.finding_type_id
+                   JOIN pages p ON p.id = f.page_id
+                   WHERE p.analysis_id = a.id
+                     AND ft.code = 'SIGNED_THEN_MODIFIED')  AS "Signature",
+                (SELECT COUNT(*) FROM findings f
+                   JOIN finding_types ft ON ft.id = f.finding_type_id
+                   JOIN pages p ON p.id = f.page_id
+                   WHERE p.analysis_id = a.id
+                     AND ft.code = 'STRUCTURAL_WARNING')    AS "Structural",
+                (SELECT COUNT(*) FROM findings f
+                   JOIN finding_types ft ON ft.id = f.finding_type_id
+                   JOIN pages p ON p.id = f.page_id
+                   WHERE p.analysis_id = a.id
+                     AND ft.code = 'MIXED_CAMERA')          AS "Mixed Camera",
+                (SELECT COUNT(*) FROM findings f
+                   JOIN finding_types ft ON ft.id = f.finding_type_id
+                   JOIN pages p ON p.id = f.page_id
+                   WHERE p.analysis_id = a.id
+                     AND ft.code = 'REDACT_UNAPPLIED')      AS "Redaction",
+                (SELECT COUNT(*) FROM findings f
+                   JOIN finding_types ft ON ft.id = f.finding_type_id
+                   JOIN pages p ON p.id = f.page_id
+                   WHERE p.analysis_id = a.id
+                     AND ft.code = 'TEXT_OVERLAY')          AS "Text Overlay",
+                (SELECT COUNT(*) FROM findings f
+                   JOIN finding_types ft ON ft.id = f.finding_type_id
+                   JOIN pages p ON p.id = f.page_id
+                   WHERE p.analysis_id = a.id
+                     AND ft.code = 'FONT_ANOMALY')          AS "Font",
+                (SELECT COUNT(*) FROM comments c
+                   WHERE c.analysis_id = a.id)              AS "Comments",
+                (SELECT COUNT(*) FROM pdf_versions v
+                   WHERE v.analysis_id = a.id)              AS "EOF Markers",
+                (SELECT COUNT(*) FROM images i
+                   JOIN pages p ON p.id = i.page_id
+                   WHERE p.analysis_id = a.id
+                     AND i.risk_score > 0)                  AS "High-Risk Images",
+                a.pdf_md5        AS "PDF MD5"
+            FROM analyses a
+            ORDER BY a.doc_risk_score DESC, a.pdf_filename
+        """,
+        "columns": [
+            {"name": "Filename",         "label": "Filename",       "col_type": "text"},
+            {"name": "Document Risk",    "label": "Document Risk",  "col_type": "numeric"},
+            {"name": "Metadata",         "label": "Metadata",       "col_type": "numeric"},
+            {"name": "Version",          "label": "Version",        "col_type": "numeric"},
+            {"name": "Signature",        "label": "Signature",      "col_type": "numeric"},
+            {"name": "Structural",       "label": "Structural",     "col_type": "numeric"},
+            {"name": "Mixed Camera",     "label": "Mixed Camera",   "col_type": "numeric"},
+            {"name": "Redaction",        "label": "Redaction",      "col_type": "numeric"},
+            {"name": "Text Overlay",     "label": "Text Overlay",   "col_type": "numeric"},
+            {"name": "Font",             "label": "Font",           "col_type": "numeric"},
+            {"name": "Comments",         "label": "Comments",       "col_type": "numeric"},
+            {"name": "EOF Markers",      "label": "EOF Markers",    "col_type": "numeric"},
+            {"name": "High-Risk Images", "label": "High-Risk Images","col_type": "numeric"},
+            {"name": "PDF MD5",          "label": "PDF MD5",        "col_type": "hash"},
+        ],
+        "sticky_cols": 1,
+    },
+
 ]
 
 
@@ -909,10 +1046,12 @@ def get_report_by_id(report_id):
 REPORT_GROUPS = [
     ("Document Overview & Provenance", [
         "document_risk",
+        "risk_dossier",
         "metadata",
         "creator_producer",
         "exif_gps",
         "incremental_updates",
+        "version_anachronism",
     ]),
     ("Manipulation & Alteration", [
         "manipulation_detail",

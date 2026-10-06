@@ -1,5 +1,133 @@
 # PDF Forensics Suite — Changelog
 
+**Current build: 2026-10-06** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 7. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+
+## v1.0.0 — Update (2026-10-06b)
+
+### Visual overlay report: interactive per-overlay layers
+- The visual overlay report is now an interactive layered view. The
+  page renders as a true-original base (all overlays removed) with one
+  transparent, independently toggleable layer per detected overlay,
+  stacked in z-order. A left-hand checkbox panel (one box per overlay,
+  plus All/None) shows or hides each overlay live; the page defaults to
+  all overlays shown (the document as received) and peels to the
+  recovered original as boxes are unticked. This replaces the fixed
+  "remove one" / "remove all" modes and the per-overlay reveal crops.
+- Overlay numbers are now DOM badges rather than pixels baked into the
+  image, so stacked overlays no longer hide each other’s numbers.
+  Colliding badges are fanned apart with leader-dot anchors, and
+  hovering a badge, checkbox, or summary row highlights all three.
+  Overlays are numbered in stacking order (1 = bottom).
+- Per-overlay layers are isolated precisely: "only overlay k present"
+  is produced by removing every other overlay BY OBJECT REFERENCE,
+  which separates stacked annotations that share the same /Rect (the
+  box-and-replace case) — rectangle matching alone could not. The
+  layer is then the pixel difference from the base, so compositing the
+  chosen layers over the base reproduces any subset of overlays.
+- The per-overlay summary (type, geometry, object locator, and the
+  annotation’s text — the fabricated value) is kept beneath the page;
+  only the reveal crops were removed. Overlays that cannot be cleanly
+  isolated (e.g. some content-stream overlays) are listed and labelled
+  rather than given a misleading independent toggle.
+- reveal.build_revealed_pdf_bytes / _suppress_annotations now accept
+  object-reference targets (obj_num/obj_gen from the finding) with
+  rectangle matching retained as a fallback.
+- Not render-tested in the build environment (no PyMuPDF/pyvis there);
+  the object-reference removal, layer compositing, and HTML/JS were
+  unit-tested, and the rendering reuses the existing proven page-render
+  path. Validate on a real document before evidentiary use.
+
+## v1.0.0 — Update (2026-10-06)
+
+### Stacked annotation overlay detection (box-and-replace tampering)
+- check_text_overlays now detects STACKED overlay annotations, the
+  signature of box-and-replace tampering: an opaque box hides the
+  original value and a (usually transparent) text annotation supplies
+  a replacement on top. Previously only the opaque box was flagged
+  (FreeText/Widget required an opaque background), so the
+  replacement-value layer was missed and the visual reveal removed
+  the box but left the false text — never showing the true original.
+- New rule: an overlay-subtype annotation (/FreeText, /Widget,
+  /Square, /Redact, and now /Stamp) is flagged when it overlaps
+  another overlay annotation in the same region with at least one of
+  the pair opaque — regardless of its own background opacity. The
+  existing rule (opaque background + overlaps page text) is unchanged,
+  so prior findings keep their exact wording, with a stacking note
+  appended where a box is now known to be paired with a replacement
+  layer.
+- The replacement annotation’s text (/Contents) — the fabricated
+  value — is captured in the finding detail, so the report shows the
+  false value alongside the original page text it covers.
+- Consequence without any further change: the Text Overlay report now
+  lists both layers, and the visual overlay report’s "remove all
+  overlays" reveal now strips the box and the replacement text
+  together, showing the true underlying original. /Stamp added to the
+  reveal’s removable subtypes.
+- Precision preserved: a lone transparent text annotation that is not
+  stacked on a box is still not flagged (avoids false positives on
+  legitimate callouts/comments).
+- Next iteration (not in this build): interactive per-overlay toggle
+  and z-order step-through in the visual report, to view intermediate
+  states and peel stacked layers one at a time.
+
+## v1.0.0 — Update (2026-07-10b)
+
+### Version anachronism: accuracy refinements
+- AES-256 (/AESV3) temporal year corrected. It was mapped to PDF
+  1.7's publication year (2006), but AES-256 shipped in Adobe
+  Extension Level 3 in 2008, so 2006 was too early and could miss a
+  temporal contradiction. Added a per-feature year override (AES-256
+  -> 2008, its true earliest) used by both the temporal check and the
+  displayed year; all other features continue to use their base
+  version's publication year. A file claiming a pre-2008 creation
+  date while using AES-256 now correctly flags the temporal
+  contradiction. (2008 is also safer than the 2009 the guide
+  previously cited, which could have falsely flagged a legitimately-
+  2008 file.)
+- JBIG2 / JPEG2000 detection limitation documented. Unlike the
+  storage/cross-reference/encryption markers (always plaintext), an
+  image filter name can sit inside a compressed object stream, so a
+  raw-byte scan may under-report those two (never over-report). The
+  detector comment and the Technical Reference Guide now state this
+  conservative, safe-direction limitation explicitly.
+- Tests extended to 26 checks (added AES-256 2007->temporal,
+  2009->no-temporal, and non-override year guards). Technical Guide
+  §4.4 updated (AES year 2008, reliability/limitation wording).
+
+## v1.0.0 — Update (2026-07-10)
+
+### Version anachronism detection + aggregate risk dossier
+- New VERSION_ANACHRONISM detector (analysis/doc_checks.py): flags
+  files whose structural features require a newer PDF version than they
+  declare. The declared version (header, Catalog /Version, XMP) is
+  trivially editable; the features present cannot be lowered without
+  re-authoring the file, so they set a hard minimum version and, via
+  each feature’s publication year, an earliest-possible date.
+- Detected features (reliable storage/encoding/encryption markers read
+  from the raw bytes, plus Catalog checks): object streams and xref
+  streams (1.5), JBIG2 (1.4), JPXDecode (1.5), AES-128 /AESV2 (1.6),
+  AES-256 /AESV3 (1.7+/2.0), optional content (1.5), portfolios (1.7),
+  XFA (1.5). Compared conservatively against max(header, Catalog, XMP).
+- Temporal contradiction: when the claimed creation date predates the
+  required feature’s year, the finding says so explicitly — the
+  strongest form. Bare gaps carry the hard-coded-header caveat and read
+  as requires-review. Feeds document risk at +15 (MEDIUM); distinct
+  from VERSION_MISMATCH (header vs Catalog).
+- New reports: Version Anachronism (detail, Provenance group) and
+  Document Risk Dossier (aggregate) — one row per document composing
+  every document-level signal behind its score into a single view so
+  the number is legible as the sum of named, individually-caveated
+  contributions. 18 reports total.
+- Empirical note recorded in the Technical Reference Guide (new section
+  4.4): the Info dictionary has no version field; a conformant producer
+  raises the header when it writes a newer feature, so a legitimate
+  1.4->1.7 edit updates the header — an anachronism therefore means a
+  non-conformant producer or a deliberately lowered version string.
+- Guides updated: Technical Reference Guide (section 4.4, category and
+  weight tables, caveats); Risk Scoring technical/broader (weight,
+  finding list, FP note); HTML Reports technical/broader (two report
+  sections, count 16->18).
+
 ## v1.0.0 — Update (2026-07-09b)
 
 ### Documentation correction

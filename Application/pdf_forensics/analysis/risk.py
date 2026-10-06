@@ -52,6 +52,7 @@ DOC_RISK_WEIGHTS = {
     "METADATA_MISMATCH":     15,  # Info dict vs XMP disagreement (per field)
     "MIXED_CAMERA":          15,  # images from 2+ distinct capture devices
     "VERSION_MISMATCH":       5,  # header vs Catalog version differ
+    "VERSION_ANACHRONISM":   15,  # features require a newer version than declared
     "XMP_ID_ANOMALY":         5,  # DocumentID == InstanceID
     "STRUCTURAL_WARNING":     5,  # qpdf structural warnings present
 }

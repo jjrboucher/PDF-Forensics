@@ -16,7 +16,7 @@ import sqlite3
 import html as html_mod
 from datetime import datetime
 
-from pdf_forensics import __version__, __tool_name__
+from pdf_forensics import __version__, __tool_name__, BUILD_DATE
 
 
 def generate_report(db_path, report_def, output_path, session=None):
@@ -381,7 +381,7 @@ def _render_html(title, description, columns, data, db_path,
   <div class="header-text">
     <h1>{esc(title)}</h1>
     <div class="subtitle">
-      {__tool_name__} v{__version__}<br>
+      {__tool_name__} v{__version__} · build {BUILD_DATE}<br>
       Generated {now} &mdash; Database: {esc(os.path.basename(db_path))}
     </div>
     <div class="description">{esc(description)}</div>

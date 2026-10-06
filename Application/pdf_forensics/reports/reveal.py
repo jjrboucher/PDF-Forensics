@@ -70,7 +70,8 @@ MAX_CONTAINER_H = 130.0
 # must not extend far beyond the region on any side.
 CONTAINER_MARGIN = 24.0
 
-_OVERLAY_ANNOT_SUBTYPES = ("/FreeText", "/Widget", "/Square", "/Redact")
+_OVERLAY_ANNOT_SUBTYPES = ("/FreeText", "/Widget", "/Square", "/Redact",
+                           "/Stamp")
 _TEXT_SHOW_OPS = ("Tj", "TJ", "'", '"')
 _RECT_FILL_OPS = ("f", "F", "B", "B*", "b", "b*")
 # Fonts used for forged text differ from the document body fonts; we treat
@@ -567,7 +568,17 @@ def _decide_text_inline(units, shows, regions, recovered_out, info_kinds):
 # --------------------------------------------------------------------------
 # Annotation suppression
 # --------------------------------------------------------------------------
-def _suppress_annotations(page, target_rects_pdf):
+def _suppress_annotations(page, target_rects_pdf, objrefs=None):
+    """
+    Remove overlay annotations from a page.
+
+    Matching is by object reference first (objrefs = set of
+    (obj_num, obj_gen)), which is exact even when several annotations
+    share the same /Rect (stacked box-and-replace overlays). Any
+    target rectangles without an object reference fall back to
+    rectangle matching, preserving the original behaviour.
+    """
+    objrefs = objrefs or set()
     try:
         annots = page.get("/Annots")
     except Exception:
@@ -579,17 +590,35 @@ def _suppress_annotations(page, target_rects_pdf):
     for annot in list(annots):
         try:
             obj = annot.obj if hasattr(annot, "obj") else annot
-            subtype = str(obj.get("/Subtype") or "")
-            rect_raw = obj.get("/Rect")
             match = False
-            if subtype in _OVERLAY_ANNOT_SUBTYPES and rect_raw is not None:
-                coords = [float(v) for v in rect_raw]
-                ann = (min(coords[0], coords[2]), min(coords[1], coords[3]),
-                       max(coords[0], coords[2]), max(coords[1], coords[3]))
-                for tr in target_rects_pdf:
-                    if _rects_match(ann, tr, RECT_MATCH_TOLERANCE):
+
+            # Precise: object-reference match (distinguishes stacked
+            # annotations that share the same /Rect).
+            if objrefs:
+                try:
+                    ref = annot if hasattr(annot, "objgen") else obj
+                    og = ref.objgen
+                    if (int(og[0]), int(og[1])) in objrefs:
                         match = True
-                        break
+                except Exception:
+                    pass
+
+            # Fallback: rectangle match (for findings with no objref).
+            if not match and target_rects_pdf:
+                subtype = str(obj.get("/Subtype") or "")
+                rect_raw = obj.get("/Rect")
+                if (subtype in _OVERLAY_ANNOT_SUBTYPES
+                        and rect_raw is not None):
+                    coords = [float(v) for v in rect_raw]
+                    ann = (min(coords[0], coords[2]),
+                           min(coords[1], coords[3]),
+                           max(coords[0], coords[2]),
+                           max(coords[1], coords[3]))
+                    for tr in target_rects_pdf:
+                        if _rects_match(ann, tr, RECT_MATCH_TOLERANCE):
+                            match = True
+                            break
+
             if match:
                 removed += 1
             else:
@@ -627,13 +656,21 @@ def build_revealed_pdf_bytes(src_path, page_index, findings, page_height):
     # Preserve original finding order so we can report per-finding outcomes.
     cs_findings = []   # (orig_index, kind, pdf_rect)
     annot_rects = []
+    annot_objrefs = set()   # (obj_num, obj_gen) for precise removal
     for idx, fnd in enumerate(findings):
         kind = fnd.get("kind", "other")
         rect = _finding_rect_to_pdf(fnd["bbox"], page_height)
         if kind in ("white_box", "text_over_text"):
             cs_findings.append((idx, kind, rect))
         elif kind == "annotation":
-            annot_rects.append(rect)
+            on = fnd.get("obj_num")
+            if on is not None:
+                try:
+                    annot_objrefs.add((int(on), int(fnd.get("obj_gen") or 0)))
+                except (TypeError, ValueError):
+                    annot_rects.append(rect)
+            else:
+                annot_rects.append(rect)
 
     try:
         pdf = pikepdf.open(src_path)
@@ -649,13 +686,15 @@ def build_revealed_pdf_bytes(src_path, page_index, findings, page_height):
         page = pdf.pages[page_index]
 
         # --- Annotations -------------------------------------------------
-        if annot_rects:
-            n = _suppress_annotations(page, annot_rects)
+        n_annot_targets = len(annot_rects) + len(annot_objrefs)
+        if n_annot_targets:
+            n = _suppress_annotations(page, annot_rects,
+                                      objrefs=annot_objrefs)
             if n:
                 info["annots_removed"] += n
                 info["kinds"].add("annotation")
                 info["recovered"] += n
-            info["skipped"] += max(0, len(annot_rects) - n)
+            info["skipped"] += max(0, n_annot_targets - n)
 
         # --- Content stream + nested form tree ---------------------------
         if cs_findings:
