@@ -43,7 +43,7 @@ import sqlite3
 import html as html_mod
 from datetime import datetime
 
-from pdf_forensics import __version__, __tool_name__
+from pdf_forensics import __version__, __tool_name__, BUILD_DATE
 from pdf_forensics.reports import reveal as _reveal
 
 # Render resolution for full pages and crops (DPI)
@@ -273,7 +273,12 @@ def _isolate_layer_png(base_png, with_overlay_png, tolerance=10):
     over = Image.open(io.BytesIO(with_overlay_png)).convert("RGB")
     if base.size != over.size:
         over = over.resize(base.size)
-    diff = ImageChops.difference(base, over).convert("L")
+    # Per-channel maximum difference. (A luminance-based difference
+    # under-weights blue: e.g. dark-blue text painted over black text
+    # differs by ~90 in blue but only ~10 in luminance, and would be
+    # wrongly treated as unchanged and dropped from the layer.)
+    r, g, b = ImageChops.difference(base, over).split()
+    diff = ImageChops.lighter(ImageChops.lighter(r, g), b)
     # Binary mask: 255 where changed beyond tolerance, else 0.
     mask = diff.point(lambda v: 255 if v > tolerance else 0)
     layer = over.convert("RGBA")
@@ -281,6 +286,70 @@ def _isolate_layer_png(base_png, with_overlay_png, tolerance=10):
     out = io.BytesIO()
     layer.save(out, format="PNG", optimize=True)
     return out.getvalue()
+
+
+# Self-check thresholds: a pixel counts as different when any channel
+# differs by more than COMPOSITE_PIXEL_TOL; the reconstruction is accepted
+# when no more than COMPOSITE_MAX_DIFF_FRAC of the pixels inside the
+# overlay regions differ (whole page if no regions).
+COMPOSITE_PIXEL_TOL = 64
+COMPOSITE_MAX_DIFF_FRAC = 0.02
+COMPOSITE_REGION_PAD_PX = 6
+
+
+def _composite_matches(base_png, layer_pngs, asis_png, regions_px=None):
+    """
+    Verify the layered reconstruction: base + all overlay layers (in
+    z-order) must reproduce the page exactly as received. This catches
+    any removal that destroyed genuine content or lost the overlay itself
+    \u2014 failures the reveal step cannot see, because it reports a
+    destructive removal as a successful one.
+
+    regions_px : list of (x0, y0, x1, y1) pixel boxes to compare within
+                 (the overlay areas, where errors would appear). When
+                 None/empty the whole page is compared.
+
+    Returns (ok, diff_fraction).
+    """
+    from PIL import Image, ImageChops
+    asis = Image.open(io.BytesIO(asis_png)).convert("RGB")
+    comp = Image.open(io.BytesIO(base_png)).convert("RGBA")
+    if comp.size != asis.size:
+        comp = comp.resize(asis.size)
+    for lp in layer_pngs:
+        if not lp:
+            continue
+        lay = Image.open(io.BytesIO(lp)).convert("RGBA")
+        if lay.size != comp.size:
+            lay = lay.resize(comp.size)
+        comp.alpha_composite(lay)
+    diff = ImageChops.difference(comp.convert("RGB"), asis)
+    # per-pixel max channel difference
+    r, g, b = diff.split()
+    mx = ImageChops.lighter(ImageChops.lighter(r, g), b)
+    mask = mx.point(lambda v: 255 if v > COMPOSITE_PIXEL_TOL else 0)
+
+    W, H = asis.size
+    boxes = []
+    for (x0, y0, x1, y1) in (regions_px or []):
+        x0 = max(0, int(x0) - COMPOSITE_REGION_PAD_PX)
+        y0 = max(0, int(y0) - COMPOSITE_REGION_PAD_PX)
+        x1 = min(W, int(x1) + COMPOSITE_REGION_PAD_PX)
+        y1 = min(H, int(y1) + COMPOSITE_REGION_PAD_PX)
+        if x1 > x0 and y1 > y0:
+            boxes.append((x0, y0, x1, y1))
+    if not boxes:
+        boxes = [(0, 0, W, H)]
+
+    total = 0
+    differ = 0
+    for bx in boxes:
+        crop = mask.crop(bx)
+        hist = crop.histogram()
+        total += crop.size[0] * crop.size[1]
+        differ += hist[255]
+    frac = (differ / total) if total else 0.0
+    return frac <= COMPOSITE_MAX_DIFF_FRAC, frac
 
 
 def _b64_png(png_bytes):
@@ -306,6 +375,8 @@ def generate_visual_report(db_path, output_path, analysis_id=None,
         if session:
             session.log("Visual report requires PyMuPDF.", "error")
         return 0
+    from pdf_forensics.analysis.detectors import (
+        merge_text_over_white_box)
 
     conn = sqlite3.connect(db_path)
 
@@ -358,91 +429,173 @@ def generate_visual_report(db_path, output_path, analysis_id=None,
             findings = by_page[page_num]
             if page_num < 1 or page_num > len(doc):
                 continue
+            # Fold text-over-text detections that sit inside a white box
+            # into that box (one alteration). Also protects databases
+            # analysed before the engine applied the same consolidation.
+            findings, _n_merged = merge_text_over_white_box(
+                findings, kind_key="kind")
+            if _n_merged and session:
+                session.log(f"Visual report p{page_num}: {_n_merged} "
+                            f"text-over-text finding(s) consolidated into "
+                            f"a white-box alteration")
             page = doc[page_num - 1]
             page_index = page_num - 1
             try:
                 page_height = float(page.rect.height)
             except Exception:
                 page_height = 792.0
-
             try:
                 page_width = float(page.rect.width)
             except Exception:
                 page_width = 612.0
 
-            # Number overlays in z-order (paint order): findings are
-            # ordered by id = /Annots order = bottom-to-top stacking.
+            # Number overlays in z-order (paint order).
             for fnd in findings:
                 finding_counter += 1
                 fnd["_number"] = finding_counter
 
-            # Base layer: the page with ALL overlays removed (the true
-            # original). This is the always-present bottom layer.
+            # The page exactly as received (what a PDF viewer shows).
+            asis_png, zoom = _render_page_png(page, PAGE_RENDER_DPI)
+            asis_uri = _b64_png(asis_png)
+
+            # Base layer: the page with ALL overlays removed.
             try:
                 rb, rinfo = _reveal.build_revealed_pdf_bytes(
                     fpath, page_index, findings, page_height)
                 if rb and rinfo.get("recovered", 0) >= 1:
                     base_png = _render_revealed_page_png(
                         rb, page_index, PAGE_RENDER_DPI)
-                    base_all_removed = (
-                        rinfo.get("skipped", 0) == 0)
+                    base_all_removed = (rinfo.get("skipped", 0) == 0)
                 else:
-                    base_png = _render_page_png(page, PAGE_RENDER_DPI)[0]
+                    base_png = asis_png
                     base_all_removed = False
             except Exception:
-                base_png = _render_page_png(page, PAGE_RENDER_DPI)[0]
+                base_png = asis_png
                 base_all_removed = False
-            base_uri = _b64_png(base_png)
 
-            # One isolated, transparent layer per overlay. "Only overlay
-            # k present" is produced by removing every OTHER overlay
-            # (precise, by object reference for annotations), then the
-            # layer is the pixel difference from the base.
-            overlays = []
+            def _render_variant(remove, keep=None):
+                """Page with `remove` findings suppressed (except the
+                `keep` operations). Unchanged page -> the as-received
+                render."""
+                rb2, _ri = _reveal.build_revealed_pdf_bytes(
+                    fpath, page_index, remove, page_height, keep_ops=keep)
+                if rb2 is None:
+                    return asis_png
+                return _render_revealed_page_png(
+                    rb2, page_index, PAGE_RENDER_DPI)
+
+            # Display items. An ordinary finding is one item ("only this
+            # overlay present" minus the base). A white-box alteration that
+            # can be decomposed is shown as its component edits: the box
+            # (measured against the original) and each line of text painted
+            # on it (measured against the box, so the full glyphs are
+            # captured). Counting and risk still treat it as ONE alteration.
+            items = []
             for fnd in findings:
-                others = [o for o in findings if o is not fnd]
-                layer_uri = None
-                isolated = False
+                n = fnd["_number"]
+                comp = None
+                if fnd["kind"] == "white_box":
+                    try:
+                        comp = _reveal.white_box_components(
+                            fpath, page_index, fnd, page_height)
+                    except Exception:
+                        comp = None
+                    if comp and not comp["lines"]:
+                        comp = None
                 try:
-                    if others:
-                        ro, roinfo = _reveal.build_revealed_pdf_bytes(
-                            fpath, page_index, others, page_height)
-                        if ro is not None:
-                            only_png = _render_revealed_page_png(
-                                ro, page_index, PAGE_RENDER_DPI)
-                            isolated = (roinfo.get("skipped", 0) == 0)
-                        else:
-                            only_png = _render_page_png(
-                                page, PAGE_RENDER_DPI)[0]
-                            isolated = False
+                    if comp:
+                        fill_png = _render_variant(findings, comp["fill"])
+                        items.append({
+                            "number": f"{n}a", "group": n, "part": "box",
+                            "kind": "white_box", "title": "White box",
+                            "detail": ("White box drawn over the original "
+                                       "content, hiding what lies beneath. "
+                                       f"First step of alteration {n}; the "
+                                       "text listed after it was then "
+                                       "painted on the box."),
+                            "bbox": fnd["bbox"],
+                            "layer_png": _isolate_layer_png(base_png,
+                                                            fill_png)})
+                        for j, ln in enumerate(comp["lines"]):
+                            lbl = (f"{n}{chr(ord('b') + j)}" if j < 25
+                                   else f"{n}.{j + 2}")
+                            only = _render_variant(
+                                findings, comp["fill"] + ln["ops"])
+                            if ln["text"]:
+                                title = "Painted text"
+                                det = ("Text painted on the white box: "
+                                       f"\u201c{ln['text']}\u201d.")
+                            else:
+                                title = "Painted text"
+                                det = ("Text painted on the white box (line "
+                                       f"{j + 1}); its characters use a font "
+                                       "encoding that cannot be shown as "
+                                       "plain text here.")
+                            items.append({
+                                "number": lbl, "group": n, "part": "line",
+                                "kind": "text_over_text", "title": title,
+                                "line_text": ln["text"],
+                                "detail": det, "bbox": ln["bbox"],
+                                "layer_png": _isolate_layer_png(fill_png,
+                                                                only)})
+                        items[-1 - len(comp["lines"])]["group_detail"] = \
+                            fnd["detail"]
                     else:
-                        # Sole overlay on the page.
-                        only_png = _render_page_png(
-                            page, PAGE_RENDER_DPI)[0]
-                        isolated = True
-                    layer_uri = _b64_png(
-                        _isolate_layer_png(base_png, only_png))
+                        others = [o for o in findings if o is not fnd]
+                        only = (_render_variant(others) if others
+                                else asis_png)
+                        items.append({
+                            "number": str(n), "group": n, "part": None,
+                            "kind": fnd["kind"], "title": None,
+                            "detail": fnd["detail"], "bbox": fnd["bbox"],
+                            "layer_png": _isolate_layer_png(base_png, only)})
                 except Exception as e:
                     if session:
-                        session.log(
-                            f"Overlay layer {fnd['_number']} "
-                            f"(p{page_num}) failed: {e}", "warning")
-                    layer_uri = None
-                    isolated = False
+                        session.log(f"Overlay layer {n} (p{page_num}) "
+                                    f"failed: {e}", "warning")
+                    items.append({
+                        "number": str(n), "group": n, "part": None,
+                        "kind": fnd["kind"], "title": None,
+                        "detail": fnd["detail"], "bbox": fnd["bbox"],
+                        "layer_png": None})
 
-                overlays.append({
-                    "number": fnd["_number"],
-                    "kind": fnd["kind"],
-                    "detail": fnd["detail"],
-                    "bbox": fnd["bbox"],      # PyMuPDF top-left pts
-                    "layer_uri": layer_uri,
-                    "isolated": isolated,
-                })
+            overlays = []
+            layer_pngs = []
+            for z, it in enumerate(items, 1):
+                lp = it.pop("layer_png")
+                layer_pngs.append(lp)
+                it["z"] = z
+                it["layer_uri"] = _b64_png(lp) if lp else None
+                overlays.append(it)
+
+            # Self-check: base + all layers must reproduce the page as
+            # received. If it does not, the decomposition is unreliable
+            # (a removal destroyed genuine content or lost the overlay),
+            # so show the page as received and do not offer toggles.
+            regions_px = [(b[0] * zoom, b[1] * zoom, b[2] * zoom, b[3] * zoom)
+                          for b in (o["bbox"] for o in overlays) if b]
+            try:
+                verified, diff_frac = _composite_matches(
+                    base_png, layer_pngs, asis_png, regions_px)
+            except Exception:
+                verified, diff_frac = False, None
+            if not all(layer_pngs):
+                verified = False
+            if not verified and session:
+                session.log(
+                    f"Visual report p{page_num}: layered reconstruction "
+                    f"did not match the page as received"
+                    + (f" ({diff_frac:.1%} of overlay-area pixels differ)"
+                       if diff_frac is not None else "")
+                    + "; showing the page as received without toggles.",
+                    "warning")
 
             page_blocks.append({
                 "page_num": page_num,
                 "uid": f"{aid}-{page_num}",
-                "base_uri": base_uri,
+                "mode": "layered" if verified else "as_received",
+                "asis_uri": asis_uri,
+                "base_uri": _b64_png(base_png) if verified else None,
                 "base_all_removed": base_all_removed,
                 "page_w": page_width,
                 "page_h": page_height,
@@ -481,25 +634,30 @@ def _esc(val):
     return html_mod.escape(str(val)) if val is not None else ""
 
 
-def _fan_badges(overlays, page_w, page_h):
-    """Assign each overlay a badge position (% of page) and fan apart
-    badges that would land on top of each other, so stacked overlays
-    stay individually visible. Records the true anchor too, for a
-    leader line."""
+def _init_badge_positions(overlays, page_w, page_h):
+    """Assign each overlay an anchor (its true on-page location) and a
+    default badge position close to that anchor. Badges start near their
+    target rather than being fanned far away; coincident badges get only
+    a small, capped nudge so they remain individually grabbable. The
+    examiner can then drag any badge, with a leader line tracing back to
+    the anchor (as on the relationship graphs)."""
+    def clamp(v):
+        return max(0.0, min(100.0, v))
     placed = []
     for ov in overlays:
         x0, y0, x1, y1 = ov["bbox"]
-        lx = (x0 / page_w * 100.0) if page_w else 0.0
-        ly = (y0 / page_h * 100.0) if page_h else 0.0
-        lx = max(0.0, min(100.0, lx))
-        ly = max(0.0, min(100.0, ly))
+        lx = clamp((x0 / page_w * 100.0) if page_w else 0.0)
+        ly = clamp((y0 / page_h * 100.0) if page_h else 0.0)
         off = sum(1 for (px, py) in placed
                   if abs(px - lx) < 3.5 and abs(py - ly) < 3.5)
         placed.append((lx, ly))
         ov["anchor_left"] = lx
         ov["anchor_top"] = ly
-        ov["badge_left"] = max(0.0, min(100.0, lx + off * 2.6))
-        ov["badge_top"] = max(0.0, min(100.0, ly + off * 2.6))
+        # Default badge: just up-and-left of the corner, with a small
+        # capped nudge for coincident badges (drag handles the rest).
+        k = min(off, 5)
+        ov["badge_left"] = clamp(lx - 2.2 - k * 1.8)
+        ov["badge_top"] = clamp(ly - 3.2 - k * 0.6)
 
 
 def _render_doc_section(fname, fmd5, page_blocks):
@@ -516,68 +674,123 @@ def _render_doc_section(fname, fmd5, page_blocks):
     for pb in page_blocks:
         uid = pb["uid"]
         overlays = pb["overlays"]
-        _fan_badges(overlays, pb["page_w"], pb["page_h"])
+        _init_badge_positions(overlays, pb["page_w"], pb["page_h"])
 
         parts.append('<div class="page-block">')
         parts.append(
             f'<h3 class="page-title">Page {pb["page_num"]} '
             f'<span class="page-count">({pb["count"]} '
-            f'overlay{"s" if pb["count"] != 1 else ""} detected)'
-            f'</span></h3>')
+            f'overlay{"s" if pb["count"] != 1 else ""} detected'
+            + (f', shown as {len(overlays)} separate edits'
+               if len(overlays) > pb["count"] else '')
+            + ')</span></h3>')
 
         parts.append('<div class="page-layout">')
 
+        layered = pb.get("mode") == "layered"
+
         # ---- LEFT: checkbox control panel ----
         parts.append('<div class="overlay-controls">')
+        if layered:
+            parts.append(
+                '<div class="ctrl-head">Overlays'
+                f'<span class="ctrl-btns">'
+                f'<button type="button" class="ctrl-all" '
+                f'data-page="{uid}" data-set="on">All</button>'
+                f'<button type="button" class="ctrl-all" '
+                f'data-page="{uid}" data-set="off">None</button>'
+                '</span></div>')
+            parts.append(
+                '<div class="ctrl-hint">Tick an overlay to show it on the '
+                'page; untick to peel it away. With every overlay ticked '
+                'the page is shown exactly as received; unticking all '
+                'shows the recovered original. Overlays are numbered in '
+                'stacking order (1 = bottom).</div>')
+        else:
+            parts.append('<div class="ctrl-head">Overlays</div>')
+            parts.append(
+                '<div class="ctrl-hint not-separable">The overlays on this '
+                'page could not be separated reliably: rebuilding the page '
+                'from its layers did not reproduce the page as received. '
+                'To avoid showing a misleading reconstruction, the page is '
+                'shown exactly as received and the overlays cannot be '
+                'toggled individually. The numbers mark where each was '
+                'detected; see the summary below and examine the source '
+                'file directly.</div>')
         parts.append(
-            '<div class="ctrl-head">Overlays'
-            f'<span class="ctrl-btns">'
-            f'<button type="button" class="ctrl-all" '
-            f'data-page="{uid}" data-set="on">All</button>'
-            f'<button type="button" class="ctrl-all" '
-            f'data-page="{uid}" data-set="off">None</button>'
-            '</span></div>')
-        parts.append(
-            '<div class="ctrl-hint">Tick an overlay to show it on the '
-            'page; untick to peel it away. Unticking all shows the '
-            'recovered original. Overlays are numbered in stacking order '
-            '(1 = bottom).</div>')
+            f'<label class="marker-toggle"><input type="checkbox" '
+            f'class="markers-toggle" data-page="{uid}" checked> '
+            f'Show numbers &amp; lines</label>')
         parts.append('<ul class="overlay-list">')
         for ov in overlays:
             style = OVERLAY_STYLES.get(ov["kind"], OVERLAY_STYLES["other"])
             n = ov["number"]
-            toggleable = bool(ov["layer_uri"])
-            dis = "" if toggleable else " disabled"
-            note = ("" if toggleable else
-                    '<span class="ov-note"> (not independently '
-                    'viewable \u2014 shown in context)</span>')
-            approx = ("" if ov["isolated"] or not toggleable else
-                      '<span class="ov-note"> (approximate isolation)</span>')
+            dis = "" if layered else " disabled"
+            if ov.get("part") == "box":
+                parts.append(
+                    f'<li class="ov-group">Alteration {ov["group"]}: '
+                    f'white box with text painted on it (one edit, '
+                    f'shown step by step)</li>')
+            sub = " sub" if ov.get("part") else ""
+            label = _esc(ov.get("title") or style["label"])
+            if ov.get("part") == "line" and ov.get("line_text"):
+                snippet = ov["line_text"]
+                if len(snippet) > 34:
+                    snippet = snippet[:33] + "\u2026"
+                label += (f'<span class="ov-snippet">'
+                          f'\u201c{_esc(snippet)}\u201d</span>')
             parts.append(
-                f'<li class="overlay-item" data-ov="{uid}-{n}">'
+                f'<li class="overlay-item{sub}" data-ov="{uid}-{n}">'
                 f'<label><input type="checkbox" class="ov-toggle" '
-                f'data-ov="{uid}-{n}" checked{dis}>'
+                f'data-ov="{uid}-{n}" data-page="{uid}" checked{dis}>'
                 f'<span class="ov-badge-mini" '
                 f'style="background:{style["hex"]};">{n}</span>'
-                f'<span class="ov-kind">{style["label"]}</span>'
-                f'{note}{approx}</label></li>')
+                f'<span class="ov-kind">{label}</span>'
+                f'</label></li>')
         parts.append('</ul>')
         parts.append('</div>')   # overlay-controls
 
-        # ---- RIGHT: layered page stage ----
+        # ---- RIGHT: page stage ----
         parts.append('<div class="page-stage-wrap">')
         parts.append(f'<div class="page-stage" id="stage-{uid}">')
+        if layered:
+            parts.append(
+                f'<img class="base-layer" src="{pb["base_uri"]}" '
+                f'alt="Page {pb["page_num"]} original (overlays removed)">')
+            for ov in overlays:
+                n = ov["number"]
+                if ov["layer_uri"]:
+                    parts.append(
+                        f'<img class="ov-layer" id="layer-{uid}-{n}" '
+                        f'data-ov="{uid}-{n}" style="z-index:{ov["z"]};" '
+                        f'src="{ov["layer_uri"]}" alt="Overlay {n}">')
+            # The page exactly as received, shown on top whenever every
+            # overlay is ticked, so the opening view always matches what
+            # a PDF viewer displays.
+            parts.append(
+                f'<img class="asis-layer" id="asis-{uid}" '
+                f'data-page="{uid}" src="{pb["asis_uri"]}" '
+                f'alt="Page {pb["page_num"]} as received">')
+        else:
+            parts.append(
+                f'<img class="base-layer" src="{pb["asis_uri"]}" '
+                f'alt="Page {pb["page_num"]} as received">')
+        # Leader lines: one SVG line per badge, anchor -> badge, in a
+        # percentage coordinate system so it tracks the responsive image.
+        # Updated live as badges are dragged.
         parts.append(
-            f'<img class="base-layer" src="{pb["base_uri"]}" '
-            f'alt="Page {pb["page_num"]} original (overlays removed)">')
+            f'<svg class="leader-svg" id="leaders-{uid}" '
+            f'viewBox="0 0 100 100" preserveAspectRatio="none">')
         for ov in overlays:
+            style = OVERLAY_STYLES.get(ov["kind"], OVERLAY_STYLES["other"])
             n = ov["number"]
-            if ov["layer_uri"]:
-                parts.append(
-                    f'<img class="ov-layer" id="layer-{uid}-{n}" '
-                    f'data-ov="{uid}-{n}" style="z-index:{n};" '
-                    f'src="{ov["layer_uri"]}" alt="Overlay {n}">')
-        # leader lines + fanned badges (DOM, not baked into the image)
+            parts.append(
+                f'<line class="leader-line" data-ov="{uid}-{n}" '
+                f'x1="{ov["anchor_left"]:.2f}" y1="{ov["anchor_top"]:.2f}" '
+                f'x2="{ov["badge_left"]:.2f}" y2="{ov["badge_top"]:.2f}" '
+                f'stroke="{style["hex"]}"></line>')
+        parts.append('</svg>')
+        # Anchor dots (true location) + draggable numbered badges.
         for ov in overlays:
             style = OVERLAY_STYLES.get(ov["kind"], OVERLAY_STYLES["other"])
             n = ov["number"]
@@ -588,11 +801,13 @@ def _render_doc_section(fname, fmd5, page_blocks):
                 f'background:{style["hex"]};"></span>')
             parts.append(
                 f'<span class="ov-badge" data-ov="{uid}-{n}" '
+                f'title="Drag to reposition (line traces back to the '
+                f'overlay)" '
                 f'style="left:{ov["badge_left"]:.2f}%;'
                 f'top:{ov["badge_top"]:.2f}%;'
                 f'background:{style["hex"]};">{n}</span>')
         parts.append('</div>')   # page-stage
-        if not pb.get("base_all_removed", False):
+        if layered and not pb.get("base_all_removed", False):
             parts.append(
                 '<div class="reveal-note sm">Note: not every detected '
                 'overlay could be cleanly removed from the base image, so '
@@ -608,11 +823,20 @@ def _render_doc_section(fname, fmd5, page_blocks):
         for ov in overlays:
             style = OVERLAY_STYLES.get(ov["kind"], OVERLAY_STYLES["other"])
             n = ov["number"]
+            if ov.get("part") == "box":
+                parts.append(
+                    f'<div class="summary-row summary-group" '
+                    f'data-ov="{uid}-{n}">'
+                    f'<span class="summary-kind">Alteration {ov["group"]}'
+                    f'</span><span class="summary-detail">'
+                    f'{_esc(ov.get("group_detail") or "")}</span></div>')
+            sub = " sub" if ov.get("part") else ""
             parts.append(
-                f'<div class="summary-row" data-ov="{uid}-{n}">'
+                f'<div class="summary-row{sub}" data-ov="{uid}-{n}">'
                 f'<span class="ov-badge-mini" '
                 f'style="background:{style["hex"]};">{n}</span>'
-                f'<span class="summary-kind">{style["label"]}</span>'
+                f'<span class="summary-kind">'
+                f'{_esc(ov.get("title") or style["label"])}</span>'
                 f'<span class="summary-detail">{_esc(ov["detail"])}</span>'
                 f'</div>')
         parts.append('</div>')   # overlay-summary
@@ -870,6 +1094,13 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
     justify-content: center; min-width: 20px; height: 20px; padding: 0 5px;
     border-radius: 11px; color: #fff; font-weight: 700; font-size: 12px; }}
   .ov-kind {{ flex: 1; }}
+  .ov-group {{ font-size: 12px; font-weight: 700; color: #f2c48d;
+    margin: 8px 0 2px; padding: 0 6px; }}
+  .overlay-item.sub {{ margin-left: 14px; }}
+  .ov-snippet {{ display: block; font-size: 11px; color: #bdbdbd;
+    font-style: italic; }}
+  .summary-row.summary-group {{ background: #f4f4f4; font-weight: 600; }}
+  .summary-row.sub {{ padding-left: 26px; }}
   .ov-note {{ color: #8a8a8a; font-size: 11px; }}
   .page-stage-wrap {{ flex: 1 1 420px; min-width: 320px; }}
   .page-stage {{ position: relative; display: inline-block; max-width: 100%;
@@ -880,19 +1111,43 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
   .ov-badge {{ position: absolute; transform: translate(-50%, -50%);
     min-width: 22px; height: 22px; padding: 0 6px; border-radius: 12px;
     color: #fff; font-weight: 700; font-size: 12px; line-height: 22px;
-    text-align: center; box-shadow: 0 0 0 2px #fff; z-index: 999; }}
+    text-align: center; box-shadow: 0 0 0 2px #fff; z-index: 999;
+    cursor: grab; user-select: none; touch-action: none; }}
+  .ov-badge:active, .ov-badge.dragging {{ cursor: grabbing;
+    outline: 2px solid #111; }}
   .ov-badge.hot {{ outline: 3px solid #111; }}
-  .ov-anchor {{ position: absolute; width: 8px; height: 8px;
+  .ov-anchor {{ position: absolute; width: 9px; height: 9px;
     border-radius: 50%; transform: translate(-50%, -50%);
-    box-shadow: 0 0 0 1.5px #fff; z-index: 998; }}
-  .overlay-summary {{ margin-top: 16px; border-top: 1px solid #2c2c2c;
-    padding-top: 10px; }}
-  .summary-head {{ font-weight: 700; color: #fff; margin-bottom: 6px; }}
-  .summary-row {{ display: flex; gap: 8px; align-items: baseline;
-    padding: 5px 6px; border-radius: 5px; font-size: 13px; }}
-  .summary-row.hot {{ background: #262626; }}
-  .summary-kind {{ font-weight: 600; color: #cfcfcf; white-space: nowrap; }}
-  .summary-detail {{ color: #bdbdbd; }}
+    box-shadow: 0 0 0 1.5px #fff; z-index: 998; pointer-events: none; }}
+  .leader-svg {{ position: absolute; top: 0; left: 0; width: 100%;
+    height: 100%; z-index: 990; pointer-events: none; overflow: visible; }}
+  .leader-line {{ stroke-width: 1.5; vector-effect: non-scaling-stroke;
+    opacity: 0.8; stroke-dasharray: 4 3; }}
+  .leader-line.hot {{ stroke-width: 2.5; opacity: 1; stroke-dasharray: none; }}
+  .page-stage .asis-layer {{ position: absolute; top: 0; left: 0;
+    width: 100%; height: auto; z-index: 900; pointer-events: none; }}
+  /* "Show numbers & lines" off: hide every marker on that page. */
+  .page-stage.hide-markers .ov-badge,
+  .page-stage.hide-markers .ov-anchor,
+  .page-stage.hide-markers .leader-svg {{ display: none !important; }}
+  .marker-toggle {{ display: flex; align-items: center; gap: 7px;
+    font-size: 13px; color: #ddd; margin: 4px 0 10px; cursor: pointer;
+    padding: 4px 6px; border-top: 1px solid #333; padding-top: 9px; }}
+  .ctrl-hint.not-separable {{ color: #f2c48d; border-left: 3px solid #EF9F27;
+    padding-left: 8px; }}
+  /* Summary is always black-on-white so it stays legible on screen and
+     when the page is printed/saved to PDF. */
+  .overlay-summary {{ margin-top: 16px; background: #fff; color: #000;
+    border: 1px solid #ccc; border-radius: 8px; padding: 12px 14px; }}
+  .summary-head {{ font-weight: 700; color: #000; margin-bottom: 8px;
+    font-size: 14px; }}
+  .summary-row {{ display: flex; gap: 10px; align-items: baseline;
+    padding: 6px 6px; border-radius: 5px; font-size: 13px; color: #000;
+    border-top: 1px solid #eee; }}
+  .summary-row:first-of-type {{ border-top: none; }}
+  .summary-row.hot {{ background: #fff3cd; }}
+  .summary-kind {{ font-weight: 700; color: #000; white-space: nowrap; }}
+  .summary-detail {{ color: #000; }}
   @media print {{
     @page {{
       margin: 1.4cm 1.2cm 1.8cm 1.2cm;
@@ -930,10 +1185,14 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
     .overlay-controls {{ display: none !important; }}
     .page-layout {{ display: block; }}
     .page-stage {{ border: 1px solid #999; }}
-    .page-stage .ov-layer {{ display: block !important; }}
-    .overlay-summary {{ color: #000; }}
+    /* print shows the page exactly as toggled on screen */
+    .overlay-summary {{ color: #000 !important; background: #fff !important;
+      border: 1px solid #999; }}
     .summary-kind, .summary-detail, .summary-head {{ color: #000 !important; }}
-    .ov-anchor {{ display: none; }}
+    .summary-row {{ color: #000 !important; }}
+    /* keep badges + leader lines where the examiner placed them */
+    .ov-badge, .leader-svg {{ -webkit-print-color-adjust: exact;
+      print-color-adjust: exact; }}
   }}
 </style>
 </head>
@@ -943,7 +1202,7 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
   {app_logo_html}
   <div class="header-text">
     <h1>Visual Overlay Report</h1>
-    <div class="subtitle">{__tool_name__} v{__version__} &mdash;
+    <div class="subtitle">{__tool_name__} v{__version__} &middot; build {BUILD_DATE} &mdash;
       Generated {now} &mdash;
       Database: {_esc(os.path.basename(db_path))}</div>
   </div>
@@ -984,20 +1243,41 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
   function cssEsc(s) {{
     return s.replace(/["\\\\]/g, "\\\\$&");
   }}
-  // Show/hide one overlay's layer + its on-page badge/anchor.
+  // Show/hide one overlay: its layer, badge, anchor dot AND leader line
+  // (hiding the badge alone would leave a stray line on the page).
   function setOverlay(ovid, on) {{
     var q = '[data-ov="' + cssEsc(ovid) + '"]';
     document.querySelectorAll('.ov-layer' + q).forEach(function (el) {{
       el.style.display = on ? "block" : "none";
     }});
-    document.querySelectorAll('.ov-badge' + q + ', .ov-anchor' + q)
+    document.querySelectorAll(
+      '.ov-badge' + q + ', .ov-anchor' + q + ', .leader-line' + q)
       .forEach(function (el) {{ el.style.display = on ? "" : "none"; }});
   }}
-  // Checkbox toggles one overlay.
+  // With every overlay on a page ticked, show the page exactly as
+  // received (guaranteed to match a PDF viewer); otherwise show the
+  // base + the ticked layers.
+  function refreshAsis(page) {{
+    var img = document.getElementById("asis-" + page);
+    if (!img) return;
+    var boxes = document.querySelectorAll(
+      '.ov-toggle[data-page="' + cssEsc(page) + '"]');
+    var all = true;
+    boxes.forEach(function (cb) {{
+      if (!cb.disabled && !cb.checked) all = false;
+    }});
+    img.style.display = all ? "block" : "none";
+  }}
   document.addEventListener("change", function (ev) {{
     var cb = ev.target;
-    if (!cb.classList || !cb.classList.contains("ov-toggle")) return;
-    setOverlay(cb.getAttribute("data-ov"), cb.checked);
+    if (!cb.classList) return;
+    if (cb.classList.contains("ov-toggle")) {{
+      setOverlay(cb.getAttribute("data-ov"), cb.checked);
+      refreshAsis(cb.getAttribute("data-page"));
+    }} else if (cb.classList.contains("markers-toggle")) {{
+      var st = document.getElementById("stage-" + cb.getAttribute("data-page"));
+      if (st) st.classList.toggle("hide-markers", !cb.checked);
+    }}
   }});
   // "All" / "None" buttons set every overlay on a page.
   document.addEventListener("click", function (ev) {{
@@ -1006,11 +1286,12 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
     var page = b.getAttribute("data-page");
     var on = b.getAttribute("data-set") === "on";
     document.querySelectorAll(
-      '.ov-toggle[data-ov^="' + cssEsc(page) + '-"]').forEach(function (cb) {{
+      '.ov-toggle[data-page="' + cssEsc(page) + '"]').forEach(function (cb) {{
         if (cb.disabled) return;
         cb.checked = on;
         setOverlay(cb.getAttribute("data-ov"), on);
       }});
+    refreshAsis(page);
   }});
   // Hover-linking: hovering a badge, list item or summary row highlights
   // every element that refers to the same overlay.
@@ -1025,6 +1306,51 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
       hot(t.getAttribute("data-ov"), evt === "mouseover");
     }});
   }});
+
+  // ---- Draggable badges with leader lines (graph-style) ----
+  var drag = null;
+  function updateLine(ovid) {{
+    var line = document.querySelector('.leader-line[data-ov="'
+      + cssEsc(ovid) + '"]');
+    var badge = document.querySelector('.ov-badge[data-ov="'
+      + cssEsc(ovid) + '"]');
+    if (!line || !badge || !badge.parentElement) return;
+    var stage = badge.parentElement.getBoundingClientRect();
+    if (!stage.width || !stage.height) return;
+    var bx = (parseFloat(badge.style.left) || 0);
+    var by = (parseFloat(badge.style.top) || 0);
+    line.setAttribute("x2", bx.toFixed(2));
+    line.setAttribute("y2", by.toFixed(2));
+  }}
+  document.addEventListener("pointerdown", function (ev) {{
+    var badge = ev.target.closest ? ev.target.closest(".ov-badge") : null;
+    if (!badge) return;
+    var stage = badge.parentElement;
+    var rect = stage.getBoundingClientRect();
+    drag = {{ badge: badge, stage: stage, rect: rect,
+             ovid: badge.getAttribute("data-ov") }};
+    badge.classList.add("dragging");
+    badge.setPointerCapture && badge.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+  }});
+  document.addEventListener("pointermove", function (ev) {{
+    if (!drag) return;
+    var r = drag.rect;
+    var x = ((ev.clientX - r.left) / r.width) * 100;
+    var y = ((ev.clientY - r.top) / r.height) * 100;
+    x = Math.max(0, Math.min(100, x));
+    y = Math.max(0, Math.min(100, y));
+    drag.badge.style.left = x.toFixed(2) + "%";
+    drag.badge.style.top = y.toFixed(2) + "%";
+    updateLine(drag.ovid);
+  }});
+  function endDrag() {{
+    if (!drag) return;
+    drag.badge.classList.remove("dragging");
+    drag = null;
+  }}
+  document.addEventListener("pointerup", endDrag);
+  document.addEventListener("pointercancel", endDrag);
 }})();
 </script>
 

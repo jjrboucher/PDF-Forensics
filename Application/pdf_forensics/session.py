@@ -27,7 +27,7 @@ import logging
 import platform
 from datetime import datetime, timezone
 
-from pdf_forensics import __version__, __tool_name__
+from pdf_forensics import __version__, __tool_name__, BUILD_DATE
 
 
 # ===================================================================
@@ -145,6 +145,7 @@ class Session:
         # Write session header
         self.logger.info("=" * 70)
         self.logger.info(f"{__tool_name__} v{__version__}")
+        self.logger.info(f"Build: {BUILD_DATE}")
         self.logger.info(f"Case: {self.case_number}")
         # Agency / investigator identity (from branding config) so the log
         # records who ran the analysis and under what authority.

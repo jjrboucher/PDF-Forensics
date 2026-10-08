@@ -1755,10 +1755,115 @@ def check_text_over_text(page_mu, page_num, findings, page_pk=None,
             "obj_num": cs_objnum,
             "obj_gen": cs_objgen,
             "obj_locator": cs_locator,
+            "under_glyphs": under_chars,
+            "over_glyphs": over_chars,
         })
         added += 1
 
     return added
+
+
+# Minimum share of a text-over-text cluster's area that must lie inside a
+# white box for the two to be treated as one alteration.
+WHITE_BOX_MERGE_MIN_INSIDE = 0.80
+
+_GLYPH_RE = None
+
+
+def _glyphs_from(finding):
+    """(under, over) glyph samples from a text-over-text finding: from the
+    structured keys when present (fresh analysis), else parsed from the
+    stored detail text (findings read back from an existing database)."""
+    u, o = finding.get("under_glyphs"), finding.get("over_glyphs")
+    if u is not None or o is not None:
+        return (u or ""), (o or "")
+    global _GLYPH_RE
+    if _GLYPH_RE is None:
+        import re
+        _GLYPH_RE = re.compile(
+            r'Underlying glyphs: "(.*?)"; overlying glyphs: "(.*?)"')
+    m = _GLYPH_RE.search(finding.get("detail") or "")
+    return (m.group(1), m.group(2)) if m else ("", "")
+
+
+def _inside_fraction(inner, outer):
+    """Share of `inner`'s area lying inside `outer` (0..1). A zero-area
+    `inner` counts as fully inside when its point lies within `outer`."""
+    ix0, iy0, ix1, iy1 = inner
+    area = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+    if area <= 0:
+        cx, cy = (ix0 + ix1) / 2.0, (iy0 + iy1) / 2.0
+        return 1.0 if (outer[0] <= cx <= outer[2]
+                       and outer[1] <= cy <= outer[3]) else 0.0
+    return _overlap_area(inner, outer) / area
+
+
+def merge_text_over_white_box(findings, kind_key="overlay_kind",
+                              min_inside=WHITE_BOX_MERGE_MIN_INSIDE):
+    """
+    Consolidate text-over-text findings that belong to a white-box
+    alteration into that single white-box finding.
+
+    Painting an opaque white rectangle and then new text on it is ONE
+    alteration. Text extraction still returns the original glyphs hidden
+    under the box, so the text-over-text detector also fires on the new
+    text, and its 25-pt clustering splits a replaced block into many
+    findings. Reporting those separately inflates every count and risk
+    score, and removing them individually is unsafe (it can delete
+    genuine text). A text-over-text cluster at least `min_inside` of
+    whose area lies inside a white box on the same page is folded into
+    that box; the glyph evidence it carried (what lies under vs. over)
+    is preserved in the white box's detail rather than discarded.
+
+    Works on detector findings (kind_key="overlay_kind") and on findings
+    read back from the database (kind_key="kind").
+
+    Returns (consolidated_list, n_merged). The input list is not mutated.
+    """
+    boxes = [f for f in findings
+             if f.get(kind_key) == "white_box" and f.get("bbox")]
+    if not boxes:
+        return list(findings), 0
+
+    absorbed = {id(b): [] for b in boxes}
+    out = []
+    n_merged = 0
+    for f in findings:
+        if f.get(kind_key) == "text_over_text" and f.get("bbox"):
+            best, best_frac = None, 0.0
+            for b in boxes:
+                frac = _inside_fraction(f["bbox"], b["bbox"])
+                if frac > best_frac:
+                    best, best_frac = b, frac
+            if best is not None and best_frac >= min_inside:
+                absorbed[id(best)].append(f)
+                n_merged += 1
+                continue
+        out.append(f)
+
+    result = []
+    for f in out:
+        merged = absorbed.get(id(f))   # keyed by box identity only
+        if merged:
+            f = dict(f)
+            samples = []
+            for t in merged[:6]:
+                u, o = _glyphs_from(t)
+                if u or o:
+                    samples.append(f'"{u}" under "{o}"')
+            extra = (f" The text painted on the box lies over the original "
+                     f"text it hides (consolidated from {len(merged)} "
+                     f"text-over-text detection(s) inside this box, which "
+                     f"describe the same alteration).")
+            if samples:
+                extra += (" Original vs. painted glyph samples: "
+                          + "; ".join(samples))
+                if len(merged) > 6:
+                    extra += f"; +{len(merged) - 6} more"
+                extra += "."
+            f["detail"] = (f.get("detail") or "") + extra
+        result.append(f)
+    return result, n_merged
 
 # ===================================================================
 # Font consistency analysis (ANAL-03)

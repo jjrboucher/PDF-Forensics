@@ -120,6 +120,112 @@ def _query_metadata_pivoted(conn):
     return columns, data
 
 
+def _query_duplicate_submissions(conn):
+    """
+    Files submitted more than once, from the submissions record:
+      * Same content, different name: byte-identical files (same MD5)
+        submitted under two or more different filenames.
+      * Same name, different content: files whose names match once a
+        leading reference such as "[008.1]" is ignored, but whose content
+        differs (different MD5).
+    Prior versions extracted by the tool are excluded (they are not
+    submissions). A database analysed before submissions were recorded
+    returns an explanatory row rather than an empty (misleading) table.
+    """
+    columns = [
+        {"name": "Pattern",      "label": "Pattern",      "col_type": "text"},
+        {"name": "Group",        "label": "Group",        "col_type": "text"},
+        {"name": "Filename",     "label": "Filename",     "col_type": "text"},
+        {"name": "Outcome",      "label": "Outcome",      "col_type": "text"},
+        {"name": "Identical To", "label": "Identical To", "col_type": "text"},
+        {"name": "PDF MD5",      "label": "PDF MD5",      "col_type": "hash"},
+        {"name": "Size",         "label": "Size (bytes)", "col_type": "numeric"},
+        {"name": "Path",         "label": "Path",         "col_type": "text"},
+    ]
+    blank = {c["name"]: "" for c in columns}
+
+    def note(msg):
+        row = dict(blank)
+        row["Pattern"] = "Not available"
+        row["Group"] = msg
+        return columns, [row]
+
+    has = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name='submissions'").fetchone()
+    if not has:
+        return note("This database was analysed before submitted files "
+                    "were recorded (build 2026-10-08). Re-run the analysis "
+                    "to produce this report.")
+    rows = conn.execute("""
+        SELECT pdf_filename, pdf_path, name_key, pdf_md5, pdf_size,
+               outcome, duplicate_of
+        FROM submissions
+        WHERE is_version = 0 AND pdf_md5 IS NOT NULL
+          AND outcome IN ('analysed', 'duplicate')
+        ORDER BY id
+    """).fetchall()
+    if not rows:
+        return note("No submitted files are recorded in this database "
+                    "(it was analysed before submitted files were "
+                    "recorded). Re-run the analysis to produce this "
+                    "report.")
+
+    # One entry per distinct (filename, MD5): re-running the same file
+    # is not a duplicate submission.
+    seen = {}
+    for r in rows:
+        key = (r[0], r[3])
+        if key not in seen:
+            seen[key] = {"Filename": r[0], "Path": r[1], "name_key": r[2],
+                         "PDF MD5": r[3], "Size": r[4], "outcome": r[5],
+                         "Identical To": r[6] or ""}
+    files = list(seen.values())
+
+    def outcome_label(f):
+        return ("Analysed" if f["outcome"] == "analysed"
+                else "Not re-analysed (identical copy)")
+
+    data = []
+    by_md5 = {}
+    for f in files:
+        by_md5.setdefault(f["PDF MD5"], []).append(f)
+    for md5, grp in sorted(by_md5.items(),
+                           key=lambda kv: sorted(x["Filename"]
+                                                 for x in kv[1])[0]):
+        if len({f["Filename"] for f in grp}) < 2:
+            continue
+        label = f"{len(grp)} files, MD5 {md5[:12]}\u2026"
+        for f in sorted(grp, key=lambda x: x["Filename"]):
+            row = dict(blank)
+            row.update({"Pattern": "Same content, different name",
+                        "Group": label, "Filename": f["Filename"],
+                        "Outcome": outcome_label(f),
+                        "Identical To": f["Identical To"],
+                        "PDF MD5": f["PDF MD5"], "Size": f["Size"],
+                        "Path": f["Path"]})
+            data.append(row)
+
+    by_name = {}
+    for f in files:
+        by_name.setdefault(f["name_key"], []).append(f)
+    for nk, grp in sorted(by_name.items()):
+        if len({f["PDF MD5"] for f in grp}) < 2:
+            continue
+        variants = len({f["PDF MD5"] for f in grp})
+        label = f"\u201c{nk}\u201d \u2014 {variants} different contents"
+        for f in sorted(grp, key=lambda x: (x["PDF MD5"], x["Filename"])):
+            row = dict(blank)
+            row.update({"Pattern": "Same name, different content",
+                        "Group": label, "Filename": f["Filename"],
+                        "Outcome": outcome_label(f),
+                        "Identical To": f["Identical To"],
+                        "PDF MD5": f["PDF MD5"], "Size": f["Size"],
+                        "Path": f["Path"]})
+            data.append(row)
+    return columns, data
+
+
 def _query_exif_pivoted(conn):
     """
     Pivot image_metadata into one row per unique image, one column
@@ -1028,7 +1134,139 @@ REPORTS = [
         "sticky_cols": 1,
     },
 
+    # -----------------------------------------------------------------
+    # Concealment Overview (aggregate; summarize-and-link)
+    # -----------------------------------------------------------------
+    {
+        "id": "concealment_overview",
+        "name": "Concealment Overview",
+        "description":
+            "One row per document summarising ALL ways content is "
+            "hidden in the file, across two different mechanisms: "
+            "image-over-image overlaps (one image drawn on top of "
+            "another) and annotation/box-over-content overlays "
+            "(opaque boxes or text annotations placed over existing "
+            "page content). Use this as the single starting point for "
+            "concealment; open the component detail reports "
+            "(Overlap & Concealment Detail, Text Overlay) for the "
+            "specific findings behind each count.",
+        "query": """
+            SELECT
+                a.pdf_filename AS "Filename",
+                COALESCE((
+                    SELECT COUNT(*) FROM overlap_details od
+                    JOIN findings f2 ON f2.id = od.finding_id
+                    JOIN pages p2    ON p2.id = f2.page_id
+                    WHERE p2.analysis_id = a.id
+                ), 0) AS "Image Overlaps",
+                COALESCE((
+                    SELECT COUNT(*) FROM overlap_details od
+                    JOIN findings f2 ON f2.id = od.finding_id
+                    JOIN pages p2    ON p2.id = f2.page_id
+                    WHERE p2.analysis_id = a.id
+                      AND od.concealment_assessment LIKE 'FULL%'
+                ), 0) AS "Full-Concealment Overlaps",
+                COALESCE((
+                    SELECT COUNT(*) FROM findings f3
+                    JOIN pages p3         ON p3.id = f3.page_id
+                    JOIN finding_types ft ON ft.id = f3.finding_type_id
+                    WHERE p3.analysis_id = a.id
+                      AND ft.code = 'TEXT_OVERLAY'
+                ), 0) AS "Annotation/Box Overlays",
+                COALESCE((
+                    SELECT COUNT(*) FROM findings f4
+                    JOIN pages p4         ON p4.id = f4.page_id
+                    JOIN finding_types ft4 ON ft4.id = f4.finding_type_id
+                    WHERE p4.analysis_id = a.id
+                      AND ft4.code = 'REDACT_UNAPPLIED'
+                ), 0) AS "Unapplied Redactions",
+                a.doc_risk_score AS "Document Risk",
+                a.pdf_md5        AS "PDF MD5"
+            FROM analyses a
+            GROUP BY a.id
+            HAVING ("Image Overlaps" + "Annotation/Box Overlays"
+                    + "Unapplied Redactions") > 0
+            ORDER BY ("Full-Concealment Overlaps" * 2
+                      + "Image Overlaps" + "Annotation/Box Overlays"
+                      + "Unapplied Redactions") DESC,
+                     a.pdf_filename
+        """,
+        "columns": [
+            {"name": "Filename",                 "label": "Filename",
+             "col_type": "text"},
+            {"name": "Image Overlaps",           "label": "Image Overlaps",
+             "col_type": "numeric"},
+            {"name": "Full-Concealment Overlaps","label": "Full-Concealment",
+             "col_type": "numeric"},
+            {"name": "Annotation/Box Overlays",  "label": "Annotation/Box Overlays",
+             "col_type": "numeric"},
+            {"name": "Unapplied Redactions",     "label": "Unapplied Redactions",
+             "col_type": "numeric"},
+            {"name": "Document Risk",            "label": "Document Risk",
+             "col_type": "numeric"},
+            {"name": "PDF MD5",                  "label": "PDF MD5",
+             "col_type": "hash"},
+        ],
+        "sticky_cols": 1,
+    },
+
+    # -----------------------------------------------------------------
+    # Duplicate Submissions
+    # -----------------------------------------------------------------
+    {
+        "id": "duplicate_submissions",
+        "name": "Duplicate Submissions",
+        "description":
+            "Files submitted more than once. Same content, different "
+            "name: byte-identical files (same MD5) submitted under "
+            "different filenames; only the first is analysed, the others "
+            "are recorded as identical copies. Same name, different "
+            "content: files whose names match once a leading reference "
+            "such as [008.1] is ignored, but whose content differs. Both "
+            "patterns can matter: the same document resubmitted under "
+            "different references, or different documents presented "
+            "under the same name. Prior versions extracted by the tool "
+            "are not included.",
+        "query_fn": _query_duplicate_submissions,
+        "sticky_cols": 1,
+    },
+
 ]
+
+
+# ---------------------------------------------------------------------
+# Report relationships (many-to-many): which detail reports an aggregate
+# report is COMPOSED OF. part_of is derived as the inverse. Keyed by
+# stable report id so adding/removing reports never renumbers anything.
+# A detail report may feed more than one aggregate.
+# ---------------------------------------------------------------------
+REPORT_COMPOSED_OF = {
+    "concealment_overview": [
+        "overlap_concealment",   # image-over-image overlaps
+        "text_overlay",          # annotation / box over page content
+        "manipulation_detail",   # per-finding detail incl. redactions
+    ],
+    "risk_dossier": [
+        "metadata", "creator_producer", "exif_gps",
+        "incremental_updates", "version_anachronism",
+        "text_overlay", "font_anomaly", "manipulation_detail",
+    ],
+}
+
+
+def report_composed_of(report_id):
+    """Detail report ids that make up the given aggregate (or [])."""
+    return list(REPORT_COMPOSED_OF.get(report_id, []))
+
+
+def report_part_of(report_id):
+    """Aggregate report ids that the given detail report feeds into."""
+    return [agg for agg, parts in REPORT_COMPOSED_OF.items()
+            if report_id in parts]
+
+
+def is_aggregate_report(report_id):
+    return report_id in REPORT_COMPOSED_OF
 
 
 def get_report_by_id(report_id):
@@ -1054,6 +1292,7 @@ REPORT_GROUPS = [
         "version_anachronism",
     ]),
     ("Manipulation & Alteration", [
+        "concealment_overview",
         "manipulation_detail",
         "text_overlay",
         "font_anomaly",
@@ -1066,6 +1305,7 @@ REPORT_GROUPS = [
         "stamp_reuse",
     ]),
     ("Cross-Document & Review", [
+        "duplicate_submissions",
         "cross_document",
         "doc_comparison",
         "document_comments",

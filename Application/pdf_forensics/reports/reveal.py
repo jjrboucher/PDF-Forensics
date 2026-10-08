@@ -487,6 +487,51 @@ def _collect_region_siblings(do_sites, chosen, region):
 
 
 # --- text_over_text / white_box decisions, now container-aware -----------
+_WB_MIN_MASK_HEIGHT = 4.0   # pts; below this a fill cannot hide a glyph row
+_WB_V_TOL = 2.0             # pts; baseline must sit inside the rect
+
+
+def _white_box_inline_targets(units, shows, rects, region):
+    """
+    For one white-box finding region, return the operations an inline
+    (non-container) removal would drop, split into the two parts of the
+    alteration:
+
+      fill  : [(unit_id, op_idx), ...]  the rectangle path + fill ops
+      text  : [show dict, ...]          text painted on top of the box
+
+    Returns None when no qualifying fill matches the region (hairline
+    rules are not masks; see _decide_white_box_inline).
+    """
+    matched = [r for r in rects
+               if _rects_match(r["rect"], region, RECT_MATCH_TOLERANCE)
+               and (r["rect"][3] - r["rect"][1]) >= _WB_MIN_MASK_HEIGHT]
+    if not matched:
+        return None
+    fill = []
+    for r in matched:
+        u = units.get(r["unit_id"])
+        if u is None or u.shared:
+            continue
+        fill.append((r["unit_id"], r["re_idx"]))
+        fill.append((r["unit_id"], r["fill_idx"]))
+    text = []
+    seen = set()
+    for r in matched:
+        rx0, ry0, rx1, ry1 = r["rect"]
+        for sh in shows:
+            if sh["order"] <= r["order"]:
+                continue
+            if (rx0 - _WB_V_TOL <= sh["x"] <= rx1 + _WB_V_TOL and
+                    ry0 - _WB_V_TOL <= sh["y"] <= ry1 + _WB_V_TOL):
+                u = units.get(sh["unit_id"])
+                key = (sh["unit_id"], sh["idx"])
+                if u is not None and not u.shared and key not in seen:
+                    seen.add(key)
+                    text.append(sh)
+    return {"fill": fill, "text": text}
+
+
 def _decide_white_box_inline(units, shows, rects, regions, recovered_out,
                              info_kinds):
     """
@@ -503,37 +548,19 @@ def _decide_white_box_inline(units, shows, rects, regions, recovered_out,
     The text sweep is confined to glyphs whose baseline falls within the
     rect's own vertical span (plus a small tolerance), never a wide band.
     """
-    MIN_MASK_HEIGHT = 4.0   # pts; below this a fill cannot hide a glyph row
-    V_TOL = 2.0             # pts; baseline must sit inside the rect
     for ridx, region in enumerate(regions):
         if ridx in recovered_out:
             continue
-        matched = [r for r in rects
-                   if _rects_match(r["rect"], region, RECT_MATCH_TOLERANCE)
-                   and (r["rect"][3] - r["rect"][1]) >= MIN_MASK_HEIGHT]
-        if not matched:
-            # Either no fill here, or only a hairline rule -> not a
-            # recoverable masking overlay. Skip (leave intact).
+        t = _white_box_inline_targets(units, shows, rects, region)
+        if not t:
             continue
         ok = False
-        for r in matched:
-            u = units.get(r["unit_id"])
-            if u is None or u.shared:
-                continue
-            u.drop.add(r["re_idx"])
-            u.drop.add(r["fill_idx"])
+        for uid, idx in t["fill"]:
+            units[uid].drop.add(idx)
             ok = True
-        for r in matched:
-            rx0, ry0, rx1, ry1 = r["rect"]
-            for s in shows:
-                if s["order"] <= r["order"]:
-                    continue
-                if (rx0 - V_TOL <= s["x"] <= rx1 + V_TOL and
-                        ry0 - V_TOL <= s["y"] <= ry1 + V_TOL):
-                    u = units.get(s["unit_id"])
-                    if u is not None and not u.shared:
-                        u.drop.add(s["idx"])
-                        ok = True
+        for sh in t["text"]:
+            units[sh["unit_id"]].drop.add(sh["idx"])
+            ok = True
         if ok:
             recovered_out.add(ridx)
             info_kinds.add("white_box")
@@ -541,9 +568,23 @@ def _decide_white_box_inline(units, shows, rects, regions, recovered_out,
 
 def _decide_text_inline(units, shows, regions, recovered_out, info_kinds):
     """
-    Fallback for text-over-text overlays drawn inline (not in a container):
-    within a region keep the earliest-drawn show and drop later ones. Only
-    for regions not recovered via a container.
+    Fallback for text-over-text overlays drawn inline (not in a container).
+
+    The underlying layer is the stream (page content or Form XObject) that
+    drew the earliest text in the region. Only text from a DIFFERENT
+    stream, drawn after the last text of that underlying stream, is
+    treated as the overlay and suppressed; every show belonging to the
+    underlying stream is kept, even if drawn later than other shows in the
+    region (a region typically spans several original lines, and those
+    lines are not overlays).
+
+    When all text in the region comes from one stream, original and
+    overlying text cannot be told apart from the content structure, so the
+    region is skipped rather than guessed at (skip rather than mislead).
+
+    Previously this kept only the single earliest show and dropped all
+    later shows regardless of stream, which deleted genuine original lines
+    whenever a region spanned more than one line.
     """
     for ridx, region in enumerate(regions):
         if ridx in recovered_out:
@@ -554,8 +595,16 @@ def _decide_text_inline(units, shows, regions, recovered_out, info_kinds):
         if len(in_region) < 2:
             continue
         in_region.sort(key=lambda s: s["order"])
+        base_uid = in_region[0]["unit_id"]
+        last_base = max(s["order"] for s in in_region
+                        if s["unit_id"] == base_uid)
+        overlay_shows = [s for s in in_region
+                         if s["unit_id"] != base_uid
+                         and s["order"] > last_base]
+        if not overlay_shows:
+            continue                     # single stream: cannot tell; skip
         dropped = False
-        for s in in_region[1:]:
+        for s in overlay_shows:
             u = units.get(s["unit_id"])
             if u is not None and not u.shared:
                 u.drop.add(s["idx"])
@@ -633,7 +682,8 @@ def _suppress_annotations(page, target_rects_pdf, objrefs=None):
 # --------------------------------------------------------------------------
 # Public API
 # --------------------------------------------------------------------------
-def build_revealed_pdf_bytes(src_path, page_index, findings, page_height):
+def build_revealed_pdf_bytes(src_path, page_index, findings, page_height,
+                             keep_ops=None):
     """
     Produce a copy of the PDF at src_path with the given overlay findings
     suppressed on page `page_index` (0-based). `findings` is a list of dicts
@@ -754,6 +804,19 @@ def build_revealed_pdf_bytes(src_path, page_index, findings, page_height):
             info["recovered"] += recovered_total
             info["skipped"] += len(cs_findings) - recovered_total
 
+            # --- Keep-list: operations to leave in place even though a
+            # finding removal selected them. Keys are (unit_seq, op_idx);
+            # unit_seq is the unit's position in the deterministic walk
+            # order, which is stable across separate opens of the file.
+            # Used to render one part of an alteration on its own (e.g. a
+            # white box without the text painted on it).
+            if keep_ops:
+                seq_to_uid = {i: uid for i, uid in enumerate(units)}
+                for (useq, idx) in keep_ops:
+                    uid = seq_to_uid.get(useq)
+                    if uid is not None:
+                        units[uid].drop.discard(idx)
+
             # --- Rewrite affected streams --------------------------------
             for u in units.values():
                 if not u.drop or u.shared:
@@ -786,3 +849,119 @@ def build_revealed_pdf_bytes(src_path, page_index, findings, page_height):
             pass
         info["skipped"] = len(findings)
         return None, info
+
+
+# --------------------------------------------------------------------------
+# White-box alteration components (for step-by-step display)
+# --------------------------------------------------------------------------
+LINE_GROUP_TOL = 3.0   # pts; text shows within this baseline gap = one line
+
+
+def _decode_show_text(operands):
+    """Best-effort readable text for a Tj/TJ/'/" show. Returns None when
+    the bytes are not plain printable text (e.g. 2-byte CID codes in a
+    subset font), so the caller labels the line generically instead of
+    showing garbage."""
+    parts = []
+    def take(o):
+        if isinstance(o, pikepdf.String):
+            parts.append(bytes(o))
+        else:
+            try:
+                for e in o:
+                    if isinstance(e, pikepdf.String):
+                        parts.append(bytes(e))
+            except TypeError:
+                pass
+    for o in operands:
+        take(o)
+    raw = b"".join(parts)
+    if not raw:
+        return None
+    try:
+        txt = raw.decode("latin-1")
+    except Exception:
+        return None
+    printable = sum(1 for ch in txt if 32 <= ord(ch) < 127 or ord(ch) >= 160)
+    if printable < 0.9 * len(txt):
+        return None
+    return txt.strip() or None
+
+
+def white_box_components(src_path, page_index, finding, page_height):
+    """
+    Break one white-box alteration into its component edits so the visual
+    report can show each step: the white box itself, and each line of text
+    painted on it (in drawing order).
+
+    Only inline white boxes are decomposed. If the region is recovered via
+    a container Form XObject (box and text wrapped together), or nothing
+    qualifying matches, None is returned and the alteration is shown as a
+    single layer.
+
+    Returns:
+      {"fill": [(unit_seq, op_idx), ...],
+       "lines": [{"ops": [(unit_seq, op_idx), ...],
+                  "text": str or None,
+                  "bbox": (x0, y0, x1, y1)  # PyMuPDF top-left pts (approx)
+                 }, ...]}           # top-to-bottom
+    """
+    try:
+        pdf = pikepdf.open(src_path)
+    except Exception:
+        return None
+    try:
+        if page_index < 0 or page_index >= len(pdf.pages):
+            return None
+        page = pdf.pages[page_index]
+        units, shows, rects, do_sites = _walk_content(page)
+        region = _finding_rect_to_pdf(finding["bbox"], page_height)
+        if _select_container_for_region(do_sites, region) is not None:
+            return None
+        t = _white_box_inline_targets(units, shows, rects, region)
+        if not t or not t["fill"]:
+            return None
+        seq = {uid: i for i, uid in enumerate(units)}
+
+        fill = [(seq[uid], idx) for uid, idx in t["fill"]]
+
+        # Group the painted text into lines by baseline (PDF coords).
+        text = sorted(t["text"], key=lambda sh: (-sh["y"], sh["order"]))
+        lines = []
+        for sh in text:
+            if lines and abs(lines[-1]["y"] - sh["y"]) <= LINE_GROUP_TOL:
+                lines[-1]["shows"].append(sh)
+            else:
+                lines.append({"y": sh["y"], "shows": [sh]})
+
+        rx1 = region[2]
+        out_lines = []
+        for ln in lines:
+            ln["shows"].sort(key=lambda sh: sh["order"])
+            texts = []
+            for sh in ln["shows"]:
+                try:
+                    _op, operands = _instr_parts(
+                        units[sh["unit_id"]].ops[sh["idx"]])
+                    tx = _decode_show_text(operands)
+                except Exception:
+                    tx = None
+                if tx and tx not in texts:      # drop exact repeats
+                    texts.append(tx)
+            x0 = min(sh["x"] for sh in ln["shows"])
+            y = ln["y"]
+            out_lines.append({
+                "ops": [(seq[sh["unit_id"]], sh["idx"]) for sh in ln["shows"]],
+                "text": " ".join(texts) if texts else None,
+                # approx line box: baseline-3 .. baseline+10, to box edge
+                "bbox": (x0, page_height - (y + 10.0),
+                         rx1, page_height - (y - 3.0)),
+            })
+        return {"fill": fill, "lines": out_lines}
+    except Exception:
+        return None
+    finally:
+        try:
+            pdf.close()
+        except Exception:
+            pass

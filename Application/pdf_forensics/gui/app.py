@@ -15,6 +15,7 @@ from pdf_forensics import (__version__, __tool_name__, SCHEMA_REVISION,
 from pdf_forensics.session import Session, load_config, save_config
 from pdf_forensics.database import (
     validate_database, init_db, check_pdf_already_analyzed,
+    record_submission,
 )
 from pdf_forensics.analysis.engine import (
     process_pdfs, analyze_pdf, extract_prior_versions,
@@ -920,6 +921,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     count_selected = tk.StringVar(value="0")
     count_processed = tk.StringVar(value="0")
     count_failed = tk.StringVar(value="0")
+    count_skipped = tk.StringVar(value="0")
     count_images = tk.StringVar(value="0")
 
     def counter_label(parent, label_text, var, color=TEXT_SEC):
@@ -934,6 +936,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     counter_label(counter_row, "Selected", count_selected)
     counter_label(counter_row, "Processed", count_processed, SUCCESS)
     counter_label(counter_row, "Failed", count_failed, ACCENT)
+    counter_label(counter_row, "Copies", count_skipped)
     counter_label(counter_row, "Images", count_images)
 
     # Progress bar + per-PDF status label (GUI-03). Shown during batch
@@ -1064,12 +1067,16 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
         conn = init_db(db_val, session=session)
         processed = 0
+        skipped_copies = 0
+        versions_done = 0
+        not_found = 0
         failed = 0
         total_imgs = 0
         total_findings = 0
 
         count_processed.set("0")
         count_failed.set("0")
+        count_skipped.set("0")
         count_images.set("0")
         update_counters()
 
@@ -1098,7 +1105,13 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             if not os.path.isfile(pdf_path):
                 log_to_gui(f"  \u2717 {basename} — not found", "error")
                 failed += 1
+                not_found += 1
                 count_failed.set(str(failed))
+                record_submission(conn, pdf_path, "not_found",
+                                  session=session,
+                                  is_version=this_is_version)
+                if session:
+                    session.log(f"Not found: {pdf_path}", "warning")
                 continue
 
             base = os.path.splitext(basename)[0]
@@ -1141,10 +1154,24 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                         log_text.delete(progress_idx,
                                         f"{progress_idx} lineend + 1 char")
                         log_text.insert(progress_idx,
-                            f"  \u2298 {basename} — already in DB "
-                            f"({dup_info['analyzed_at']})\n", "skip")
+                            f"  \u2298 {basename} — identical copy of "
+                            f"{dup_info['pdf_filename']} (not re-analysed)\n",
+                            "skip")
                         log_text.see("end")
                         log_text.config(state="disabled")
+                        skipped_copies += 1
+                        count_skipped.set(str(skipped_copies))
+                        record_submission(
+                            conn, pdf_path, "duplicate", session=session,
+                            analysis_id=dup_info.get("id"),
+                            duplicate_of=dup_info.get("pdf_filename"),
+                            is_version=this_is_version)
+                        if session:
+                            session.log(
+                                f"Skipped: {basename} is byte-identical to "
+                                f"{dup_info['pdf_filename']} (already "
+                                f"analysed {dup_info['analyzed_at']}); not "
+                                f"re-analysed")
                         root.update_idletasks()
                         continue
 
@@ -1173,6 +1200,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     total_imgs += imgs
                     total_findings += finds
                     processed += 1
+                    if this_is_version:
+                        versions_done += 1
                     log_text.insert(progress_idx,
                         f"  \u2713 {basename} — "
                         f"{imgs} img, {finds} findings\n",
@@ -1209,6 +1238,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     log_text.insert(progress_idx,
                         f"  \u2717 {basename} — no result\n",
                         "error")
+                    record_submission(conn, pdf_path, "failed",
+                                      session=session,
+                                      reason="analysis returned no result",
+                                      is_version=this_is_version)
 
                 log_text.see("end")
                 log_text.config(state="disabled")
@@ -1224,6 +1257,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 log_text.config(state="disabled")
                 if session:
                     session.log_pdf_error(pdf_path, e)
+                record_submission(conn, pdf_path, "failed", session=session,
+                                  reason=e, is_version=this_is_version)
 
             root.update_idletasks()
             count_processed.set(str(processed))
@@ -1235,16 +1270,31 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         progress_done(processed, failed)
 
         log_to_gui("")
-        log_to_gui(
-            f"Done: {processed} processed, {failed} failed, "
-            f"{total_imgs} images, {total_findings} findings", "bold")
+        submitted = len(pdf_files)
+        originals_done = processed - versions_done
+        summary_line = (
+            f"{submitted} submitted: {originals_done} analysed, "
+            f"{skipped_copies} skipped as identical copies of files "
+            f"already analysed, {failed} failed"
+            + (f" ({not_found} not found)" if not_found else "")
+            + (f"; plus {versions_done} prior version(s) extracted and "
+               f"analysed" if versions_done else ""))
+        log_to_gui(f"Done: {summary_line}", "bold")
+        log_to_gui(f"      {total_imgs} images, {total_findings} findings",
+                   "bold")
+        if session:
+            session.log(f"Run summary: {summary_line}; {total_imgs} "
+                        f"images, {total_findings} findings")
 
         status_var.set(
-            f"Done. {processed} PDF(s), "
-            f"{total_findings} finding(s), "
-            f"{total_imgs} image(s).")
+            f"Done. {originals_done} analysed, {skipped_copies} identical "
+            f"cop{'y' if skipped_copies == 1 else 'ies'}, {failed} failed, "
+            f"{total_findings} finding(s).")
         status_label.config(fg=SUCCESS)
         run_btn_a.config(state="normal")
+        from pdf_forensics.reports.case_index import refresh_case_index
+        if refresh_case_index(session):
+            log_to_gui("\u2713 Case index updated", "dim")
 
     def _run_triage_mode():
         """Fast triage scan producing Excel output."""
@@ -1315,6 +1365,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 f"Triage done. {processed} PDF(s) -> "
                 f"{os.path.basename(xlsx_path)}")
             status_label.config(fg=SUCCESS)
+            from pdf_forensics.reports.case_index import (
+                refresh_case_index)
+            if refresh_case_index(session):
+                log_to_gui("\u2713 Case index updated", "dim")
 
         except Exception as e:
             import traceback
@@ -1597,6 +1651,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 status_var.set(
                     f"Done. {len(generated)} graph(s) generated.")
                 status_label.config(fg=SUCCESS)
+                from pdf_forensics.reports.case_index import (
+                    refresh_case_index)
+                if refresh_case_index(session):
+                    g_log("  \u2713 Case index updated", "dim")
             else:
                 g_log("No data found for selected scopes.", "dim")
                 status_var.set("No data found for selected scopes.")
@@ -1874,6 +1932,29 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     r_log(f"  \u2717 Visual report — {e}", "error")
                     session.log(f"Visual report error: {e}", "error")
 
+            # Document Risk Overview (Excel) + report index page.
+            r_log("")
+            ov_path = None
+            try:
+                from pdf_forensics.reports.risk_overview import (
+                    generate_risk_overview_xlsx)
+                ov_path = os.path.join(
+                    out_dir, session.make_filename("risk-overview", "xlsx"))
+                nov = generate_risk_overview_xlsx(
+                    db, ov_path, session=session,
+                    case_number=session.case_number)
+                session.register_output("risk_overview", ov_path)
+                r_log(f"  \u2713 Document Risk Overview (xlsx) — "
+                      f"{nov} document(s)", "success")
+            except Exception as e:
+                ov_path = None
+                r_log(f"  Document Risk Overview skipped — {e}", "dim")
+            from pdf_forensics.reports.case_index import (
+                refresh_case_index)
+            if refresh_case_index(session, log=lambda m: r_log(f"  {m}",
+                                                                "dim")):
+                r_log("  \u2713 Case index updated", "success")
+
         except Exception as e:
             status_var.set(f"Error: {e}")
             status_label.config(fg=ACCENT)
@@ -1885,6 +1966,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     run_btn_r = ttk.Button(action_row_r, text="Generate reports",
                            style="Accent.TButton", command=run_reports)
     run_btn_r.pack(fill="x")
+
 
     # Sync report DB when analysis DB changes
     def sync_report_db(*_):

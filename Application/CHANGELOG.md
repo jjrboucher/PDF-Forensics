@@ -1,6 +1,270 @@
 # PDF Forensics Suite — Changelog
 
-**Current build: 2026-10-06** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 7. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+**Current build: 2026-10-08** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+
+## v1.0.0 — Update (2026-10-08g)
+
+### Every submitted file is now accounted for (schema revision 8)
+- Problem: with "Skip PDFs already in the database" on (the default), a
+  file byte-identical to one already analysed was skipped with only an
+  on-screen note. It was not written to the session log, not counted in
+  the run summary and not recorded in the database, so the submitted
+  filename appeared nowhere in the case record. In one case, 12 files
+  were submitted, 6 were identical copies, and the case index reported
+  "Documents analysed: 10" (6 documents plus 4 prior versions) with no
+  trace of the copies.
+- New submissions table records every file submitted for analysis with
+  its outcome: analysed; identical copy of a file already analysed (with
+  the file it matches); failed (with the error); or not found. Recorded
+  in the GUI and command line, for original files and prior versions.
+- Session log: each skipped copy is logged with the file it matches, and
+  each run ends with a summary line, e.g. "12 submitted: 6 analysed, 6
+  skipped as identical copies of files already analysed, 0 failed; plus
+  4 prior version(s) extracted and analysed". The GUI run summary uses
+  the same wording and gains a "Copies" counter.
+- Case index Overview: "Documents analysed" is replaced by "Submitted
+  files" (the reconciliation above, with an expandable list of every
+  submitted file, its outcome and MD5) and "Analyses in database" (e.g.
+  "10 (6 submitted documents + 4 prior versions)"). Databases analysed
+  before this build show the analyses breakdown and state that submitted
+  files were not recorded.
+- New report: Duplicate Submissions (Cross-Document & Review). Same
+  content, different name: byte-identical files submitted under
+  different filenames. Same name, different content: files whose names
+  match once a leading reference such as "[008.1]" is ignored but whose
+  content differs. Prior versions are excluded. On a database analysed
+  before this build it shows an explanatory row rather than an empty
+  table, so it cannot be read as "no duplicates".
+- Existing databases gain the (empty) submissions table on next open;
+  re-run the analysis to record submissions for an earlier batch.
+
+## v1.0.0 — Update (2026-10-08f)
+
+### Case index: Copy path instructions
+- The Copy path note and tooltip no longer suggest pasting into Excel’s
+  File > Open dialog. In testing, a pasted full file path failed there
+  ("You can’t open this location using this program"), while Win+R and
+  the File Explorer address bar both opened the original file. The note
+  now names only those two.
+
+## v1.0.0 — Update (2026-10-08e)
+
+### Case index: spreadsheets and databases
+- Clicking a spreadsheet in the case index prompted to save it instead of
+  opening Excel. Browsers will not launch desktop applications from a web
+  page; they can only download file types they cannot display. Setting the
+  browser to "always open" .xlsx files is not a fix for case work: Chrome
+  and Edge open a copy saved to the Downloads folder, not the original.
+- Spreadsheets (.xlsx/.xls/.csv) and databases (.db) now show a "Copy path"
+  button instead of a link, with a note explaining why. The copied full
+  path can be pasted into Excel (File > Open), the File Explorer address
+  bar or Win+R to open the original file in place. The path is worked out
+  when clicked, from the index’s own location, so it stays correct if the
+  case folder is moved or copied; Windows drive, network share (UNC) and
+  macOS/Linux paths are handled. Logs keep their Open link and also get
+  Copy path. HTML reports, PDFs and image folders open in the browser as
+  before.
+
+## v1.0.0 — Update (2026-10-08d)
+
+### Case index at the root of the case folder
+- The report index is replaced by a case index, {case}_index.html, at the
+  root of the case folder (next to the databases). It links to every
+  output for the case: forensic reports, the visual overlay report,
+  relationship graphs, the triage and risk-overview spreadsheets,
+  extracted images, prior versions, session logs and databases.
+  Previously the index lived in reports/ and covered only the catalogue
+  reports, graphs and the risk overview; the visual overlay report and
+  triage spreadsheet were missing from it.
+- Layout: one self-contained HTML file with a sidebar menu (Overview,
+  Forensic Reports, Visual & Graphs, Spreadsheets, Extracted Material,
+  Logs & Provenance). No frames, server or external libraries; works from
+  local disk or a zipped folder. Each section has its own address
+  (#reports etc.). Reports open in a new tab as standalone exhibits.
+- Outputs are grouped by the analysis database they came from, read from
+  the file itself (so a report generated in a later session is filed
+  under the database it was built from). The latest database is shown by
+  default with a selector for earlier ones. Each output shows the build
+  that produced it, and the overview warns when one database’s outputs
+  come from more than one build. Outputs whose database is not in the
+  folder are listed separately.
+- Output manifest: size and MD5 of each database, report, graph,
+  spreadsheet, log and prior version at the time the index was built.
+  Extracted images are counted per folder, not hashed individually.
+  Hashes are cached (.pdf_forensics_index_cache.json) by size and
+  modification time so unchanged files are not re-hashed.
+- The index is rebuilt automatically after every operation that writes to
+  the case folder: analysis, triage, HTML reports and graphs, in both the
+  GUI and the command line, through one function (refresh_case_index)
+  that never interrupts the operation if it fails.
+- Ordering and "Generated" times use the session timestamp in each
+  filename, which survives copying the case folder (file modification
+  times do not).
+- Session logs now record the build ("Build: YYYY-MM-DD") in their header,
+  and the visual overlay report now states its build like every other
+  report. The visual report filename is now "visual-overlays" from both
+  the GUI and the command line (the command line used "visual_overlays").
+- reports/index_page.py removed; any {case}_index.html left in reports/ by
+  an earlier build is removed when the case index is written.
+
+## v1.0.0 — Update (2026-10-08c)
+
+### Report index: always current, one file
+- Removed the "Rebuild index" button from the HTML Reports tab. It was
+  redundant (the index is rebuilt automatically at the end of every report
+  run) and it pushed the visual-report option out of view in the window.
+- The index is now also refreshed automatically after graph generation
+  (GUI and CLI), since it lists graphs under "Other Artifacts". This was
+  the one case the button covered.
+- The index is written to a single stable file, {case}_index.html, and
+  overwritten on each refresh. Previously each rebuild wrote a new
+  timestamped file, so the reports folder accumulated several indexes.
+- When not told which Document Risk Overview spreadsheet to link, the
+  index links the newest one in the reports folder.
+
+## v1.0.0 — Update (2026-10-08b)
+
+### Visual overlay report: white-box alterations shown step by step
+- A white-box alteration is still counted as ONE finding (database, risk
+  score and tabular reports are unchanged), but the visual report now
+  shows its component edits as separate, toggleable steps: the white box
+  itself, then each line of text painted on it, labelled 1a, 1b, 1c...
+  under an "Alteration 1" heading. Each painted line is labelled with its
+  text where the font encoding allows (e.g. "BANK : HUNTINGTON NATIONAL
+  BANK"); otherwise it is labelled "Painted text" with a note.
+  Previously the box and its text were a single layer, so the report
+  could only show the final page or the original, not the painted text.
+- This lets the examiner see every state: the original; the blank box
+  hiding it; the painted text alone over the original (box unticked);
+  any single line on the box; and the final page.
+- How the layers are built: the box layer is the box rendered on its own
+  compared with the original; each text layer is the box plus that line
+  compared with the box alone. Measuring text against the box captures
+  painted glyphs completely, including where they sit directly on top of
+  original text of the same colour. The existing self-check (all layers
+  must reproduce the page as received) still applies.
+- reveal.py: new white_box_components() identifies the fill operations
+  and the painted-text operations of an inline white box, grouping the
+  text into lines; build_revealed_pdf_bytes() gains keep_ops to leave
+  chosen operations in place. Operations are identified by stream
+  position in walk order, which is stable across separate opens. White
+  boxes wrapped in a container Form XObject together with their text are
+  still shown as a single layer.
+
+### Documentation (queued, not yet updated)
+- Section 7.4 of the Technical Reference Guide must also describe the
+  step-by-step display of white-box alterations.
+
+## v1.0.0 — Update (2026-10-08)
+
+### Visual overlay report: correct rendering of white-box alterations
+
+A white box drawn over original text with new text painted on it was
+rendered incorrectly: the "all overlays shown" view did not match the
+page as opened in a PDF viewer, and the "all removed" view deleted
+genuine original text. Three causes, three fixes.
+
+- One alteration was reported as many. Text extraction still returns the
+  original glyphs hidden under a white box, so the text-over-text detector
+  also fired on the new text, and its 25-pt clustering split one replaced
+  block into many findings (one real case: 1 white box + 11
+  text-over-text). New merge_text_over_white_box() folds any
+  text-over-text cluster with >= 80% of its area inside a white box into
+  that single white-box finding, preserving the original-vs-painted glyph
+  samples in its detail. Applied in the analysis engine (so the database,
+  Text Overlay report, Dossier, Concealment Overview and risk score count
+  one edit) and again in the visual report (so databases analysed before
+  this build also render correctly).
+  NOTE: document risk scores change for affected files on re-analysis
+  (e.g. a page previously capped at 100 by many duplicate TEXT_OVERLAY
+  findings now scores 35 for one white-box alteration). This is a
+  correction. Re-analyse to update counts and scores.
+- The text-over-text removal deleted genuine text. reveal._decide_text_inline
+  kept only the earliest-drawn text in a region and dropped everything
+  later, regardless of source, so multi-line regions lost original lines.
+  It now treats the stream (page content or Form XObject) that drew the
+  earliest text as the underlying layer, keeps all of its text, and drops
+  only text from a different stream drawn after it. When all text in a
+  region comes from one stream it skips the region and reports it as
+  skipped rather than guessing.
+- Unverified reconstructions were shown as fact. The reveal step reports a
+  destructive removal as a success, so a per-overlay "isolated" flag could
+  not catch this. Replaced with a self-check: the base plus all overlay
+  layers must reproduce the page as received (within the overlay areas).
+  If it does not, the page is shown exactly as received, the overlay
+  toggles are disabled, and the reason is stated on the page. When it does,
+  the page renders as layers as before, and with every overlay ticked the
+  as-received render itself is displayed, so the opening view always
+  matches what a PDF viewer shows.
+- Layer isolation now measures pixel change by per-channel maximum rather
+  than luminance; luminance under-weighted blue, so e.g. dark-blue text
+  painted over black text could be dropped from its layer.
+
+### Visual overlay report: markers
+- New "Show numbers & lines" checkbox per page hides every badge, anchor
+  dot and leader line, to view (or print) the page unobstructed.
+- Unticking an overlay now also hides its leader line (previously only the
+  badge was hidden, leaving a stray line on the page).
+- Printing now shows the page exactly as toggled on screen (a print rule
+  that forced every overlay layer visible was removed).
+
+### Documentation (not yet updated; queued)
+- Technical Reference Guide section 7.4 still describes colour-coded boxes
+  drawn on the page, zoomed crops and a before/after toggle; the report now
+  uses verified per-overlay layers, toggles and draggable badges.
+- The in-app HTML Reports guides do not describe the visual overlay report.
+
+## v1.0.0 — Update (2026-10-06d)
+
+### Report index page, Concealment Overview, and risk overview sheet
+- New Report Index page: a single catalogue-complete landing page a
+  reviewer opens to navigate a case. It lists EVERY report grouped by
+  category, marks each as generated (with a link that opens in a new
+  tab and a timestamp) or not-yet-generated, and carries the same
+  case/agency banner as the individual reports. Aggregate reports show
+  "Combines: …" and detail reports show "Also summarized in: …", a
+  many-to-many relationship expressed in words rather than a numbering
+  scheme. Written/refreshed automatically at the end of every report
+  run and via a new "Rebuild index" button (GUI); the index is a
+  navigation aid, not evidence.
+- New Concealment Overview report (aggregate, summarize-and-link): one
+  row per document combining the two concealment mechanisms —
+  image-over-image overlaps (incl. full-concealment count) and
+  annotation/box-over-content overlays, plus unapplied redactions —
+  so a reviewer has one place to see all concealment rather than
+  cross-referencing Overlap & Concealment and Text Overlay separately.
+  It leads the Manipulation & Alteration group.
+- Report relationship metadata (REPORT_COMPOSED_OF, with report_part_of
+  derived) added as the single source of truth for which detail reports
+  make up each aggregate, keyed by stable report id (no renumbering).
+- New Document Risk Overview spreadsheet (Option B): a NEW Excel file
+  written at report time with one row per analyzed document — filename,
+  risk score, and per-category signal counts (the Document Risk Dossier
+  data) — with auto-filter and a frozen header for sorting/filtering by
+  risk. Deliberately a separate artifact rather than editing the triage
+  sheet after the fact, to avoid an after-the-stated-time modification.
+- CLI report runs also emit the risk overview and index.
+- Render-testing caveat unchanged: the index/overview generation,
+  discovery logic, and Concealment Overview query were unit-tested; the
+  banner visuals reuse the existing report branding block.
+
+## v1.0.0 — Update (2026-10-06c)
+
+### Visual overlay report: legibility + draggable badges
+- Overlay summary is now black text on a white card, on screen and in
+  print, so it stays legible when the report is printed or saved to PDF
+  (previously light grey on the dark theme, readable only on hover).
+- Number badges are now draggable, graph-style: each badge can be moved
+  anywhere on the page and a leader line traces back to the overlay’s
+  true location (marked with an anchor dot), so an examiner can move a
+  badge off important content and still see what it refers to. Dragged
+  positions are kept for printing.
+- Badges now start close to their overlay instead of being fanned far
+  away (which had pushed later badges in a stack, e.g. #7, well away
+  from their target); coincident badges still get a small offset so
+  each is individually grabbable, and dragging handles the rest.
+- Hover-linking retained (hovering a badge/row highlights the matching
+  items and leader line), but no longer required for legibility.
 
 ## v1.0.0 — Update (2026-10-06b)
 

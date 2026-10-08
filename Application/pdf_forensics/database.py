@@ -225,6 +225,26 @@ def init_db(db_path, session=None):
             obj_num       INTEGER,
             obj_gen       INTEGER
         );
+
+        -- Every file submitted for analysis and what happened to it
+        -- (schema rev 8). Analyses only exist for files that completed,
+        -- so without this a skipped identical copy or a failed file left
+        -- no trace in the case record.
+        CREATE TABLE IF NOT EXISTS submissions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_ts      TEXT,
+            submitted_at    TEXT NOT NULL,
+            pdf_path        TEXT NOT NULL,
+            pdf_filename    TEXT NOT NULL,
+            name_key        TEXT,
+            pdf_md5         TEXT,
+            pdf_size        INTEGER,
+            is_version      INTEGER NOT NULL DEFAULT 0,
+            outcome         TEXT NOT NULL,
+            analysis_id     INTEGER REFERENCES analyses(id) ON DELETE SET NULL,
+            duplicate_of    TEXT,
+            reason          TEXT
+        );
     """)
 
     for code, (label, severity) in FINDING_TYPE_DEFS.items():
@@ -354,6 +374,68 @@ def validate_database(conn):
             f"{', '.join(sorted(missing))}. "
             f"Is this a PDF Forensics database?")
 
+
+
+_REF_PREFIX_RE = None
+
+
+def submission_name_key(filename):
+    """
+    Name used to spot "same name, different content". A leading bracketed
+    or parenthesised reference such as "[008.1] " or "(12) " is removed
+    (exhibit/reference numbering added by the examiner), then case and
+    whitespace are normalised. "[008.1] CE 10032968.pdf" and
+    "[010.2] CE 10032968.pdf" therefore share a key.
+    """
+    global _REF_PREFIX_RE
+    import re
+    if _REF_PREFIX_RE is None:
+        _REF_PREFIX_RE = re.compile(r"^\s*[\[\(][^\]\)]*[\]\)]\s*[-_.]*\s*")
+    name = _REF_PREFIX_RE.sub("", filename or "", count=1)
+    return " ".join(name.lower().split())
+
+
+def _md5_and_size(path):
+    try:
+        h = hashlib.md5()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest(), os.path.getsize(path)
+    except Exception:
+        return None, None
+
+
+def record_submission(conn, pdf_path, outcome, session=None,
+                      analysis_id=None, duplicate_of=None, reason=None,
+                      is_version=False, md5=None, size=None):
+    """
+    Record one submitted file and its outcome:
+      'analysed'   analysis completed (analysis_id = its analysis)
+      'duplicate'  byte-identical to a file already in the database, so not
+                   re-analysed (analysis_id = the matching analysis,
+                   duplicate_of = that file's name)
+      'failed'     analysis raised an error (reason = the error)
+      'not_found'  the file did not exist when its turn came
+    Never raises: a recording failure must not interrupt the analysis.
+    """
+    try:
+        if md5 is None and outcome != "not_found":
+            md5, size = _md5_and_size(pdf_path)
+        name = os.path.basename(pdf_path)
+        conn.execute(
+            """INSERT INTO submissions (session_ts, submitted_at, pdf_path,
+                   pdf_filename, name_key, pdf_md5, pdf_size, is_version,
+                   outcome, analysis_id, duplicate_of, reason)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (getattr(session, "timestamp", None),
+             datetime.now(timezone.utc).isoformat(),
+             os.path.abspath(pdf_path), name, submission_name_key(name),
+             md5, size, 1 if is_version else 0, outcome, analysis_id,
+             duplicate_of, (str(reason)[:500] if reason else None)))
+        conn.commit()
+    except Exception:
+        pass
 
 
 def check_pdf_already_analyzed(conn, pdf_path):

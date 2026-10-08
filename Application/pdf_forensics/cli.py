@@ -206,6 +206,11 @@ def _cli_analyze(args, session, case):
         quiet=args.quiet,
         force=args.force)
 
+    from pdf_forensics.reports.case_index import refresh_case_index
+    _idx = refresh_case_index(session, log=print)
+    if _idx:
+        print(f"Case index updated: {_idx}")
+
     session.write_summary(
         stats={
             "PDFs processed": len(summaries),
@@ -277,6 +282,10 @@ def _cli_graph(args, session):
     session.register_output("graph", out_path)
     graph_print_summary(rows, G, len(thumbnails))
     print(f"\nGraph written to: {out_path}")
+    from pdf_forensics.reports.case_index import refresh_case_index
+    _idx = refresh_case_index(session, log=print)
+    if _idx:
+        print(f"Case index updated: {_idx}")
     conn.close()
 
     session.write_summary(db_path=args.database)
@@ -321,7 +330,7 @@ def _cli_report(args, session):
     if args.visual:
         from pdf_forensics.reports.visual import generate_visual_report
         visual_path = os.path.join(
-            out_dir, session.make_filename("visual_overlays", "html"))
+            out_dir, session.make_filename("visual-overlays", "html"))
         print(f"\nGenerating visual overlay report...")
         n = generate_visual_report(
             args.database, visual_path, session=session)
@@ -330,6 +339,26 @@ def _cli_report(args, session):
                   f"{os.path.basename(visual_path)}")
         else:
             print("  No overlay findings to visualize.")
+
+    # Document Risk Overview (Excel) + report index page.
+    ov_path = None
+    try:
+        from pdf_forensics.reports.risk_overview import (
+            generate_risk_overview_xlsx)
+        ov_path = os.path.join(
+            out_dir, session.make_filename("risk-overview", "xlsx"))
+        nov = generate_risk_overview_xlsx(
+            args.database, ov_path, session=session,
+            case_number=session.case_number)
+        print(f"  Document Risk Overview: {nov} document(s) -> "
+              f"{os.path.basename(ov_path)}")
+    except Exception as e:
+        ov_path = None
+        print(f"  Document Risk Overview skipped: {e}")
+    from pdf_forensics.reports.case_index import refresh_case_index
+    _idx = refresh_case_index(session, log=print)
+    if _idx:
+        print(f"Case index updated: {_idx}")
 
     session.write_summary(db_path=args.database)
 
@@ -381,4 +410,9 @@ def _cli_triage(args, session, case):
     print(f"\nTriage complete: {processed} processed, "
           f"{skipped} skipped")
     print(f"Output: {out}")
+    from pdf_forensics.reports.case_index import refresh_case_index
+    _idx = refresh_case_index(session, log=print)
+    if _idx:
+        print(f"Case index updated: {_idx}")
+
     session.write_summary()

@@ -11,7 +11,7 @@ import pikepdf
 from pikepdf import Name
 
 from pdf_forensics.database import (
-    init_db, FINDING_TYPE_DEFS, save_to_db,
+    init_db, FINDING_TYPE_DEFS, save_to_db, record_submission,
     check_pdf_already_analyzed,
 )
 from pdf_forensics.analysis.metadata import (
@@ -25,7 +25,7 @@ from pdf_forensics.analysis.transparency import (
     get_zorder_and_graphics_state,
 )
 from pdf_forensics.analysis.detectors import (
-    extract_page_text,
+    extract_page_text, merge_text_over_white_box,
     analyze_form_xobject, check_overlapping_images,
     check_image_smasks, check_offpage_images,
     check_dpi_anomalies, check_text_overlays,
@@ -157,11 +157,18 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                    f"on {info['analyzed_at']}")
             _out(f"  SKIPPED — {msg}")
             if session:
-                session.log(f"  Skipped (duplicate): {msg}")
+                session.log(
+                    f"  Skipped: {os.path.basename(pdf_path)} is "
+                    f"byte-identical to {info['pdf_filename']} (already "
+                    f"analysed {info['analyzed_at']}); not re-analysed")
+            record_submission(conn, pdf_path, "duplicate", session=session,
+                              analysis_id=info.get("id"),
+                              duplicate_of=info.get("pdf_filename"),
+                              is_version=version_number is not None)
             if own_conn:
                 conn.close()
             return {"pdf": pdf_path, "skipped": True,
-                    "reason": msg}
+                    "reason": msg, "duplicate_of": info.get("pdf_filename")}
 
     doc_mu = pymupdf.open(pdf_path)
     doc_pk = pikepdf.open(pdf_path)
@@ -288,6 +295,17 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
             content_ops=page_ops)
         check_text_over_text(page_mu, page_num, findings,
                              page_pk=page_pk, text_page=page_text)
+        # One white box with text painted on it is ONE alteration; the
+        # text-over-text detector also fires on that text (the hidden
+        # original glyphs are still extractable). Fold those into the
+        # white-box finding so counts and risk reflect one edit.
+        _merged_list, _n_merged = merge_text_over_white_box(findings)
+        if _n_merged:
+            findings[:] = _merged_list
+            if session:
+                session.log(f"  Page {page_num}: {_n_merged} "
+                            f"text-over-text detection(s) consolidated "
+                            f"into a white-box alteration")
         findings.extend(check_unapplied_redactions(page_pk, page_num))
 
         # Collect EXIF capture-device info for the document-level
@@ -419,6 +437,9 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                              doc_risk=doc_risk,
                              source_analysis_id=source_analysis_id,
                              version_number=version_number)
+    record_submission(conn, pdf_path, "analysed", session=session,
+                      analysis_id=analysis_id,
+                      is_version=version_number is not None)
     if own_conn:
         conn.close()
 
@@ -488,6 +509,8 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
     summaries = []
     skipped = 0
 
+    failed = 0
+    not_found = 0
     for pdf_path in pdf_paths:
         if not os.path.isfile(pdf_path):
             msg = f"Skipping (not found): {pdf_path}"
@@ -495,6 +518,8 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
                 print(msg)
             if session:
                 session.log(msg, "warning")
+            record_submission(conn, pdf_path, "not_found", session=session)
+            not_found += 1
             continue
 
         if extract_to_disk:
@@ -528,13 +553,22 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
                 print(f"Error processing {pdf_path}: {e}")
             if session:
                 session.log_pdf_error(pdf_path, e)
+            record_submission(conn, pdf_path, "failed", session=session,
+                              reason=e)
+            failed += 1
         if not quiet:
             print()
 
     conn.close()
 
-    if skipped and not quiet:
-        print(f"  {skipped} PDF(s) skipped (already in database)")
+    line = (f"{len(pdf_paths)} submitted: {len(summaries)} analysed, "
+            f"{skipped} skipped as identical copies of files already "
+            f"analysed, {failed} failed"
+            + (f", {not_found} not found" if not_found else ""))
+    if not quiet:
+        print(f"  {line}")
+    if session:
+        session.log(f"Run summary: {line}")
 
     return summaries
 
