@@ -146,6 +146,11 @@ class Session:
         self.logger.info("=" * 70)
         self.logger.info(f"{__tool_name__} v{__version__}")
         self.logger.info(f"Build: {BUILD_DATE}")
+        try:
+            from pdf_forensics.acknowledgement import log_line as _ack_line
+            self.logger.info(_ack_line(load_config()))
+        except Exception:
+            pass
         self.logger.info(f"Case: {self.case_number}")
         # Agency / investigator identity (from branding config) so the log
         # records who ran the analysis and under what authority.

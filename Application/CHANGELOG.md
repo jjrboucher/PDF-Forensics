@@ -1,6 +1,107 @@
 # PDF Forensics Suite — Changelog
 
-**Current build: 2026-10-08** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+**Current build: 2026-10-09** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+
+## v1.0.0 — Update (2026-10-09)
+
+### PDF selection lists (From list, -l / --pdf-list)
+- One shared reader (pdf_forensics/pathlist.py) for the GUI From list
+  button and the command-line --pdf-list option of analyze and triage.
+- Quoted paths now load. File Explorer's "Copy as path" wraps each path
+  in quotation marks; these (and typographic quotes) are removed.
+  Previously every quoted line was counted as not found.
+- Text encoding is detected from the file: UTF-8 with or without a
+  byte-order mark, UTF-16 (e.g. Excel "Unicode Text"), or the Windows
+  legacy encoding. Previously the list was always read in the Windows
+  legacy encoding, so paths with accented characters in a UTF-8 list (the
+  current Notepad default) were not found, and UTF-16 lists failed.
+- A line copied from several spreadsheet cells (tab-separated) is
+  accepted: the first cell that is an existing file is used.
+- Duplicates are detected regardless of slashes or letter case.
+- Paths not found are listed by name (GUI message and console), not just
+  counted, and every one is written to the session log.
+- The session log records each list loaded: its path and MD5, the
+  encoding detected, and the counts added, ignored and not found.
+
+### Disclaimer acknowledgement record
+- The acknowledgement now records when it was given (with time zone),
+  the Windows user, the computer, the disclaimer version (first 12 hex
+  characters of the SHA-256 of the disclaimer text shown) and the
+  application version and build. Previously only a true/false flag was
+  stored.
+- Every session log header states the acknowledgement on record, or
+  that none is on record (command-line runs display the disclaimer but
+  do not ask for acknowledgement).
+- Users are asked again if the disclaimer wording changes. Users who
+  acknowledged under the old true/false flag are asked once more so that
+  a record is created; the dialog explains why.
+
+### Documentation
+- Getting Started section 3 (acknowledgement record) and section 4 (From
+  list: quotes, encodings and spreadsheet cells accepted; missing paths
+  shown and logged; the "without quotation marks" caveat removed).
+  Technical Reference Guide section 13.1: the acknowledgement and
+  selection-list records. All documents now state build 2026-10-09.
+
+## v1.0.0 — Update (2026-10-08i)
+
+### Getting Started guide
+- Section 3: the disclaimer acknowledgement is stored in the user’s
+  .pdf_forensics_config.json, so it is shown once per Windows user
+  account, not once per computer.
+- Section 4: documents the existing "From list" button (one full path per
+  line; blank and # lines ignored; duplicates added once; missing paths
+  counted) and the triage-first workflow: triage everything, copy the
+  triage spreadsheet’s Path column for the files that warrant full
+  analysis into a text file, load it with From list.
+- Section 6: the command-line -l / --pdf-list option for analyze and
+  triage.
+
+## v1.0.0 — Update (2026-10-08h)
+
+### Documentation brought in sync with build 2026-10-08
+- Every guide now states on its cover the application version and build
+  it applies to ("Applies to PDF Forensics Suite v1.0.0, build
+  2026-10-08"), dated October 8, 2026. The standalone Technical Reference
+  Guide is revised to Version 1.2 and its running footer, which still read
+  "v1.0 — June 2026", now carries the version and build.
+- HTML Reports (technical): report count corrected to twenty; new
+  sections 2.16-2.20 for Text Overlay Detection, Font Consistency
+  Analysis, Document Comments, Concealment Overview and Duplicate
+  Submissions, with SQL and columns taken from the report definitions; new
+  chapter 3 (Visual Overlay Report, Document Risk Overview spreadsheet,
+  case index, submitted-files record). Later chapters renumbered.
+- HTML Reports (plain language): counts corrected (the guide said both
+  sixteen and eighteen); overview table extended from 12 to 20 reports;
+  plain-language sections for the five reports above and a new chapter on
+  the visual report, risk spreadsheet, case index and file accounting.
+- Getting Started: identical-copy handling, the run summary and Copies
+  counter, the case index as the starting point, and Copy path.
+- Risk Scoring (technical): how overlays are counted (a white box with
+  painted text scores once; stacked annotations score separately); schema
+  sections for revision 7 (lineage columns) and revision 8 (submissions).
+  Risk Scoring (plain language): "one change is counted once".
+- Graph Reports (both): graphs appear in the case index, which refreshes
+  after each graph run; each graph records its build.
+- Technical Reference Guide: architecture table (schema revision 8, twenty
+  reports, reveal.py role, new rows for visual.py, case_index.py and
+  risk_overview.py); 7.1.1 stacking rule and /Stamp; 7.2.1 white-box
+  consolidation; 7.3.2 worked example corrected (threshold 0.55, one
+  finding per cluster; it said 0.8 and one per pair); 7.4 rewritten (it
+  described colour-coded boxes, zoomed crops and a before/after toggle);
+  10.2.2 counting note; 13.1-13.3 build date, submitted-files record and
+  output manifest; 15.6-15.9 quick-start steps updated.
+
+### Application text
+- The Text Overlay Detection report described itself as covering only
+  annotations with an opaque background. Its description (shown in the
+  report header and on the case index) now covers all three kinds,
+  including stacked annotations and white boxes reported once per box.
+
+### Remaining step
+- Tables of contents must be refreshed in Word (right-click the table of
+  contents, Update Field, Update entire table) for the new and renumbered
+  sections to appear in them.
 
 ## v1.0.0 — Update (2026-10-08g)
 

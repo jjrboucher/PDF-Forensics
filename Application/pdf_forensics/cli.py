@@ -159,11 +159,15 @@ def _cli_analyze(args, session, case):
         if not os.path.isfile(args.pdf_list):
             print(f"Error: List file not found: {args.pdf_list}")
             sys.exit(1)
-        with open(args.pdf_list) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    pdfs.append(line)
+        from pdf_forensics.pathlist import read_path_list, log_list
+        res = read_path_list(args.pdf_list)
+        pdfs.extend(res["paths"])
+        log_list(session, res)
+        print(f"List {os.path.basename(args.pdf_list)} ({res['encoding']}): "
+              f"{len(res['paths'])} found, {res['duplicates']} duplicate(s) "
+              f"ignored, {len(res['missing'])} not found")
+        for m_ in res["missing"]:
+            print(f"  Not found: {m_}")
 
     if not pdfs:
         print("Error: No PDF files specified.")
@@ -373,11 +377,15 @@ def _cli_triage(args, session, case):
         if not os.path.isfile(args.pdf_list):
             print(f"Error: List file not found: {args.pdf_list}")
             sys.exit(1)
-        with open(args.pdf_list) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    pdfs.append(line)
+        from pdf_forensics.pathlist import read_path_list, log_list
+        res = read_path_list(args.pdf_list)
+        pdfs.extend(res["paths"])
+        log_list(session, res)
+        print(f"List {os.path.basename(args.pdf_list)} ({res['encoding']}): "
+              f"{len(res['paths'])} found, {res['duplicates']} duplicate(s) "
+              f"ignored, {len(res['missing'])} not found")
+        for m_ in res["missing"]:
+            print(f"  Not found: {m_}")
 
     if not pdfs:
         print("Error: No PDF files specified.")

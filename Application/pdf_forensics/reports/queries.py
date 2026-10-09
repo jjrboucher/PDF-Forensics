@@ -823,11 +823,15 @@ REPORTS = [
         "id": "text_overlay",
         "name": "Text Overlay Detection",
         "description":
-            "Annotations (text boxes, form fields, rectangles) placed "
-            "over existing page text with an opaque background — the "
-            "most common method for altering visible dates, amounts, "
-            "and names in a PDF without modifying the underlying "
-            "content stream.",
+            "Overlays that change what a page appears to say without "
+            "removing the original content, which stays in the file "
+            "underneath. Three kinds: annotations (text boxes, form fields, "
+            "rectangles, stamps) placed over page text, including a "
+            "covering box stacked with a replacement-text annotation; a "
+            "white box drawn in the page content with new text painted on "
+            "it (reported once per box, however many lines it covers); and "
+            "text drawn directly over other text. Open the Visual Overlay "
+            "Report to see each overlay on the page.",
         "query": """
             SELECT
                 a.pdf_filename       AS "Filename",

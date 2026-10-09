@@ -676,24 +676,40 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
         if not path:
             return
+        from pdf_forensics.pathlist import read_path_list, log_list, path_key
+        try:
+            res = read_path_list(path)
+        except OSError as e:
+            messagebox.showerror("Cannot read list", str(e))
+            return
+        have = {path_key(p) for p in pdf_files}
         added = 0
-        missing = []
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if os.path.isfile(line):
-                    if line not in pdf_files:
-                        pdf_files.append(line)
-                        pdf_listbox.insert("end", line)
-                        added += 1
-                else:
-                    missing.append(line)
-        msg = f"Added {added} PDF(s)."
-        if missing:
-            msg += f"\n{len(missing)} file(s) not found."
-        messagebox.showinfo("Import Complete", msg)
+        for p in res["paths"]:
+            if path_key(p) in have:
+                res["duplicates"] += 1
+                continue
+            have.add(path_key(p))
+            pdf_files.append(p)
+            pdf_listbox.insert("end", p)
+            added += 1
+        session = app.get("session")
+        log_list(session, res, added=added)
+        msg = f"Added {added} PDF(s) from {os.path.basename(path)}."
+        if res["duplicates"]:
+            msg += (f"\n{res['duplicates']} entr"
+                    f"{'y was' if res['duplicates'] == 1 else 'ies were'} "
+                    f"already selected or listed twice, and ignored.")
+        if res["missing"]:
+            shown = res["missing"][:12]
+            msg += (f"\n\n{len(res['missing'])} path(s) not found:\n"
+                    + "\n".join(f"  \u2022 {m}" for m in shown))
+            if len(res["missing"]) > len(shown):
+                msg += f"\n  \u2026 and {len(res['missing']) - len(shown)} more"
+            msg += ("\n\nAll paths not found are listed in the session log."
+                    if session else "\n\n(No case session is open, so "
+                    "this was not logged.)")
+        (messagebox.showwarning if res["missing"] else
+         messagebox.showinfo)("Import complete", msg)
 
     def add_pdfs_from_folder():
         folder = filedialog.askdirectory(
@@ -2052,10 +2068,12 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         About dialog carry the disclaimer forward). Calls on_done() when the
         user may proceed."""
         from pdf_forensics import disclaimers as _disc
+        from pdf_forensics import acknowledgement as _ack
         cfg = load_config()
-        if cfg.get("disclaimer_acknowledged"):
+        if not _ack.acknowledgement_needed(cfg):
             on_done()
             return
+        _reason = _ack.reprompt_reason(cfg)
 
         dlg = tk.Toplevel(root)
         dlg.title("Disclaimer \u2014 Please Read")
@@ -2068,6 +2086,12 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                  bg=BG_DARK, fg=ACCENT,
                  font=(FONT_FAMILY, 14, "bold")).pack(
                      anchor="w", padx=24, pady=(22, 8))
+
+        if _reason:
+            tk.Label(dlg, text=_reason, bg=BG_DARK, fg=TEXT_SEC,
+                     justify="left", anchor="w", wraplength=560,
+                     font=FONT_SUBTITLE).pack(anchor="w", padx=24,
+                                              pady=(0, 10))
 
         msg = tk.Label(dlg, text=_disc.SHORT_DISCLAIMER, bg=BG_DARK,
                        fg=TEXT_PRIM, justify="left", anchor="w",
@@ -2094,6 +2118,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         def proceed():
             cfg2 = load_config()
             cfg2["disclaimer_acknowledged"] = True
+            # When, by whom, on which computer, against which disclaimer
+            # text and with which build (written to every session log).
+            cfg2["disclaimer_acknowledgement"] = _ack.make_record()
             save_config(cfg2)
             dlg.grab_release()
             dlg.destroy()
