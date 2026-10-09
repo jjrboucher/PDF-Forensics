@@ -126,7 +126,7 @@ def _query_duplicate_submissions(conn):
       * Same content, different name: byte-identical files (same MD5)
         submitted under two or more different filenames.
       * Same name, different content: files whose names match once a
-        leading reference such as "[008.1]" is ignored, but whose content
+        leading reference such as "[001.2]" is ignored, but whose content
         differs (different MD5).
     Prior versions extracted by the tool are excluded (they are not
     submissions). A database analysed before submissions were recorded
@@ -1226,7 +1226,7 @@ REPORTS = [
             "different filenames; only the first is analysed, the others "
             "are recorded as identical copies. Same name, different "
             "content: files whose names match once a leading reference "
-            "such as [008.1] is ignored, but whose content differs. Both "
+            "such as [001.2] is ignored, but whose content differs. Both "
             "patterns can matter: the same document resubmitted under "
             "different references, or different documents presented "
             "under the same name. Prior versions extracted by the tool "

@@ -382,10 +382,10 @@ _REF_PREFIX_RE = None
 def submission_name_key(filename):
     """
     Name used to spot "same name, different content". A leading bracketed
-    or parenthesised reference such as "[008.1] " or "(12) " is removed
+    or parenthesised reference such as "[001.2] " or "(12) " is removed
     (exhibit/reference numbering added by the examiner), then case and
-    whitespace are normalised. "[008.1] CE 10032968.pdf" and
-    "[010.2] CE 10032968.pdf" therefore share a key.
+    whitespace are normalised. "[001.2] Invoice 0000123.pdf" and
+    "[002.1] Invoice 0000123.pdf" therefore share a key.
     """
     global _REF_PREFIX_RE
     import re

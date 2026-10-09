@@ -2,6 +2,18 @@
 
 **Current build: 2026-10-09** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
 
+## v1.0.0 — Update (2026-10-09b)
+
+### Fictitious example names
+- Example file names, paths and reference numbers in the guides, code
+  comments, report descriptions and this CHANGELOG were taken from a real
+  case. All are replaced with fictitious ones, e.g.
+  D:\Cases\2026-EXAMPLE\Source\[001.1] Example Bank Letter.pdf and
+  [001.2] / [002.1] Invoice 0000123.pdf. Affected: Getting Started (section
+  4), HTML Reports technical (2.20) and plain-language (2.20), the
+  Duplicate Submissions report description (shown in the report and the
+  case index), database.py comments and earlier CHANGELOG entries.
+
 ## v1.0.0 — Update (2026-10-09)
 
 ### PDF selection lists (From list, -l / --pdf-list)
@@ -132,7 +144,7 @@
 - New report: Duplicate Submissions (Cross-Document & Review). Same
   content, different name: byte-identical files submitted under
   different filenames. Same name, different content: files whose names
-  match once a leading reference such as "[008.1]" is ignored but whose
+  match once a leading reference such as "[001.2]" is ignored but whose
   content differs. Prior versions are excluded. On a database analysed
   before this build it shows an explanatory row rather than an empty
   table, so it cannot be read as "no duplicates".
@@ -231,8 +243,8 @@
   shows its component edits as separate, toggleable steps: the white box
   itself, then each line of text painted on it, labelled 1a, 1b, 1c...
   under an "Alteration 1" heading. Each painted line is labelled with its
-  text where the font encoding allows (e.g. "BANK : HUNTINGTON NATIONAL
-  BANK"); otherwise it is labelled "Painted text" with a note.
+  text where the font encoding allows (e.g. "PAYEE : EXAMPLE TRADING
+  LTD"); otherwise it is labelled "Painted text" with a note.
   Previously the box and its text were a single layer, so the report
   could only show the final page or the original, not the painted text.
 - This lets the examiner see every state: the original; the blank box
