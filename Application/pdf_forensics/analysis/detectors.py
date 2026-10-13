@@ -1556,11 +1556,26 @@ def check_text_over_text(page_mu, page_num, findings, page_pk=None,
       - The overlap is substantial (high ratio)
       - The characters differ OR are positioned almost exactly
         on top of each other (near-identical origin)
+      - The pair is not two neighbouring characters of the same line of
+        text: when the later-drawn character sits further along the same
+        line, the overlap is tight spacing (typical of OCR output, which
+        squeezes each recognised word into the width it had on the scan),
+        not new text drawn over old. Text drawn over existing text either
+        starts a new line in the extraction (it is drawn later, back at an
+        earlier position) or, within one line, does not advance along it
+        (e.g. a TJ array that steps back and draws over itself); both are
+        still reported.
 
     Returns the number of findings added.
     """
     TEXT_OVER_TEXT_OVERLAP_RATIO = 0.55
     NEAR_IDENTICAL_PTS = 1.5
+    # Within one run of a line (no backward step in drawing position), a
+    # character drawn later whose origin is further along the line than an
+    # earlier one by more than this is the next text of the same run, however
+    # tightly spaced. Text drawn again over existing text always steps back
+    # first (starting a new run) or lands exactly on it (no advance).
+    ADJACENT_MIN_ADVANCE_PTS = 0.1
 
     added = 0
 
@@ -1581,10 +1596,16 @@ def check_text_over_text(page_mu, page_num, findings, page_pk=None,
 
     # Collect every character with its bbox and metadata
     chars = []
-    for block in raw.get("blocks", []):
+    for b_i, block in enumerate(raw.get("blocks", [])):
         if block.get("type") != 0:   # text blocks only
             continue
-        for line in block.get("lines", []):
+        for l_i, line in enumerate(block.get("lines", [])):
+            line_dir = line.get("dir") or (1.0, 0.0)
+            # A line is split into runs wherever the drawing position moves
+            # backwards along it: that is text being drawn again over text
+            # already on the line, and must not count as "neighbours".
+            run_no = 0
+            prev_origin = None
             for span in line.get("spans", []):
                 span_font = span.get("font", "")
                 span_color = span.get("color", 0)
@@ -1594,12 +1615,22 @@ def check_text_over_text(page_mu, page_num, findings, page_pk=None,
                     c = ch.get("c", "")
                     if not bbox or not c or c.isspace():
                         continue
+                    origin = ch.get("origin", span_origin)
+                    if prev_origin is not None:
+                        back = ((origin[0] - prev_origin[0]) * line_dir[0]
+                                + (origin[1] - prev_origin[1]) * line_dir[1])
+                        if back < -0.3:
+                            run_no += 1
+                    prev_origin = origin
                     chars.append({
                         "c": c,
                         "bbox": bbox,
                         "font": span_font,
                         "color": span_color,
-                        "origin": ch.get("origin", span_origin),
+                        "origin": origin,
+                        "line": (b_i, l_i, run_no),
+                        "dir": line_dir,
+                        "width": max(0.0, bbox[2] - bbox[0]),
                     })
 
     if len(chars) < 2:
@@ -1654,6 +1685,15 @@ def check_text_over_text(page_mu, page_num, findings, page_pk=None,
             ox2, oy2 = ch2["origin"]
             same_origin = (abs(ox1 - ox2) < NEAR_IDENTICAL_PTS and
                            abs(oy1 - oy2) < NEAR_IDENTICAL_PTS)
+
+            # Neighbouring characters of the same line (tight spacing),
+            # not text drawn over text: ch2 is drawn after ch1, on the same
+            # line, and further along it.
+            if ch1["line"] == ch2["line"]:
+                ldx, ldy = ch1["dir"]
+                advance = (ox2 - ox1) * ldx + (oy2 - oy1) * ldy
+                if advance > ADJACENT_MIN_ADVANCE_PTS:
+                    continue
             different_char = ch1["c"] != ch2["c"]
             different_font = ch1["font"] != ch2["font"]
             different_color = ch1["color"] != ch2["color"]

@@ -1,6 +1,34 @@
 # PDF Forensics Suite — Changelog
 
-**Current build: 2026-10-09** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+**Current build: 2026-10-13** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+
+## v1.0.0 — Update (2026-10-13)
+
+### Text-over-text detector: OCR spacing no longer reported
+- On OCR-converted documents (a scanned page converted into real text over
+  a background image), the OCR application squeezes each recognised word
+  into the width it had on the scan, so neighbouring letters overlap. The
+  text-over-text check compared every character with every nearby
+  character and reported these neighbours as text drawn over text: in one
+  case every finding on two documents was a letter overlapping the next
+  letter of the same word or label (e.g. "UN" under "NI" in "UNI...").
+- Fix: each extracted line is divided into runs wherever the drawing
+  position steps backwards; within a run, a character drawn later and
+  further along the line is the next character of the same text, however
+  tightly spaced, and the pair is skipped. Text drawn over existing text
+  is still compared: it appears as a separate line, or steps back within
+  the line and starts a new run (including overprinting offset from the
+  original). The faux-bold / drop-shadow exclusion is unchanged.
+- Tested against squeezed words, compressed placeholders, unmappable OCR
+  glyphs, words or letters drawn as separate pieces and vertical text
+  (all reported by build 2026-10-09, none now), and against text drawn
+  separately over old text, text redrawn over itself within one line, and
+  the same offset by a third of a letter (all still reported).
+- Re-analyse documents processed with earlier builds to clear these
+  findings and their effect on the document risk score.
+- Documentation: Technical Reference Guide 7.3.1 (new exclusion) and
+  section 11 (OCR-converted documents, including what to check instead);
+  HTML Reports technical 2.16. All documents now state build 2026-10-13.
 
 ## v1.0.0 — Update (2026-10-09b)
 
