@@ -19,6 +19,37 @@ from datetime import datetime
 from pdf_forensics import __version__, __tool_name__, BUILD_DATE
 
 
+def _duplicate_notice(conn):
+    """Return a sentence naming the identical-copy count, or None. Reads
+    the submissions table (schema revision 8); older databases have none."""
+    try:
+        has = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='submissions'").fetchone()
+        if not has:
+            return None
+        rows = conn.execute(
+            "SELECT pdf_filename, duplicate_of FROM submissions "
+            "WHERE outcome = 'duplicate' AND is_version = 0").fetchall()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    n = len(rows)
+    ex = rows[0]
+    eg = ""
+    try:
+        if ex[0] and ex[1]:
+            eg = f" For example, {ex[0]} is identical to {ex[1]}."
+    except Exception:
+        pass
+    return (f"Note: {n} submitted document(s) are not listed here because "
+            f"they are byte-identical copies of a document that was "
+            f"analysed, and were recorded as duplicates rather than "
+            f"re-analysed \u2014 they were not missed.{eg} See the "
+            f"Duplicate Submissions report for the full list.")
+
+
 def generate_report(db_path, report_def, output_path, session=None):
     """
     Run a report query and write the result as a self-contained
@@ -52,6 +83,19 @@ def generate_report(db_path, report_def, output_path, session=None):
                 record[col["name"]] = val if val is not None else ""
             table_data.append(record)
 
+    # Dynamic notice: when the database holds documents that were not
+    # analysed because they are byte-identical copies of another file,
+    # say so on every per-document report. Otherwise a report that simply
+    # omits those copies can look as though a document was missed, rather
+    # than deliberately not re-analysed. The Duplicate Submissions report
+    # is the subject of this and does not need the banner. Computed before
+    # the connection is closed.
+    notice = report_def.get("notice")
+    if report_def.get("id") != "duplicate_submissions":
+        dnote = _duplicate_notice(conn)
+        if dnote:
+            notice = (notice + " " + dnote) if notice else dnote
+
     conn.close()
 
     sticky_cols = report_def.get("sticky_cols", 0)
@@ -59,7 +103,7 @@ def generate_report(db_path, report_def, output_path, session=None):
     html = _render_html(
         title=report_def["name"],
         description=report_def["description"],
-        notice=report_def.get("notice"),
+        notice=notice,
         columns=columns,
         data=table_data,
         db_path=db_path,

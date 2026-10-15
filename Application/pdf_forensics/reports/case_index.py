@@ -339,7 +339,7 @@ def _scan_case(root):
             "images": [], "versions": []}
 
     # Databases at the case root.
-    for p in sorted(glob.glob(os.path.join(root, "*.db"))):
+    for p in sorted(glob.glob(os.path.join(glob.escape(root), "*.db"))):
         rec = _file_rec(p, root, cache, "database")
         rec["stats"] = _db_stats(p)
         rec["build"] = None
@@ -347,7 +347,7 @@ def _scan_case(root):
 
     # Logs (also give each database its analysis build).
     logs_dir = os.path.join(root, "logs")
-    for p in sorted(glob.glob(os.path.join(logs_dir, "*.log"))):
+    for p in sorted(glob.glob(os.path.join(glob.escape(logs_dir), "*.log"))):
         build, dbs = _log_info(p)
         rec = _file_rec(p, root, cache, "log", build=build, dbs=dbs)
         data["logs"].append(rec)
@@ -358,7 +358,7 @@ def _scan_case(root):
 
     # Reports folder.
     rdir = os.path.join(root, "reports")
-    for p in sorted(glob.glob(os.path.join(rdir, "*"))):
+    for p in sorted(glob.glob(os.path.join(glob.escape(rdir), "*"))):
         if not os.path.isfile(p):
             continue
         name = os.path.basename(p)
@@ -387,7 +387,7 @@ def _scan_case(root):
 
     # Graphs.
     gdir = os.path.join(root, "graph_reports")
-    for p in sorted(glob.glob(os.path.join(gdir, "*.html"))):
+    for p in sorted(glob.glob(os.path.join(glob.escape(gdir), "*.html"))):
         m = GRAPH_RE.search(os.path.basename(p))
         db, build = _html_db_and_build(p, graph=True)
         data["graphs"].append(_file_rec(p, root, cache, "graph",
@@ -426,7 +426,7 @@ def _scan_case(root):
             sub = os.path.join(vdir, entry)
             if not os.path.isdir(sub):
                 continue
-            files = sorted(glob.glob(os.path.join(sub, "*.pdf")))
+            files = sorted(glob.glob(os.path.join(glob.escape(sub), "*.pdf")))
             data["versions"].append({
                 "name": re.sub(r"_versions$", "", entry),
                 "rel": os.path.relpath(sub, root).replace(os.sep, "/") + "/",

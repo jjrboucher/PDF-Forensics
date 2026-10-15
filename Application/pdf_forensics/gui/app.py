@@ -1499,7 +1499,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             return
         import re as _re
         done = 0
-        for f in glob.glob(os.path.join(rdir, "*report-*.html")):
+        for f in glob.glob(os.path.join(glob.escape(rdir), "*report-*.html")):
             m = _re.search(r"report-([A-Za-z0-9_]+)_\d{8}_\d{6}\.html$",
                            os.path.basename(f))
             if not m:
@@ -1516,7 +1516,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         try:
             from pdf_forensics.reports.risk_overview import (
                 generate_risk_overview_xlsx)
-            for ov in glob.glob(os.path.join(rdir, "*risk-overview*.xlsx")):
+            for ov in glob.glob(os.path.join(glob.escape(rdir), "*risk-overview*.xlsx")):
                 generate_risk_overview_xlsx(
                     db, ov, session=session,
                     case_number=(session.case_number if session else None))

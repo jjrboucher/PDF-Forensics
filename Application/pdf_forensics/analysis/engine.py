@@ -647,26 +647,66 @@ def extract_prior_versions(pdf_path, output_dir, session=None):
             session.log(f"  Could not read {pdf_path}: {e}", "error")
         return []
 
+    output_dir = os.path.normpath(output_dir)
     basename = os.path.splitext(os.path.basename(pdf_path))[0]
-    version_dir = os.path.join(output_dir, basename + "_versions")
-    os.makedirs(version_dir, exist_ok=True)
+
+    # Keep the extracted-version paths within Windows' 260-character limit.
+    # The document name would otherwise appear twice (the "_versions"
+    # folder and each "_versionN.pdf" file) on top of a possibly deep
+    # case path, and a path over 260 characters cannot be reopened by the
+    # PDF libraries (pikepdf / PyMuPDF), so analysis of the extracted
+    # version fails with "No such file or directory" and the folder looks
+    # empty. When the full name does not fit, it is shortened and a short
+    # hash of the original name is appended so it stays unique and the
+    # "_versionN.pdf" suffix (used to identify the version) is preserved.
+    max_vnum = max(v for v, _ in versions[:-1])
+    suffix_len = len(f"_version{max_vnum}.pdf")           # longest filename tail
+    # Budget: output_dir \ {base}_versions \ {base}{suffix}; keep margin.
+    fixed = len(os.path.abspath(output_dir)) + 2 + len("_versions") + suffix_len
+    allow = 255 - fixed
+    safe_base = basename
+    if allow < len(basename) * 2:
+        per_name = max(8, allow // 2 - 8)                 # room for a hash tag
+        tag = "~" + hashlib.md5(basename.encode("utf-8", "replace")
+                                ).hexdigest()[:6]
+        safe_base = basename[:per_name].rstrip(" .") + tag
+        if session:
+            session.log(
+                f"  Note: shortening extracted-version names for "
+                f"{basename!r} to stay within the Windows path limit "
+                f"(using {safe_base!r}).")
+
+    version_dir = os.path.join(output_dir, safe_base + "_versions")
+    try:
+        os.makedirs(version_dir, exist_ok=True)
+    except OSError as e:
+        if session:
+            session.log(f"  Could not create version folder for "
+                        f"{basename!r}: {e}", "error")
+        return []
 
     extracted = []
-    # Extract all versions except the last (which is the full file)
     for version_num, eof_offset in versions[:-1]:
-        # Include the %%EOF marker itself plus trailing newline
         end_pos = eof_offset + 5  # len(b"%%EOF")
-        # Skip trailing whitespace/newlines
         while end_pos < len(data) and data[end_pos:end_pos+1] in (
                 b"\r", b"\n", b" "):
             end_pos += 1
 
         version_data = data[:end_pos]
-        version_filename = f"{basename}_version{version_num}.pdf"
+        version_filename = f"{safe_base}_version{version_num}.pdf"
         version_path = os.path.join(version_dir, version_filename)
 
-        with open(version_path, "wb") as f:
-            f.write(version_data)
+        try:
+            with open(version_path, "wb") as f:
+                f.write(version_data)
+        except OSError as e:
+            # Do not queue a path that was not written: that would be
+            # recorded as a failed analysis of a non-existent file.
+            if session:
+                session.log(
+                    f"  Could not write version {version_num} of "
+                    f"{basename!r}: {e}", "error")
+            continue
 
         extracted.append(version_path)
         if session:

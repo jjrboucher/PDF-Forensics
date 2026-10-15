@@ -1,6 +1,54 @@
 # PDF Forensics Suite — Changelog
 
-**Current build: 2026-10-14** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+**Current build: 2026-10-15** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+
+## v1.0.0 — Update (2026-10-15b)
+
+### Case index: prior versions with bracketed names now listed
+- Extracted Material showed "0 prior version(s)" for every document even
+  when versions were on disk. The index listed each version folder’s
+  files with glob, but an exhibit number like [010] in the folder name is
+  a glob character class, so the pattern matched nothing. Directory paths
+  are now escaped (glob.escape) in every index scan, so names containing
+  square brackets are listed correctly. The same escaping was applied to
+  the report-rebuild scan in the GUI.
+
+### Duplicate (identical-copy) documents flagged on all reports
+- A document not analysed because it is a byte-identical copy of another
+  (e.g. [025] identical to [010]) appeared only in the case index
+  overview and the Duplicate Submissions report. On other reports it was
+  simply absent, which could read as the document having been missed.
+- Every per-document report now carries a note when the database contains
+  such copies: how many there are, an example (which file is identical to
+  which), that they were recorded as duplicates rather than re-analysed
+  and were not missed, and a pointer to the Duplicate Submissions report.
+  The note is omitted from the Duplicate Submissions report itself and
+  when there are no duplicates (and on databases predating the
+  submissions record).
+
+## v1.0.0 — Update (2026-10-15)
+
+### Prior-version extraction: Windows long-path failure fixed
+- Extracted prior versions were not written for documents with long
+  names in a deeply nested case folder. The document name appears twice
+  in the path (the "<name>_versions" folder and each
+  "<name>_versionN.pdf" file), which on top of a deep path (e.g. a
+  OneDrive case folder) exceeded the Windows 260-character limit. Python
+  reported the write as succeeding, but pikepdf/PyMuPDF could not reopen
+  the over-limit path, so analysis of the version failed with "No such
+  file or directory", the version folder appeared empty, and the index
+  showed the version as a failed submission. Short-named documents were
+  unaffected; triage still listed the versions because it reconstructs
+  them in memory rather than on disk.
+- extract_prior_versions now keeps the path within the limit: when the
+  full name would not fit, it shortens the base used for the folder and
+  files and appends a short hash of the original name for uniqueness,
+  preserving the "_versionN.pdf" suffix used to identify the version.
+  Short names are unchanged. Writes are now wrapped so a version that
+  still cannot be written is logged and skipped rather than queued as a
+  non-existent file (which had produced a spurious "failed" row).
+- Re-run analysis on affected cases to extract the versions that were
+  missed; the spurious failed-submission rows will not recur.
 
 ## v1.0.0 — Update (2026-10-14)
 
