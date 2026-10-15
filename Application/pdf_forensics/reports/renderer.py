@@ -59,6 +59,7 @@ def generate_report(db_path, report_def, output_path, session=None):
     html = _render_html(
         title=report_def["name"],
         description=report_def["description"],
+        notice=report_def.get("notice"),
         columns=columns,
         data=table_data,
         db_path=db_path,
@@ -80,7 +81,7 @@ def generate_report(db_path, report_def, output_path, session=None):
 
 
 def _render_html(title, description, columns, data, db_path,
-                 row_count, sticky_cols=0, session=None):
+                 row_count, sticky_cols=0, session=None, notice=None):
     """Build the complete self-contained HTML string."""
 
     from pdf_forensics import branding as _branding
@@ -123,6 +124,8 @@ def _render_html(title, description, columns, data, db_path,
 
     # Banner: application/suite logo (left column)
     app_logo_html = ""
+    notice_html = (f'<div class="report-notice">{esc(notice)}</div>'
+                   if notice else "")
     if app_logo:
         app_logo_html = (
             f'<img class="app-logo" src="{app_logo}" '
@@ -385,6 +388,7 @@ def _render_html(title, description, columns, data, db_path,
       Generated {now} &mdash; Database: {esc(os.path.basename(db_path))}
     </div>
     <div class="description">{esc(description)}</div>
+    {notice_html}
   </div>
   {info_html}
   {agency_logo_html}

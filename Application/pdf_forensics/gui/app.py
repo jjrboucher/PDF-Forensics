@@ -61,6 +61,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         "session": None,
         "case_var": tk.StringVar(value=initial_case or ""),
         "current_frame": None,
+        "password_manager": None,     # set when a password list is loaded
+        "password_list_info": None,
     }
     pdf_files = list(initial_pdfs) if initial_pdfs else []
     db_path_var = tk.StringVar(value=initial_db or "pdf_forensics.db")
@@ -343,7 +345,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # Per-frame window sizes: (width, height)
     frame_sizes = {
         "main":     (780, 540),
-        "analysis": (1200, 860),
+        "analysis": (1200, 936),
         "graph":    (1060, 540),
         "reports":  (1180, 1000),
     }
@@ -670,6 +672,46 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 pdf_files.append(p)
                 pdf_listbox.insert("end", p)
 
+    def set_password_list():
+        path = filedialog.askopenfilename(
+            title="Select password list (one password per line)",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+        if not path:
+            return
+        from pdf_forensics import passwords as _pw
+        try:
+            passwords, info = _pw.read_password_list(path)
+        except OSError as e:
+            messagebox.showerror("Cannot read password list", str(e))
+            return
+        if len(passwords) > _pw.SOFT_LIMIT:
+            if not messagebox.askyesno(
+                    "Large password list",
+                    f"{len(passwords)} passwords were supplied "
+                    f"(more than {_pw.SOFT_LIMIT}).\n\nTrying many passwords "
+                    f"against AES-256 files can be slow. Continue with this "
+                    f"list?"):
+                return
+        app["password_manager"] = _pw.PasswordManager(passwords, info)
+        app["password_list_info"] = info
+        pw_list_var.set(f"Password list: {len(passwords)} "
+                        f"\u2014 {os.path.basename(path)}")
+        session = app.get("session")
+        if session:
+            session.log(f"Password list loaded: {info['path']} "
+                        f"(MD5 {info['md5']}, {info['encoding']}): "
+                        f"{len(passwords)} password(s)")
+        messagebox.showinfo(
+            "Password list loaded",
+            f"{len(passwords)} password(s) will be tried (after the empty "
+            f"password and any already found) to open encrypted PDFs.")
+
+    def clear_password_list():
+        app["password_manager"] = None
+        app["password_list_info"] = None
+        pw_list_var.set("No password list (encrypted PDFs needing a "
+                        "password will be set aside)")
+
     def add_pdfs_from_list():
         path = filedialog.askopenfilename(
             title="Select text file with PDF paths",
@@ -795,11 +837,23 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         ("Remove", remove_pdfs),
         ("Clear all", remove_all_pdfs),
     ]
+    pw_list_var = tk.StringVar(
+        value="No password list (encrypted PDFs needing a password will be "
+              "set aside)")
     for _col, (_label, _cmd) in enumerate(_pdf_buttons):
         pdf_btns.grid_columnconfigure(_col, weight=1, uniform="pdfbtn")
         ttk.Button(pdf_btns, text=_label, command=_cmd).grid(
             row=0, column=_col, sticky="ew",
             padx=(0 if _col == 0 else 4, 0))
+    pw_row = tk.Frame(pdf_body, bg=BG_PANEL)
+    pw_row.pack(fill="x", pady=(4, 0))
+    ttk.Button(pw_row, text="Password list\u2026",
+               command=set_password_list).pack(side="left")
+    ttk.Button(pw_row, text="Clear",
+               command=clear_password_list).pack(side="left", padx=(4, 8))
+    tk.Label(pw_row, textvariable=pw_list_var, bg=BG_PANEL, fg=TEXT_DIM,
+             font=FONT_SUBTITLE, anchor="w").pack(
+                 side="left", fill="x", expand=True)
 
     # Database panel
     db_body = make_panel(left_panel, "Database")
@@ -938,6 +992,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     count_processed = tk.StringVar(value="0")
     count_failed = tk.StringVar(value="0")
     count_skipped = tk.StringVar(value="0")
+    count_encrypted = tk.StringVar(value="0")
     count_images = tk.StringVar(value="0")
 
     def counter_label(parent, label_text, var, color=TEXT_SEC):
@@ -953,6 +1008,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     counter_label(counter_row, "Processed", count_processed, SUCCESS)
     counter_label(counter_row, "Failed", count_failed, ACCENT)
     counter_label(counter_row, "Copies", count_skipped)
+    counter_label(counter_row, "Locked", count_encrypted, ACCENT)
     counter_label(counter_row, "Images", count_images)
 
     # Progress bar + per-PDF status label (GUI-03). Shown during batch
@@ -1104,6 +1160,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         # Track which entries are extracted versions so we don't
         # cascade (extract versions from versions).
         process_queue = list(pdf_files)
+        encrypted_unopened = []       # locked files no password opened
         is_extracted_version = set()  # indices of extracted versions
         # queue index -> (parent_analysis_id, version_number) for
         # extracted prior versions, so lineage is recorded in the DB.
@@ -1191,6 +1248,27 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                         root.update_idletasks()
                         continue
 
+                # Encryption: open permissions-only files with the empty
+                # password, locked files with a supplied password; a
+                # locked file no password opens is recorded and skipped,
+                # and remembered so the user can supply a list afterwards.
+                from pdf_forensics import passwords as _pw
+                enc = _pw.resolve_file_password(
+                    conn, pdf_path, app.get("password_manager"),
+                    session=session, quiet=True)
+                if enc["skip"]:
+                    log_text.config(state="normal")
+                    log_text.delete(progress_idx,
+                                    f"{progress_idx} lineend + 1 char")
+                    log_text.insert(progress_idx,
+                        f"  \U0001f512 {basename} — encrypted, not opened "
+                        f"({enc['scheme'] or 'scheme unknown'})\n", "skip")
+                    log_text.see("end"); log_text.config(state="disabled")
+                    encrypted_unopened.append(pdf_path)
+                    count_encrypted.set(str(len(encrypted_unopened)))
+                    root.update_idletasks()
+                    continue
+
                 summary = analyze_pdf(
                     pdf_path, db_val,
                     extract_dir=pdf_extract_dir,
@@ -1200,6 +1278,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     progress_callback=on_page_progress,
                     skip_duplicates=False,
                     force=True,
+                    password=enc["password"],
                     source_analysis_id=(this_lineage[0]
                                         if this_lineage else None),
                     version_number=(this_lineage[1]
@@ -1293,6 +1372,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             f"{skipped_copies} skipped as identical copies of files "
             f"already analysed, {failed} failed"
             + (f" ({not_found} not found)" if not_found else "")
+            + (f", {len(encrypted_unopened)} encrypted (not opened)"
+               if encrypted_unopened else "")
             + (f"; plus {versions_done} prior version(s) extracted and "
                f"analysed" if versions_done else ""))
         log_to_gui(f"Done: {summary_line}", "bold")
@@ -1311,6 +1392,139 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         from pdf_forensics.reports.case_index import refresh_case_index
         if refresh_case_index(session):
             log_to_gui("\u2713 Case index updated", "dim")
+
+        if encrypted_unopened:
+            _prompt_locked(encrypted_unopened, conn, db_val, out_dir,
+                           session)
+
+    def _prompt_locked(locked, conn, db_val, out_dir, session):
+        """After a run, offer to try a password list on the files that were
+        encrypted and could not be opened, and reprocess just those."""
+        from pdf_forensics import passwords as _pw
+        have_list = app.get("password_manager") is not None
+        n = len(locked)
+        if have_list:
+            msg = (f"{n} PDF(s) were password-protected and the supplied "
+                   f"password list did not open them. They are recorded in "
+                   f"the Encrypted Files report.\n\nTry a different password "
+                   f"list on those {n} file(s) now?")
+            btn = "Select another list\u2026"
+        else:
+            msg = (f"{n} PDF(s) are password-protected and no password list "
+                   f"was supplied, so they were set aside (and recorded as "
+                   f"such).\n\nSelect a password list and try to open those "
+                   f"{n} file(s) now?")
+            btn = "Select a list\u2026"
+        if not messagebox.askyesno("Encrypted PDFs", msg):
+            return
+        path = filedialog.askopenfilename(
+            title="Select password list (one password per line)",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            passwords, info = _pw.read_password_list(path)
+        except OSError as e:
+            messagebox.showerror("Cannot read password list", str(e))
+            return
+        app["password_manager"] = _pw.PasswordManager(passwords, info)
+        app["password_list_info"] = info
+        pw_list_var.set(f"Password list: {len(passwords)} "
+                        f"\u2014 {os.path.basename(path)}")
+        if session:
+            session.log(f"Password list loaded (retry on {n} locked "
+                        f"file(s)): {info['path']} (MD5 {info['md5']}): "
+                        f"{len(passwords)} password(s)")
+        log_to_gui(f"Retrying {n} encrypted file(s) with "
+                   f"{len(passwords)} password(s)\u2026", "bold")
+        mgr = app["password_manager"]
+        opened = still = 0
+        for pdf_path in locked:
+            enc = _pw.resolve_file_password(conn, pdf_path, mgr,
+                                            session=session, quiet=True,
+                                            record_unopened_submission=False)
+            if enc["skip"]:
+                still += 1
+                log_to_gui(f"  \U0001f512 {os.path.basename(pdf_path)} "
+                           f"— still not opened", "skip")
+                continue
+            base = os.path.splitext(os.path.basename(pdf_path))[0]
+            pdf_extract_dir = (os.path.join(out_dir, base)
+                               if out_dir else None)
+            try:
+                summary = analyze_pdf(
+                    pdf_path, db_val, extract_dir=pdf_extract_dir,
+                    store_images=store_images_var.get(), conn=conn,
+                    session=session, quiet=True, skip_duplicates=False,
+                    force=True, password=enc["password"])
+                if summary and not summary.get("skipped"):
+                    opened += 1
+                    record_submission(conn, pdf_path, "analysed",
+                                      session=session)
+                    if app["password_manager"] and summary.get("analysis_id"):
+                        conn.execute(
+                            "UPDATE encryption SET analysis_id=? WHERE "
+                            "id=(SELECT MAX(id) FROM encryption WHERE "
+                            "pdf_path=?)",
+                            (summary["analysis_id"],
+                             os.path.abspath(pdf_path)))
+                        conn.commit()
+                    log_to_gui(f"  \u2713 {os.path.basename(pdf_path)} "
+                               f"— opened and analysed", "success")
+            except Exception as e:
+                still += 1
+                if session:
+                    session.log_pdf_error(pdf_path, e)
+        log_to_gui(f"Encrypted retry: {opened} opened and analysed, "
+                   f"{still} still not opened", "bold")
+        if session:
+            session.log(f"Encrypted retry: {opened} opened, {still} still "
+                        f"not opened")
+        if opened:
+            _regenerate_present_reports(db_val, out_dir, session)
+        from pdf_forensics.reports.case_index import refresh_case_index
+        refresh_case_index(session)
+
+    def _regenerate_present_reports(db, out_dir, session):
+        """After the retry opened encrypted files, rebuild the reports
+        already generated for this database so they include those files
+        (the Encrypted Files report in particular), instead of leaving a
+        report that pre-dates the retry."""
+        import glob
+        from pdf_forensics.reports.queries import get_report_by_id
+        from pdf_forensics.reports.renderer import generate_report
+        rdir = (session.reports_dir if session and session.reports_dir
+                else os.path.join(os.path.dirname(db), "reports"))
+        if not os.path.isdir(rdir):
+            return
+        import re as _re
+        done = 0
+        for f in glob.glob(os.path.join(rdir, "*report-*.html")):
+            m = _re.search(r"report-([A-Za-z0-9_]+)_\d{8}_\d{6}\.html$",
+                           os.path.basename(f))
+            if not m:
+                continue
+            rdef = get_report_by_id(m.group(1))
+            if not rdef:
+                continue
+            try:
+                generate_report(db, rdef, f, session=session)
+                done += 1
+            except Exception:
+                pass
+        # refresh the risk overview too, if present
+        try:
+            from pdf_forensics.reports.risk_overview import (
+                generate_risk_overview_xlsx)
+            for ov in glob.glob(os.path.join(rdir, "*risk-overview*.xlsx")):
+                generate_risk_overview_xlsx(
+                    db, ov, session=session,
+                    case_number=(session.case_number if session else None))
+        except Exception:
+            pass
+        if done:
+            log_to_gui(f"  \u21bb Rebuilt {done} report(s) to include the "
+                       f"newly opened file(s)", "dim")
 
     def _run_triage_mode():
         """Fast triage scan producing Excel output."""
@@ -1351,6 +1565,50 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             triage_count = 0
             triage_failed = 0
 
+            def _prompt_locked_triage(locked, xlsx_path, session, progress):
+                from pdf_forensics import passwords as _pw
+                n=len(locked)
+                have=app.get("password_manager") is not None
+                if have:
+                    msg=(f"{n} encrypted PDF(s) could not be opened with the "
+                         f"supplied password list, so their metadata could "
+                         f"not be read.\n\nTry a different password list on "
+                         f"those {n} file(s)?")
+                else:
+                    msg=(f"{n} PDF(s) are password-protected and no password "
+                         f"list was supplied, so their metadata could not be "
+                         f"read.\n\nSelect a password list and re-triage "
+                         f"those {n} file(s) now?")
+                if not messagebox.askyesno("Encrypted PDFs", msg):
+                    return
+                path=filedialog.askopenfilename(
+                    title="Select password list (one password per line)",
+                    filetypes=[("Text files","*.txt"),("All files","*.*")])
+                if not path:
+                    return
+                try:
+                    passwords,info=_pw.read_password_list(path)
+                except OSError as e:
+                    messagebox.showerror("Cannot read password list",str(e)); return
+                app["password_manager"]=_pw.PasswordManager(passwords,info)
+                app["password_list_info"]=info
+                pw_list_var.set(f"Password list: {len(passwords)} "
+                                f"\u2014 {os.path.basename(path)}")
+                log_to_gui(f"Re-triaging {len(locked)} encrypted file(s) with "
+                           f"{len(passwords)} password(s)\u2026","bold")
+                p2,s2,o2,still=run_triage(
+                    locked, xlsx_path, session=session, progress_callback=progress,
+                    include_prior_versions=False,
+                    password_manager=app["password_manager"])
+                opened=len(locked)-len(still)
+                log_to_gui(f"Encrypted re-triage: {opened} opened, "
+                           f"{len(still)} still not opened. Note: this "
+                           f"re-triage covers only those files; re-run triage "
+                           f"on the full set to refresh the main spreadsheet.",
+                           "bold")
+                from pdf_forensics.reports.case_index import refresh_case_index
+                refresh_case_index(session)
+
             def on_triage_progress(idx, total, filename):
                 nonlocal triage_count, triage_failed
                 triage_count = idx
@@ -1359,10 +1617,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                            "dim")
                 progress_set_file(idx - 1, total, filename)
 
-            processed, skipped, out = run_triage(
+            processed, skipped, out, locked = run_triage(
                 list(pdf_files), xlsx_path,
                 session=session,
-                progress_callback=on_triage_progress)
+                progress_callback=on_triage_progress,
+                password_manager=app.get("password_manager"))
 
             count_processed.set(str(processed))
             count_failed.set(str(skipped))
@@ -1385,6 +1644,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 refresh_case_index)
             if refresh_case_index(session):
                 log_to_gui("\u2713 Case index updated", "dim")
+
+            if locked:
+                _prompt_locked_triage(locked, xlsx_path, session,
+                                      on_triage_progress)
 
         except Exception as e:
             import traceback

@@ -120,6 +120,73 @@ def _query_metadata_pivoted(conn):
     return columns, data
 
 
+def _query_encrypted_files(conn):
+    """
+    Encrypted files and how they were handled, from the encryption table
+    (schema rev 9). One row per encrypted file (the latest record for it).
+    Files that were not encrypted are not listed. The successful password
+    is shown verbatim: it is part of the forensic record and lets another
+    examiner repeat the step. A database analysed before encryption was
+    recorded returns an explanatory row rather than an empty table.
+    """
+    columns = [
+        {"name": "Filename",   "label": "Filename",            "col_type": "text"},
+        {"name": "Status",     "label": "Status",              "col_type": "text"},
+        {"name": "Password",   "label": "Password Used",       "col_type": "text"},
+        {"name": "Source",     "label": "Password Source",     "col_type": "text"},
+        {"name": "Scheme",     "label": "Encryption",          "col_type": "text"},
+        {"name": "Attempts",   "label": "Passwords Tried",     "col_type": "numeric"},
+        {"name": "PDF MD5",    "label": "PDF MD5",             "col_type": "hash"},
+        {"name": "Path",       "label": "Path",                "col_type": "text"},
+    ]
+    blank = {c["name"]: "" for c in columns}
+    has = conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                       "AND name='encryption'").fetchone()
+    if not has:
+        r = dict(blank); r["Filename"] = "Not available"
+        r["Status"] = ("This database was analysed before encrypted files "
+                       "were recorded (build 2026-10-13). Re-run the "
+                       "analysis with a password list to produce this "
+                       "report.")
+        return columns, [r]
+    rows = conn.execute("""
+        SELECT e.pdf_filename, e.pdf_path, e.pdf_md5, e.opened, e.password,
+               e.password_source, e.scheme, e.attempts
+        FROM encryption e
+        JOIN (SELECT pdf_path, MAX(id) AS mid FROM encryption
+              WHERE is_encrypted = 1 GROUP BY pdf_path) last
+          ON last.mid = e.id
+        ORDER BY e.opened ASC, e.pdf_filename
+    """).fetchall()
+    if not rows:
+        r = dict(blank); r["Filename"] = "None"
+        r["Status"] = ("No encrypted files are recorded in this database.")
+        return columns, [r]
+    data = []
+    for fn_, path, md5, opened, pw, src, scheme, attempts in rows:
+        row = dict(blank)
+        if not opened:
+            if src and "no password list" in src:
+                status = ("NOT OPENED \u2014 password required; no password "
+                          "list was supplied")
+            else:
+                status = ("NOT OPENED \u2014 no supplied password worked"
+                          + (f" ({src})" if src else ""))
+            pw_disp, src_disp = "", (src or "")
+        elif pw == "":
+            status = "Opened with no password (permissions-only encryption)"
+            pw_disp, src_disp = "(none required)", "empty password"
+        else:
+            status = "Opened with a supplied password"
+            pw_disp, src_disp = pw, (src or "")
+        row.update({"Filename": fn_, "Status": status, "Password": pw_disp,
+                    "Source": src_disp, "Scheme": scheme or "",
+                    "Attempts": attempts if attempts is not None else "",
+                    "PDF MD5": md5 or "", "Path": path})
+        data.append(row)
+    return columns, data
+
+
 def _query_duplicate_submissions(conn):
     """
     Files submitted more than once, from the submissions record:
@@ -862,6 +929,24 @@ REPORTS = [
     # 14. Document Comments
     # -----------------------------------------------------------------
     {
+        "id": "encrypted_files",
+        "name": "Encrypted Files",
+        "description":
+            "Every password-encrypted PDF and how it was handled: opened "
+            "with no password (permissions-only encryption), opened with "
+            "a password from the supplied list (the password is shown, as "
+            "part of the forensic record and the repeatable procedure), "
+            "or not opened because no supplied password worked. Files that "
+            "are not encrypted are not listed. Requires a run with a "
+            "password list; a database analysed without one shows an "
+            "explanatory row.",
+        "query_fn": _query_encrypted_files,
+        "notice": ("This report contains passwords. Handle and share it "
+                   "with the same care as the password list itself."),
+        "sticky_cols": 1,
+    },
+
+    {
         "id": "document_comments",
         "name": "Document Comments",
         "description":
@@ -1287,6 +1372,7 @@ def get_report_by_id(report_id):
 # Each entry is (group_label, [report_id, ...]).
 REPORT_GROUPS = [
     ("Document Overview & Provenance", [
+        "encrypted_files",
         "document_risk",
         "risk_dossier",
         "metadata",

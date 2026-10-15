@@ -1,6 +1,85 @@
 # PDF Forensics Suite — Changelog
 
-**Current build: 2026-10-13** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+**Current build: 2026-10-14** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+
+## v1.0.0 — Update (2026-10-14)
+
+### Encrypted-PDF fixes from field testing
+- Triage now detects encrypted PDFs. Detection used PyMuPDF opening the
+  file from a byte stream, which fails on imperfect-but-readable files, so
+  locked documents were missed and no password prompt appeared. Triage now
+  uses the same pikepdf-based detection as analysis (which also identifies
+  permissions-only encryption), accepts a password list (GUI "Password
+  list…" button, CLI -p/--password-list), opens files the list can open
+  and reads their metadata with the password, and offers the same
+  end-of-run prompt. Two columns were added to the triage spreadsheet:
+  Encryption Status and Password.
+- Encrypted Files report no longer goes stale after the end-of-run
+  retry. When the prompt opens locked files after the main run, the
+  reports already generated for that database are now rebuilt (previously
+  only the case index was refreshed), so the report reflects the files the
+  supplied password opened instead of still showing "no password list
+  supplied".
+- PyMuPDF messages (e.g. "corrupt object stream") no longer print to the
+  terminal. They are suppressed from the console and written to the
+  session log instead, so the record is kept without alarming output.
+- The analysis window is taller so the Run button is not clipped after the
+  password-list row was added.
+
+## v1.0.0 — Update (2026-10-13c)
+
+### Technical Reference Guide: Encrypted PDFs is now its own section
+- The Encrypted PDFs material was numbered 9a (a sub-number) and so did
+  not appear in the table of contents. It is now section 10 in its own
+  right, with sub-sections 10.1-10.4, listed in the table of contents.
+- Former sections 10-16 are renumbered 11-17 (Risk Scoring Model is now
+  11; SQLite Query Reference is now 17), with their sub-sections,
+  heading bookmarks and table-of-contents entries updated to match.
+- Internal cross-references updated accordingly: former Chapter 12
+  (Counter-Verification) is referenced as Chapter 13, and former
+  Sections 12.3/12.4/12.5 and 15.5 as 13.3/13.4/13.5 and 16.5.
+  References to ISO 32000-2:2020 clauses (e.g. §14.3.3) are unchanged.
+
+## v1.0.0 — Update (2026-10-13b)
+
+### Encrypted PDFs: open with a supplied password list
+- When a submitted PDF is password-encrypted, the application now tries
+  to open it using a text file of candidate passwords the examiner
+  supplies. Not a password cracker: one attempt per supplied password, in
+  order, stopping at the first that works; no guessing or brute force; the
+  file is only opened for reading and never modified.
+- Order per file: the empty password (opens permissions-only files),
+  then passwords already found this run (most-recent first), then the
+  supplied list in order. A password that works is promoted to the front
+  of the known-good list for the files that follow. Soft limit of 1,000
+  with a warning. Passwords read verbatim (leading/trailing spaces and a
+  leading # are part of the password; no comment lines); UTF-8/UTF-16/
+  Windows encodings detected.
+- Permissions-only encryption is now detected (via the /Encrypt
+  dictionary) even though such files open with the empty password;
+  previously they were treated as unencrypted and not recorded.
+- Five recorded outcomes per file: not encrypted; opened with no
+  password; opened with a supplied password; not opened (no supplied
+  password worked); not opened (no password list supplied) — the last
+  two kept distinct so a reviewer can tell a file was never attempted
+  against a list.
+- New Encrypted Files report (Document Overview & Provenance; 21 reports
+  now): every encrypted PDF, its status, the password that opened it
+  (shown verbatim, as evidence and a repeatable step), the source, the
+  scheme and the attempt count. The report header carries a visible
+  caution that it contains passwords. A database analysed before this
+  build shows an explanatory row.
+- GUI: a "Password list…" button and a Locked counter; locked files are
+  set aside and, at the end of the run, the application offers to try a
+  password list on just those files and analyse any it opens (so a batch
+  never stops to wait mid-run). CLI: -p / --password-list on analyze and
+  triage; with no list, locked files are recorded as "no list supplied".
+- The successful password, the list file path and the list MD5 are
+  written to the session log; the password list itself is not stored and
+  is not kept between cases.
+- Documentation: Technical Reference Guide chapter 9a (Encrypted PDFs),
+  architecture table (passwords.py) and section 13.1; HTML Reports
+  technical 2.5.1 and plain-language 2.21; Getting Started.
 
 ## v1.0.0 — Update (2026-10-13)
 

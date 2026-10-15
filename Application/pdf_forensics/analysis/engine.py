@@ -89,7 +89,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 store_images=True, conn=None, session=None,
                 skip_duplicates=True, force=False,
                 quiet=False, progress_callback=None,
-                source_analysis_id=None, version_number=None):
+                source_analysis_id=None, version_number=None,
+                password=None):
     """
     Analyze a single PDF.
 
@@ -170,9 +171,21 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
             return {"pdf": pdf_path, "skipped": True,
                     "reason": msg, "duplicate_of": info.get("pdf_filename")}
 
-    doc_mu = pymupdf.open(pdf_path)
-    doc_pk = pikepdf.open(pdf_path)
+    # password is the empty/real password that opens an encrypted file
+    # (found by process_pdfs). pikepdf takes it directly; PyMuPDF opens
+    # then authenticates. Harmless for unencrypted files.
+    from pdf_forensics import _mupdf as _mu
+    _mu.silence()
+    if password is not None:
+        doc_pk = pikepdf.open(pdf_path, password=password)
+        doc_mu = pymupdf.open(pdf_path)
+        if doc_mu.needs_pass:
+            doc_mu.authenticate(password)
+    else:
+        doc_mu = pymupdf.open(pdf_path)
+        doc_pk = pikepdf.open(pdf_path)
 
+    _mu.drain(session, os.path.basename(pdf_path))
     total_pages = len(doc_mu)
     page_pad = len(str(total_pages))
     _out(f"  Pages:    {total_pages}")
@@ -496,7 +509,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
 def process_pdfs(pdf_paths, db_path, output_dir=None,
                  store_images=True, extract_to_disk=True,
                  session=None, skip_duplicates=True, force=False,
-                 quiet=False, progress_callback=None):
+                 quiet=False, progress_callback=None,
+                 password_manager=None):
     """
     Process one or more PDFs in a single batch.
 
@@ -511,6 +525,7 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
 
     failed = 0
     not_found = 0
+    encrypted_unopened = 0
     for pdf_path in pdf_paths:
         if not os.path.isfile(pdf_path):
             msg = f"Skipping (not found): {pdf_path}"
@@ -531,6 +546,18 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
         else:
             pdf_extract_dir = None
 
+        # Encryption: find a password that opens the file (empty first,
+        # then known-good, then the supplied list). Always run, so
+        # permissions-only files open and genuinely locked files are
+        # recorded even when no list was supplied; a locked file no
+        # password opens is recorded and skipped, not analysed.
+        from pdf_forensics import passwords as _pw
+        enc = _pw.resolve_file_password(conn, pdf_path, password_manager,
+                                        session=session, quiet=quiet)
+        if enc["skip"]:
+            encrypted_unopened += 1
+            continue
+        file_password = enc["password"]
         try:
             summary = analyze_pdf(
                 pdf_path, db_path,
@@ -542,12 +569,24 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
                 force=force,
                 quiet=quiet,
                 progress_callback=progress_callback,
+                password=file_password,
             )
             if summary:
                 if summary.get("skipped"):
                     skipped += 1
                 else:
                     summaries.append(summary)
+                    if password_manager is not None and summary.get("analysis_id"):
+                        try:
+                            conn.execute(
+                                "UPDATE encryption SET analysis_id=? WHERE "
+                                "id=(SELECT MAX(id) FROM encryption WHERE "
+                                "pdf_path=?)",
+                                (summary["analysis_id"],
+                                 os.path.abspath(pdf_path)))
+                            conn.commit()
+                        except Exception:
+                            pass
         except Exception as e:
             if not quiet:
                 print(f"Error processing {pdf_path}: {e}")
@@ -564,6 +603,8 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
     line = (f"{len(pdf_paths)} submitted: {len(summaries)} analysed, "
             f"{skipped} skipped as identical copies of files already "
             f"analysed, {failed} failed"
+            + (f", {encrypted_unopened} encrypted and not opened"
+               if encrypted_unopened else "")
             + (f", {not_found} not found" if not_found else ""))
     if not quiet:
         print(f"  {line}")

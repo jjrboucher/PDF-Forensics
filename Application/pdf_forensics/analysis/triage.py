@@ -55,7 +55,7 @@ def triage_pdf(pdf_path):
 
 
 def triage_pdf_bytes(data, filename, path, source="Current",
-                     version_number=None):
+                     version_number=None, password_manager=None):
     """
     Fast scan of a PDF held in memory. Used both for files on disk
     (via triage_pdf) and for prior versions reconstructed in memory,
@@ -97,6 +97,9 @@ def triage_pdf_bytes(data, filename, path, source="Current",
         "subject": "",
         "pdf_version": "",
         "encrypted": False,
+        "enc_status": "",
+        "enc_password": "",
+        "enc_opened": True,
         "md5": "",
         "metadata": {},
     }
@@ -123,11 +126,46 @@ def triage_pdf_bytes(data, filename, path, source="Current",
     except Exception:
         pass
 
+    # Encryption: detect reliably (also catches permissions-only and
+    # locked files that PyMuPDF will not open from a stream), and if a
+    # password list was supplied, find a password that opens the file so
+    # its metadata can still be read.
+    enc_pw = None
+    try:
+        from pdf_forensics import passwords as _pw
+        from pdf_forensics import _mupdf as _mu
+        _mu.silence()
+        if path and _pw.is_encrypted(path):
+            result["encrypted"] = True
+            mgr = (password_manager if password_manager is not None
+                   else _pw.PasswordManager())
+            res = _pw.try_open(path, mgr)
+            if res["opened"]:
+                enc_pw = res["password"]
+                result["enc_password"] = res["password"]
+                result["enc_status"] = (
+                    "Opened with no password (permissions-only)"
+                    if res["password"] == ""
+                    else "Opened with a supplied password")
+            else:
+                result["enc_opened"] = False
+                result["enc_status"] = (
+                    "Not opened \u2014 no password list supplied"
+                    if mgr.supplied_count == 0
+                    else "Not opened \u2014 no supplied password worked")
+    except Exception:
+        pass
+
     # PyMuPDF scan
     try:
         doc = pymupdf.open(stream=data, filetype="pdf")
+        if enc_pw:
+            try:
+                doc.authenticate(enc_pw)
+            except Exception:
+                pass
         result["pages"] = len(doc)
-        result["encrypted"] = doc.is_encrypted
+        result["encrypted"] = result["encrypted"] or doc.is_encrypted
 
         meta = doc.metadata or {}
         result["author"] = _safe_str(meta.get("author", ""))
@@ -195,7 +233,8 @@ def triage_pdf_bytes(data, filename, path, source="Current",
     # pikepdf metadata
     if HAS_PIKEPDF:
         try:
-            doc_pk = pikepdf.open(io.BytesIO(data))
+            doc_pk = pikepdf.open(io.BytesIO(data),
+                                  password=(enc_pw or ""))
             if doc_pk.docinfo:
                 for k, v in doc_pk.docinfo.items():
                     key = _safe_str(k).lstrip("/")
@@ -257,7 +296,8 @@ def reconstruct_prior_versions(data):
 
 
 def run_triage(pdf_paths, output_path, session=None,
-               progress_callback=None, include_prior_versions=True):
+               progress_callback=None, include_prior_versions=True,
+               password_manager=None):
     """
     Triage a list of PDFs and write results to an Excel file.
 
@@ -309,6 +349,7 @@ def run_triage(pdf_paths, output_path, session=None,
                     f"  Could not extract comments from "
                     f"{row['filename']}: {e}", "warning")
 
+    locked_unopened = []
     for i, pdf_path in enumerate(pdf_paths):
         if progress_callback:
             progress_callback(i + 1, len(pdf_paths),
@@ -327,9 +368,16 @@ def run_triage(pdf_paths, output_path, session=None,
             if file_data is not None:
                 triage = triage_pdf_bytes(
                     file_data, os.path.basename(pdf_path),
-                    os.path.abspath(pdf_path))
+                    os.path.abspath(pdf_path),
+                    password_manager=password_manager)
             else:
                 triage = triage_pdf(pdf_path)
+            if triage and triage.get("encrypted") and not triage.get("enc_opened", True):
+                locked_unopened.append(os.path.abspath(pdf_path))
+                if session:
+                    session.log(f"  Encrypted, not opened: "
+                                f"{os.path.basename(pdf_path)} — "
+                                f"{triage.get('enc_status','')}", "warning")
 
             if triage:
                 results.append(triage)
@@ -407,7 +455,7 @@ def run_triage(pdf_paths, output_path, session=None,
         "DPI Min", "DPI Max", "Mixed DPI",
         "Created", "Modified", "Author", "Creator",
         "Producer", "Title", "PDF Version",
-        "Encrypted", "MD5",
+        "Encrypted", "Encryption Status", "Password", "MD5",
     ]
 
     for col, hdr in enumerate(triage_headers, 1):
@@ -432,6 +480,8 @@ def run_triage(pdf_paths, output_path, session=None,
             _safe_str(r["title"]),
             _safe_str(r["pdf_version"]),
             "Yes" if r["encrypted"] else "No",
+            _safe_str(r.get("enc_status", "")),
+            _safe_str(r.get("enc_password", "")),
             r["md5"],
         ]
         for col, val in enumerate(values, 1):
@@ -573,4 +623,4 @@ def run_triage(pdf_paths, output_path, session=None,
                         f"to the 'comments' worksheet.")
         session.register_output("triage", output_path)
 
-    return len(results), skipped, output_path
+    return len(results), skipped, output_path, locked_unopened

@@ -40,6 +40,11 @@ def main_cli():
                            help="PDF file(s) to analyze")
     p_analyze.add_argument("-l", "--pdf-list",
                            help="Text file with PDF paths (one per line)")
+    p_analyze.add_argument("-p", "--password-list", default=None,
+                           help="Text file of candidate passwords to open "
+                                "encrypted PDFs (one per line, tried in order; "
+                                "the empty password and passwords already found "
+                                "this run are tried first).")
     p_analyze.add_argument("-d", "--database",
                            default=None,
                            help="SQLite database path")
@@ -95,6 +100,11 @@ def main_cli():
                           help="PDF file(s) to triage")
     p_triage.add_argument("-l", "--pdf-list",
                           help="Text file with PDF paths")
+    p_triage.add_argument("-p", "--password-list", default=None,
+                           help="Text file of candidate passwords to open "
+                                "encrypted PDFs (one per line, tried in order; "
+                                "the empty password and passwords already found "
+                                "this run are tried first).")
     p_triage.add_argument("-o", "--output", default=None,
                           help="Output Excel file path")
     p_triage.add_argument("--no-prior-versions", action="store_true",
@@ -146,6 +156,29 @@ def main_cli():
 
     print()
     print("Processing complete.")
+
+
+def _build_password_manager(list_path, session=None, quiet=False):
+    """Build a PasswordManager from a password-list file, or None when no
+    list was given (the engine still tries the empty password and records
+    locked files as 'no list supplied')."""
+    if not list_path:
+        return None
+    from pdf_forensics import passwords as _pw
+    if not os.path.isfile(list_path):
+        print(f"Error: password list not found: {list_path}")
+        return None
+    passwords, info = _pw.read_password_list(list_path)
+    if len(passwords) > _pw.SOFT_LIMIT and not quiet:
+        print(f"Warning: {len(passwords)} passwords supplied "
+              f"(> {_pw.SOFT_LIMIT}); this may be slow for AES-256 files.")
+    if session:
+        session.log(f"Password list loaded: {info['path']} (MD5 {info['md5']}, "
+                    f"{info['encoding']}): {info['count']} password(s)")
+    if not quiet:
+        print(f"Password list: {info['count']} password(s) from "
+              f"{os.path.basename(list_path)}")
+    return _pw.PasswordManager(passwords, info)
 
 
 def _cli_analyze(args, session, case):
@@ -201,6 +234,8 @@ def _cli_analyze(args, session, case):
 
     session.register_output("database", db_path)
 
+    pw_manager = _build_password_manager(getattr(args, "password_list", None),
+                                         session, quiet=args.quiet)
     summaries = process_pdfs(
         valid, db_path,
         output_dir=extract_dir,
@@ -208,7 +243,8 @@ def _cli_analyze(args, session, case):
         extract_to_disk=True,
         session=session,
         quiet=args.quiet,
-        force=args.force)
+        force=args.force,
+        password_manager=pw_manager)
 
     from pdf_forensics.reports.case_index import refresh_case_index
     _idx = refresh_case_index(session, log=print)
@@ -410,13 +446,20 @@ def _cli_triage(args, session, case):
     def progress(idx, total, filename):
         print(f"  [{idx}/{total}] {filename}")
 
-    processed, skipped, out = run_triage(
+    pw_manager = _build_password_manager(getattr(args, "password_list", None),
+                                         session, quiet=False)
+    processed, skipped, out, locked = run_triage(
         valid, xlsx_path, session=session,
         progress_callback=progress,
-        include_prior_versions=not args.no_prior_versions)
+        include_prior_versions=not args.no_prior_versions,
+        password_manager=pw_manager)
 
     print(f"\nTriage complete: {processed} processed, "
           f"{skipped} skipped")
+    if locked:
+        print(f"{len(locked)} encrypted PDF(s) could not be opened"
+              + ("" if pw_manager else "; re-run with --password-list to "
+                 "try candidate passwords") + ".")
     print(f"Output: {out}")
     from pdf_forensics.reports.case_index import refresh_case_index
     _idx = refresh_case_index(session, log=print)

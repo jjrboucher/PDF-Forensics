@@ -245,6 +245,26 @@ def init_db(db_path, session=None):
             duplicate_of    TEXT,
             reason          TEXT
         );
+
+        -- Encryption outcome per submitted file (schema rev 9). Separate
+        -- from submissions so it is additive; one row per file handled in
+        -- a run. Lets the Encrypted Files report be rebuilt from the
+        -- database on a later run.
+        CREATE TABLE IF NOT EXISTS encryption (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_ts    TEXT,
+            recorded_at   TEXT NOT NULL,
+            pdf_path      TEXT NOT NULL,
+            pdf_filename  TEXT NOT NULL,
+            pdf_md5       TEXT,
+            is_encrypted  INTEGER NOT NULL,
+            opened        INTEGER NOT NULL,
+            password      TEXT,          -- the password that worked ("" = empty); NULL if none did or n/a
+            password_source TEXT,        -- e.g. "list line 14", "empty", "known-good"
+            scheme        TEXT,          -- e.g. "AES-256 (V5 R6)"
+            attempts      INTEGER,       -- passwords tried on this file
+            analysis_id   INTEGER REFERENCES analyses(id) ON DELETE SET NULL
+        );
     """)
 
     for code, (label, severity) in FINDING_TYPE_DEFS.items():
@@ -433,6 +453,34 @@ def record_submission(conn, pdf_path, outcome, session=None,
              os.path.abspath(pdf_path), name, submission_name_key(name),
              md5, size, 1 if is_version else 0, outcome, analysis_id,
              duplicate_of, (str(reason)[:500] if reason else None)))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def record_encryption(conn, pdf_path, result, session=None,
+                      analysis_id=None, md5=None, scheme=None, source=None):
+    """
+    Record one file's encryption outcome for the Encrypted Files report.
+    `result` is the dict from pdf_forensics.passwords.try_open. The
+    successful password is stored verbatim: in a forensic report the
+    password is part of the evidence and the repeatable procedure.
+    Never raises.
+    """
+    try:
+        name = os.path.basename(pdf_path)
+        conn.execute(
+            """INSERT INTO encryption (session_ts, recorded_at, pdf_path,
+                   pdf_filename, pdf_md5, is_encrypted, opened, password,
+                   password_source, scheme, attempts, analysis_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (getattr(session, "timestamp", None),
+             datetime.now(timezone.utc).isoformat(),
+             os.path.abspath(pdf_path), name, md5,
+             1 if result.get("encrypted") else 0,
+             1 if result.get("opened") else 0,
+             result.get("password"), (source or result.get("label")),
+             scheme, result.get("attempts"), analysis_id))
         conn.commit()
     except Exception:
         pass
