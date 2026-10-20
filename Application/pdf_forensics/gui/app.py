@@ -1255,7 +1255,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 from pdf_forensics import passwords as _pw
                 enc = _pw.resolve_file_password(
                     conn, pdf_path, app.get("password_manager"),
-                    session=session, quiet=True)
+                    session=session, quiet=True,
+                    is_version=this_is_version)
                 if enc["skip"]:
                     log_text.config(state="normal")
                     log_text.delete(progress_idx,
@@ -1312,7 +1313,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                                             out_dir, "pdf_versions"))
                         os.makedirs(versions_out, exist_ok=True)
                         version_paths = extract_prior_versions(
-                            pdf_path, versions_out, session=session)
+                            pdf_path, versions_out, session=session,
+                            password=(enc.get("password") if enc else None))
                         if version_paths:
                             log_to_gui(
                                 f"    \u21b3 {len(version_paths)} prior "
@@ -1459,8 +1461,20 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     force=True, password=enc["password"])
                 if summary and not summary.get("skipped"):
                     opened += 1
-                    record_submission(conn, pdf_path, "analysed",
-                                      session=session)
+                    # Update the file's earlier "not opened" record rather
+                    # than adding a second row, so it is counted once.
+                    cur = conn.execute(
+                        "UPDATE submissions SET outcome='analysed', "
+                        "analysis_id=?, reason=NULL WHERE id=(SELECT MAX(id) "
+                        "FROM submissions WHERE pdf_path=? AND "
+                        "outcome='encrypted_unopened')",
+                        (summary.get("analysis_id"),
+                         os.path.abspath(pdf_path)))
+                    conn.commit()
+                    if cur.rowcount == 0:
+                        record_submission(conn, pdf_path, "analysed",
+                                          session=session,
+                                          analysis_id=summary.get("analysis_id"))
                     if app["password_manager"] and summary.get("analysis_id"):
                         conn.execute(
                             "UPDATE encryption SET analysis_id=? WHERE "

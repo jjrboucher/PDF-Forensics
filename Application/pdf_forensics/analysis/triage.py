@@ -100,6 +100,7 @@ def triage_pdf_bytes(data, filename, path, source="Current",
         "enc_status": "",
         "enc_password": "",
         "enc_opened": True,
+        "version_check": "",
         "md5": "",
         "metadata": {},
     }
@@ -135,11 +136,11 @@ def triage_pdf_bytes(data, filename, path, source="Current",
         from pdf_forensics import passwords as _pw
         from pdf_forensics import _mupdf as _mu
         _mu.silence()
-        if path and _pw.is_encrypted(path):
+        if data and _pw.is_encrypted(data):
             result["encrypted"] = True
             mgr = (password_manager if password_manager is not None
                    else _pw.PasswordManager())
-            res = _pw.try_open(path, mgr)
+            res = _pw.try_open(data, mgr)
             if res["opened"]:
                 enc_pw = res["password"]
                 result["enc_password"] = res["password"]
@@ -256,44 +257,27 @@ def triage_pdf_bytes(data, filename, path, source="Current",
     return result
 
 
-def reconstruct_prior_versions(data):
+def reconstruct_prior_versions(data, password=None):
     """
-    Reconstruct the bytes of each prior version of a PDF from its
+    Reconstruct the bytes of each genuine prior version of a PDF from its
     incremental-update structure, in memory.
 
-    Each %%EOF marker delimits a version. The bytes up to and
-    including the Nth %%EOF (plus trailing whitespace) are version N;
-    the final %%EOF corresponds to the current file, which is not
-    returned here. This mirrors extract_prior_versions() exactly, so a
-    reconstructed version's bytes are byte-identical to the file that
-    feature writes to disk.
+    Each %%EOF marker before the last may delimit a version, but not every
+    one does: a linearized file's first %%EOF ends its first-page section,
+    and some markers end bytes that are not a usable PDF. Those are
+    excluded (see metadata.classify_prior_versions). The bytes returned are
+    byte-identical to the files extract_prior_versions() writes to disk.
 
-    Returns a list of (version_number, version_bytes), empty when the
-    file has one or zero %%EOF markers (i.e. no prior versions).
+    Returns a list of (version_number, version_bytes) for usable versions
+    ('valid' or password-protected); version_number is the ordinal of the
+    %%EOF marker, kept for traceability to the byte offset.
     """
     if not data:
         return []
-    offsets = []
-    pos = 0
-    while True:
-        idx = data.find(b"%%EOF", pos)
-        if idx == -1:
-            break
-        offsets.append(idx)
-        pos = idx + 5
-    if len(offsets) <= 1:
-        return []
-
-    versions = []
-    # All markers except the last (the last is the current file)
-    for version_num, eof_offset in enumerate(offsets[:-1], start=1):
-        end_pos = eof_offset + 5  # len(b"%%EOF")
-        while end_pos < len(data) and data[end_pos:end_pos + 1] in (
-                b"\r", b"\n", b" "):
-            end_pos += 1
-        versions.append((version_num, data[:end_pos]))
-    return versions
-
+    from pdf_forensics.analysis.metadata import classify_prior_versions
+    return [(c["version_number"], data[:c["end"]])
+            for c in classify_prior_versions(data, password=password)
+            if c["status"] in ("valid", "encrypted")]
 
 def run_triage(pdf_paths, output_path, session=None,
                progress_callback=None, include_prior_versions=True,
@@ -397,7 +381,25 @@ def run_triage(pdf_paths, output_path, session=None,
                     base = os.path.splitext(
                         os.path.basename(pdf_path))[0]
                     try:
-                        priors = reconstruct_prior_versions(file_data)
+                        from pdf_forensics.analysis.metadata import (
+                            classify_prior_versions, describe_version_check)
+                        _ppw = (triage.get("enc_password") or None) if triage else None
+                        _checks = classify_prior_versions(file_data, password=_ppw)
+                        if triage is not None:
+                            triage["version_check"] = describe_version_check(_checks)
+                        for _c in _checks:
+                            if _c["status"] in ("valid", "encrypted") or not session:
+                                continue
+                            session.log(
+                                f"    \u21b3 %%EOF {_c['version_number']} at byte "
+                                f"{_c['eof_offset']:,}: "
+                                + ("not a prior version (linearized file, "
+                                   "first-page section)"
+                                   if _c["status"] == "linearization" else
+                                   f"not a usable prior version ({_c['reason']})"))
+                        priors = [(_c["version_number"], file_data[:_c["end"]])
+                                  for _c in _checks
+                                  if _c["status"] in ("valid", "encrypted")]
                     except Exception as e:
                         priors = []
                         if session:
@@ -455,7 +457,8 @@ def run_triage(pdf_paths, output_path, session=None,
         "DPI Min", "DPI Max", "Mixed DPI",
         "Created", "Modified", "Author", "Creator",
         "Producer", "Title", "PDF Version",
-        "Encrypted", "Encryption Status", "Password", "MD5",
+        "Encrypted", "Encryption Status", "Password", "Prior-Version Check",
+        "MD5",
     ]
 
     for col, hdr in enumerate(triage_headers, 1):
@@ -482,6 +485,7 @@ def run_triage(pdf_paths, output_path, session=None,
             "Yes" if r["encrypted"] else "No",
             _safe_str(r.get("enc_status", "")),
             _safe_str(r.get("enc_password", "")),
+            _safe_str(r.get("version_check", "")),
             r["md5"],
         ]
         for col, val in enumerate(values, 1):

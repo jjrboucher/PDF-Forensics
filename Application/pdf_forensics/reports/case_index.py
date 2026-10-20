@@ -276,6 +276,9 @@ def _run_line(counts, versions):
              f"cop{'y' if counts.get('duplicate', 0) == 1 else 'ies'} of "
              f"files already analysed",
              f"{counts.get('failed', 0)} failed"]
+    if counts.get("encrypted_unopened"):
+        parts.append(f"{counts['encrypted_unopened']} encrypted and not "
+                     f"opened")
     if counts.get("not_found"):
         parts.append(f"{counts['not_found']} not found")
     line = f"{sub} submitted: " + ", ".join(parts)
@@ -318,6 +321,8 @@ def _submitted_html(st):
             label = {"analysed": "Analysed",
                      "duplicate": "Identical copy \u2014 not re-analysed",
                      "failed": "Failed",
+                     "encrypted_unopened": "Encrypted \u2014 not opened "
+                                           "(password required)",
                      "not_found": "Not found"}.get(outcome, outcome)
             detail = (f"identical to {dup_of}" if outcome == "duplicate"
                       else (reason or ""))

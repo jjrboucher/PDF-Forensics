@@ -1,6 +1,47 @@
 # PDF Forensics Suite — Changelog
 
-**Current build: 2026-10-15** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+**Current build: 2026-10-20** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+
+## v1.0.0 — Update (2026-10-20)
+
+### Prior versions: false positives and invalid fragments no longer extracted
+- Every %%EOF marker before the last was treated as the end of a prior
+  version. In a linearized ("fast web view") PDF the first %%EOF ends the
+  first-page section near the start of the file (often with startxref 0),
+  so these files produced a "prior version" of a few hundred bytes that is
+  not a PDF. For an encrypted file the fragment also carried the /Encrypt
+  entry and was reported as a password-protected version that could not be
+  opened. In one test batch every reported prior version was such a
+  fragment.
+- New classify_prior_versions (metadata.py) validates each candidate: its
+  startxref must point to a cross-reference section inside the bytes, and
+  the bytes must open without recovery and contain at least one page.
+  Outcomes: valid; password-protected (structurally valid, needs a
+  password; the parent document’s password is tried first); not a prior
+  version (linearized first-page section); not a usable prior version
+  (with the reason). Only valid and password-protected versions are
+  extracted, triaged or analysed; the others are logged with the reason.
+- Triage: a new Prior-Version Check column on each file’s row explains
+  how each %%EOF marker was treated. Triage also now checks encryption on
+  the bytes being triaged; a prior version previously inherited its parent
+  file’s encryption status.
+- Analysis passes the parent document’s password into version
+  extraction.
+
+### Case index: encrypted outcomes counted and labelled correctly
+- A prior version that could not be opened was recorded as a submitted
+  file rather than as a prior version, inflating the submitted count. The
+  encryption step now records whether the file is a prior version.
+- "encrypted_unopened" is shown as "Encrypted — not opened (password
+  required)" and counted in the summary line, which previously did not add
+  up when such files were present.
+- When the end-of-run retry opens a locked file, its existing record is
+  updated to "analysed" instead of a second record being added.
+
+### Documentation
+- Technical Reference Guide 5.2 (validation of prior versions) and Getting
+  Started (Prior-Version Check column). All documents state build
+  2026-10-20.
 
 ## v1.0.0 — Update (2026-10-15b)
 

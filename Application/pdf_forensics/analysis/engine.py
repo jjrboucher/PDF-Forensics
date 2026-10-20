@@ -614,7 +614,8 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
     return summaries
 
 
-def extract_prior_versions(pdf_path, output_dir, session=None):
+def extract_prior_versions(pdf_path, output_dir, session=None,
+                           password=None):
     """
     Extract prior versions of a PDF from incremental updates.
 
@@ -649,6 +650,36 @@ def extract_prior_versions(pdf_path, output_dir, session=None):
 
     output_dir = os.path.normpath(output_dir)
     basename = os.path.splitext(os.path.basename(pdf_path))[0]
+
+    # Only extract %%EOF markers that end a genuine, usable earlier version.
+    # A linearized file's first %%EOF (end of the first-page section) and
+    # markers whose bytes do not form a usable PDF are recorded and skipped;
+    # extracting them produced small non-PDF fragments that were then
+    # mis-reported (e.g. as password-protected). password is the parent's,
+    # tried first because a genuine earlier version shares its encryption.
+    from pdf_forensics.analysis.metadata import classify_prior_versions
+    checks = classify_prior_versions(data, password=password)
+    usable = {c["version_number"] for c in checks
+              if c["status"] in ("valid", "encrypted")}
+    for c in checks:
+        if c["version_number"] in usable:
+            continue
+        if session:
+            if c["status"] == "linearization":
+                session.log(f"  Not a prior version: %%EOF {c['version_number']}"
+                            f" at byte {c['eof_offset']:,} in "
+                            f"{os.path.basename(pdf_path)} ends the "
+                            f"linearization first-page section (the file is "
+                            f"linearized for fast web view).")
+            else:
+                session.log(f"  Not extracted: the {c['size']:,} bytes up to "
+                            f"%%EOF {c['version_number']} (byte "
+                            f"{c['eof_offset']:,}) of "
+                            f"{os.path.basename(pdf_path)} are not a usable "
+                            f"PDF: {c['reason']}.")
+    versions = [v for v in versions if v[0] in usable] + [versions[-1]]
+    if len(versions) <= 1:
+        return []
 
     # Keep the extracted-version paths within Windows' 260-character limit.
     # The document name would otherwise appear twice (the "_versions"

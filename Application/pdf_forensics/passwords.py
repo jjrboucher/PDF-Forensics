@@ -122,6 +122,16 @@ class PasswordManager:
         return len(self._supplied)
 
 
+def _src(pdf):
+    """A path, or the file's bytes (e.g. a prior version held in memory).
+    Bytes get a fresh stream for every open, so each attempt reads from
+    the start."""
+    if isinstance(pdf, (bytes, bytearray, memoryview)):
+        import io
+        return io.BytesIO(bytes(pdf))
+    return pdf
+
+
 def try_open(pdf_path, manager, open_fn=None):
     """
     Find a password that opens an encrypted PDF.
@@ -171,7 +181,7 @@ def is_encrypted(pdf_path):
     try:
         import pikepdf
         try:
-            with pikepdf.open(pdf_path) as pdf:
+            with pikepdf.open(_src(pdf_path)) as pdf:
                 # Opens with no password, but may still be encrypted:
                 # a "permissions only" file has an /Encrypt dictionary and
                 # an empty user password. is_encrypted is True for those.
@@ -194,7 +204,7 @@ def encryption_scheme(pdf_path, password=None):
     try:
         import pikepdf
         kw = {} if password is None else {"password": password}
-        with pikepdf.open(pdf_path, **kw) as pdf:
+        with pikepdf.open(_src(pdf_path), **kw) as pdf:
             enc = pdf.encryption
             if enc is None:
                 return ""
@@ -220,14 +230,15 @@ def encryption_scheme(pdf_path, password=None):
 def _pikepdf_opens(pdf_path, password):
     import pikepdf
     try:
-        with pikepdf.open(pdf_path, password=password):
+        with pikepdf.open(_src(pdf_path), password=password):
             return True
     except pikepdf.PasswordError:
         return False
 
 
 def resolve_file_password(conn, pdf_path, manager, session=None,
-                          quiet=False, record_unopened_submission=True):
+                          quiet=False, record_unopened_submission=True,
+                          is_version=False):
     """
     Shared encryption step for a single file, used by both the batch
     engine and the GUI's own analysis loop so the behaviour is identical.
@@ -289,7 +300,8 @@ def resolve_file_password(conn, pdf_path, manager, session=None,
             session.log(msg, "warning")
         if record_unopened_submission:
             record_submission(conn, pdf_path, "encrypted_unopened",
-                              session=session, reason=scheme)
+                              session=session, reason=scheme,
+                              is_version=is_version)
         return {"encrypted": True, "opened": False, "password": None,
                 "skip": True, "scheme": scheme}
 
