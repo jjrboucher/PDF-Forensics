@@ -31,6 +31,21 @@ Verified by the author on real case material before release, including
 password-list decryption, prior-version validation, long and bracketed
 file names, and duplicate handling.
 
+### Documentation errata corrected at re-issue
+- The database is at schema revision 9. Revision 9 was introduced with
+  build 2026-10-14 and added the `encryption` table: one row per encrypted
+  file handled in a run, recording whether it was opened, the password
+  that worked and its source, the encryption scheme, the number of
+  passwords tried, and the linked analysis. It feeds the Encrypted Files
+  report. The bump was not recorded in this CHANGELOG at the time, so the
+  header line above, the release notes and the Technical Reference Guide's
+  architecture table stated revision 8. All three now state revision 9.
+- Risk Scoring technical guide (01a): added section 5.4, Encryption Record
+  (schema revision 9), with the table's columns.
+- Documentation only; no code change. Databases created by build
+  2026-10-14 or later already have the table, and older databases gain it
+  automatically when opened.
+
 ## v1.0.0 — Update (2026-10-20)
 
 ### Prior versions: false positives and invalid fragments no longer extracted

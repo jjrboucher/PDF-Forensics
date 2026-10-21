@@ -1,0 +1,67 @@
+{
+  "description": "Hashes of the PDF Forensics Examiner Course lab files. Verify each file against these values before starting a lab.",
+  "package": {
+    "file": "lab_files.zip",
+    "bytes": 23022,
+    "md5": "6a5ea4d77615cd15b7d46c493976d351",
+    "sha256": "5e2c4fcfb0206169ec9a89e8aab2a787e510e77453e459edcbdcd0e89e53914f"
+  },
+  "files": [
+    {
+      "file": "lab01_structure.pdf",
+      "module": "01",
+      "pages": 2,
+      "bytes": 3412,
+      "md5": "5440841e16b52738b7bdc352fda1bb1e",
+      "sha256": "515ac6ca68f1549b02d99490622b0c270ef7f225bea9c7d5b12251fcf26c49a9"
+    },
+    {
+      "file": "lab02_metadata.pdf",
+      "module": "02",
+      "pages": 1,
+      "bytes": 2671,
+      "md5": "d2199d83e50edbdde67b4d5940b665b7",
+      "sha256": "fb76539147a1b9f14ca3279dfda72e8b21fdc1422fcbc72195f0d369adc635d5"
+    },
+    {
+      "file": "lab03_incremental.pdf",
+      "module": "03",
+      "pages": 1,
+      "bytes": 2696,
+      "md5": "57fe4a57a80043fa8654cf7be9ea8603",
+      "sha256": "d6c0f759a865c74a4181c4b243c59ddfdce0336f4d8b37d066cc2f6cbd399b39"
+    },
+    {
+      "file": "lab04_images.pdf",
+      "module": "04",
+      "pages": 4,
+      "bytes": 20033,
+      "md5": "350f99d17a897348ff0080d2755b10c2",
+      "sha256": "4ade93516d11074e59e7169085a2b88c427bef73354b6c51c2f4fc94d9c1168a"
+    },
+    {
+      "file": "lab05_textoverlay.pdf",
+      "module": "05",
+      "pages": 3,
+      "bytes": 2814,
+      "md5": "d28ca040172c8abb1499a59bb265d229",
+      "sha256": "00bcb23a72c3746484d2c3f11691dd1431c910d801a132ad62021318e5713dd3"
+    },
+    {
+      "file": "lab06_exif_comments.pdf",
+      "module": "06",
+      "pages": 3,
+      "bytes": 11685,
+      "md5": "4430ead9f72e5d2fbfe1d80b6b3b1aa9",
+      "sha256": "b735226cb7aa3ea4f0dfc0857f1cfa62143796fa2e859e6fc95975d81d8d75f8"
+    },
+    {
+      "file": "lab07_capstone.pdf",
+      "module": "07",
+      "pages": 5,
+      "bytes": 14609,
+      "md5": "f6a8282914f633ee465866c47e1229ad",
+      "sha256": "febb7929c91bfb2964f6d45b454f931c78025e0ec88e6a64c7994cb295ad8d1f"
+    }
+  ]
+}

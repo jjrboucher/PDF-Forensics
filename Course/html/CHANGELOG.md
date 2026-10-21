@@ -26,3 +26,10 @@ Course is in development. No version has been signed off for distribution yet.
 Entries below will be consolidated into the 1.0 entry once the owner accepts
 a complete version.
 
+- Module 00 lab: the "Download Lab File" button now downloads
+  `sample_pdfs/lab_files.zip` (all seven lab PDFs) instead of linking to the
+  `sample_pdfs/` folder, and the panel shows the ZIP's MD5.
+- Added `reference/manifest.json` listing the size, page count, MD5 and
+  SHA-256 of every lab PDF and of the ZIP package. Module 00 now links to it
+  and Step 2 asks learners to verify each hash against it.
+- Added `Course/LICENSE` containing the full CC BY 4.0 legal code.
