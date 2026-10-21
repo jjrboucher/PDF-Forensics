@@ -1,0 +1,2 @@
+d949f865bd90cc038ee34f19c9f1ffc8d053b36d1d906fb8f1779493fb7271c3  PDF_Forensics_Suite_v1.0.0.zip
+eb4127ccf5377105b698a316b0371cf0641ebd65c4ba68cff3200c275aa72955  PDF_Forensics_Technical_Guide.docx

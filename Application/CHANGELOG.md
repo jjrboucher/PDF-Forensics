@@ -1,6 +1,35 @@
 # PDF Forensics Suite — Changelog
 
-**Current build: 2026-10-20** · app version 1.0.0 (pre-launch, not bumped until public release) · schema revision 8. Update this line and `BUILD_DATE` in `pdf_forensics/__init__.py` when cutting a new internal build. Dated entries below record when each change was made and are left as historical record.
+**Released: version 1.0.0 — 2026-10-21 (build 2026-10-20)** · schema revision 8. Version 1.0.0 is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.0.0 — Release (2026-10-21, build 2026-10-20)
+
+First frozen release. The application code is build 2026-10-20 unchanged;
+this release adds the README and release notes. Highlights of what 1.0
+contains:
+
+- Forensic analysis of PDFs: text overlays (annotations, stacked
+  box-and-replace annotations, white boxes with painted text, text over
+  text), image overlap/off-page/soft-mask concealment, DPI anomalies, font
+  consistency, version anachronism, unapplied redactions, signature
+  coverage and structural integrity.
+- Metadata, creator/producer, XMP and timeline analysis; incremental-update
+  analysis with validated prior-version extraction and analysis.
+- 21 HTML reports, the Visual Overlay Report (verified, toggleable layers),
+  relationship graphs, triage and Document Risk Overview spreadsheets, and
+  the case index with an output manifest.
+- Every submitted file accounted for (analysed, identical copy, encrypted
+  and not opened, failed, not found), with duplicates noted on all reports.
+- Encrypted PDFs opened with an examiner-supplied password list, recorded
+  in the Encrypted Files report.
+- Recorded disclaimer acknowledgement; version and build on every output;
+  complete session logging.
+- Seven in-app guides and the standalone Technical Reference Guide (v1.2),
+  all stating build 2026-10-20.
+
+Verified by the author on real case material before release, including
+password-list decryption, prior-version validation, long and bracketed
+file names, and duplicate handling.
 
 ## v1.0.0 — Update (2026-10-20)
 
