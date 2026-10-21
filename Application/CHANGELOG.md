@@ -1,6 +1,98 @@
 # PDF Forensics Suite — Changelog
 
-**Released: version 1.0.0 — 2026-10-21 (build 2026-10-20)** · schema revision 9. Version 1.0.0 is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.0.1 — 2026-10-21 (build 2026-10-21)** · schema revision 9. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.0.1 — Release (2026-10-21, build 2026-10-21)
+
+First incremental update to 1.0.0. No database schema change (still
+revision 9); databases from 1.0.0 open unchanged.
+
+### Triage: PyMuPDF messages now written to the session log
+- Build 2026-10-14 stopped PyMuPDF's parser messages (e.g. "corrupt object
+  stream") printing to the terminal and wrote them to the session log
+  instead, but only analysis wrote them to the log. During triage they
+  were suppressed from the console and then either never logged or logged
+  later against the next file analysed in the session.
+- Triage now writes them to the session log after each file and after
+  each prior version it triages, labelled with the file they came from
+  (e.g. `[triage: [001.1] Example Bank Letter_version1.pdf]`). Messages
+  left over from earlier processing in the session are logged first,
+  labelled "before triage", so they are not attributed to the first file
+  triaged.
+- Logging only; analysis is unchanged. (`analysis/triage.py`)
+
+### Triage: prior versions of encrypted files now use the password list
+- Triage reconstructs each prior version in memory and triages it, but did
+  not pass on the run's password list or the password that opened the
+  current version. A prior version of a file that needs a password
+  (an incremental update to an encrypted file is encrypted in the same
+  way) therefore could not be opened: its metadata was missing from the
+  spreadsheet, and its Encryption Status read "Not opened — no password
+  list supplied" even when a list had been supplied and had opened the
+  current version.
+- A prior version is now tried first with the password that opened the
+  current version, as analysis already does, then in the usual order
+  (empty password, passwords already found this run, the supplied list).
+  The Encryption Status shows "Opened with the parent document's password"
+  when that password opened it, and the Password column shows the password.
+- A prior version that still cannot be opened is now also noted in the
+  session log as an encrypted, unopened prior version. The end-of-run
+  retry prompt offers the files whose current version could not be
+  opened; a prior version that stays locked although its file opened is
+  reported but not offered for retry.
+- Changes triage results: prior versions of encrypted files that were
+  previously reported as not opened can now be opened and their metadata
+  read. Re-run triage on affected cases. Analysis was not affected; it
+  already tries the parent's password on prior versions.
+  (`analysis/triage.py`)
+
+### Triage: the end-of-run retry is merged into the spreadsheet
+- When triage met encrypted files it could not open, the end-of-run prompt
+  (GUI) offered to re-triage them with a password list. That re-triage
+  saved to the same file as the main run, so it replaced the whole triage
+  spreadsheet with one holding only the re-triaged files, without their
+  prior versions; the other files' rows and the comments sheet were lost.
+  The log then advised re-running triage on the full set to "refresh" the
+  spreadsheet that had already been overwritten.
+- The re-triage is now merged into the main spreadsheet. The rows for each
+  re-triaged file (current version, prior versions and comments) are
+  replaced in place, in their original position, and every other row is
+  kept unchanged. A file whose re-triage produces no row keeps its earlier
+  rows, and if no file can be re-triaged the spreadsheet is left
+  untouched. The re-triage includes prior versions whenever the main run
+  did. The session log records the merge (files re-triaged, rows replaced,
+  rows now in the spreadsheet), and the spreadsheet is listed once in the
+  session's outputs. (`analysis/triage.py` `run_triage(run_state=...)`,
+  `gui/app.py`)
+
+### Triage: comments from opened encrypted files
+- Triage extracted reviewer comments by opening each file without a
+  password, so no comments were ever read from an encrypted file that
+  needs one, even after triage had opened it. Comments are now extracted
+  with the password that opened the file (or prior version). Files that
+  could not be opened are skipped quietly, as they are already reported
+  as not opened. (`analysis/triage.py`)
+
+### Triage: no crash when nothing could be triaged
+- When no file produced a row, `run_triage()` returned three values where
+  every caller expects four, which would have raised an error in the GUI
+  and on the command line. It now returns four values, writes no
+  spreadsheet, and leaves an existing one unchanged. (`analysis/triage.py`)
+
+### Documentation
+- All seven in-app guides and the Technical Reference Guide: cover line,
+  running header and footer now state version 1.0.1, build 2026-10-21.
+  The Risk Scoring technical guide's introduction names v1.0.1.
+- Six in-app guides (01a, 01b, 02a, 02b, 03a, 03b) stated "Released under
+  the MIT License" on the cover. The application is licensed under the
+  Apache License, Version 2.0 (see `LICENSE`); the covers now say so, as
+  00 Getting Started already did. No licensing terms changed.
+- README files and release notes updated for 1.0.1. The application
+  README's Encrypted PDFs section now states how prior versions of
+  encrypted files are opened, that the triage retry updates the same
+  spreadsheet, and that comments are read from opened encrypted files. The version comments
+  in `pdf_forensics/__init__.py` now describe the release policy instead of
+  the pre-release one.
 
 ## Version 1.0.0 — Release (2026-10-21, build 2026-10-20)
 

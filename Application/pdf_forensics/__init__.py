@@ -4,11 +4,13 @@ PDF Forensics Suite
 A unified forensic analysis toolkit for PDF documents.
 """
 
-__version__ = "1.0.0"          # pre-launch; not bumped until public release
-# Build/revision marker. Update when cutting a new internal build so that
-# every output (CLI banner, report and graph footers, GUI About) carries
-# the build it was produced from. This is the internal revision indicator;
-# __version__ stays 1.0.0 until the application is released publicly.
-BUILD_DATE = "2026-10-20"
+__version__ = "1.0.1"
+# Version policy: 1.0.0 is the first frozen release. Each later change is
+# released as an incremental update (1.0.1, 1.0.2, ...) with its own build
+# date. BUILD_DATE is carried by every output (CLI banner, report and graph
+# footers, GUI About), so it identifies the build that produced it. For
+# each update, change __version__ and BUILD_DATE together and add a dated
+# CHANGELOG entry.
+BUILD_DATE = "2026-10-21"
 __tool_name__ = "PDF Forensics Suite"
 SCHEMA_REVISION = 9  # Increment when DB schema changes

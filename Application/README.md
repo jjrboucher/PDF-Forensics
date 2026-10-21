@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.0.0-informational)
+![Version](https://img.shields.io/badge/version-1.0.1-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -210,12 +210,20 @@ guess, generate or brute-force passwords, and files are only ever read.
 - For each file it tries the empty password first (which opens
   *permissions-only* files), then passwords already found to work in the run,
   then your list in order.
+- A prior version recovered from an encrypted file is tried first with the
+  password that opened that file, since an earlier version normally shares
+  its encryption, and then in the same order as above. This applies in both
+  analysis and triage.
 - The list is a plain text file, one password per line, read exactly as written
   (leading/trailing spaces and a leading `#` are part of the password). It is
   chosen for each run and is not kept by the application.
 - If no list was supplied, or the list did not open a file, the file is set
   aside and the run continues. At the end, the application offers to try a
-  password list on just those files.
+  password list on just those files. After a triage run, the rows for those
+  files (with their prior versions and comments) are updated in the same
+  triage spreadsheet, and every other row is kept.
+- In triage, the reviewer comments of an encrypted file that was opened are
+  extracted with the password that opened it.
 - The **Encrypted Files** report lists every encrypted PDF and the password that
   opened it, or that none did. It contains passwords and should be handled with
   the same care as the password list.
@@ -240,7 +248,9 @@ positives, counter-verification procedures and chain of custody in depth.
   prior versions are written as separate files in the case folder.
 - **Everything is logged.** Each session log records the version and build,
   the disclaimer acknowledgement, the files processed, password lists used
-  (path and MD5, not contents), and each file's outcome.
+  (path and MD5, not contents), each file's outcome, and any parser
+  warnings PyMuPDF raised while analysing or triaging a file (kept off the
+  terminal and labelled with the file they came from).
 - **Findings are leads, not conclusions.** Soft indicators are labelled as
   such, and each report section points back to its source data so findings can
   be verified independently.
@@ -249,9 +259,12 @@ positives, counter-verification procedures and chain of custody in depth.
 
 ## Versioning
 
-This is **version 1.0.0**, the first frozen release. Changes after 1.0 are
-released as incremental updates (1.0.1, 1.0.2, …), each with its own build
-date. See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
+This is **version 1.0.1** (build 2026-10-21), the first incremental update
+to version 1.0.0, the first frozen release. Changes after 1.0 are released
+as incremental updates (1.0.1, 1.0.2, …), each with its own build date.
+`python pdf_forensics.py --version` prints the version and build you are
+running. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for what changed in
+this release and [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ## Disclaimer
 

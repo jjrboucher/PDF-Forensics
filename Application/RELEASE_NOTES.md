@@ -1,5 +1,68 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.0.1
+
+**Released:** 2026-10-21 · **Build:** 2026-10-21 · **Database schema:** revision 9 (unchanged)
+
+The first incremental update to 1.0.0. The full change history is in
+[`CHANGELOG.md`](CHANGELOG.md).
+
+### What changed
+
+- **Triage logging.** PyMuPDF's parser messages (for example "corrupt
+  object stream") raised during triage are now written to the session log,
+  labelled with the file or prior version that produced them, as analysis
+  already did. Previously triage kept them off the terminal but did not
+  log them.
+- **Triage: prior versions of encrypted files.** Triage did not pass the
+  password list, or the password that opened a file, to that file's prior
+  versions, so a prior version of a password-protected file could not be
+  opened: its metadata was missing and its status wrongly read "no
+  password list supplied". A prior version is now tried first with the
+  password that opened the current version, as analysis already does,
+  then with the usual order and the supplied list. **Re-run triage** on
+  cases with encrypted files that have prior versions. Analysis was not
+  affected.
+- **Triage: retry no longer replaces the spreadsheet.** When the
+  end-of-run prompt re-triaged encrypted files with a password list, it
+  overwrote the triage spreadsheet with only those files, losing every
+  other row and the comments sheet. The retry is now merged in: the rows
+  for those files (with their prior versions and comments) are updated in
+  place and all other rows are kept. **If you used this prompt in 1.0.0,
+  re-run triage on the full set**; the earlier spreadsheet was replaced.
+- **Triage: comments from encrypted files.** Reviewer comments are now read
+  from encrypted files that triage opened; previously none were.
+- **Triage: no crash when nothing could be triaged.** A run (or retry) in
+  which no file could be triaged no longer stops with an error, and leaves
+  any existing spreadsheet unchanged.
+- **Guides.** Every guide now states version 1.0.1, build 2026-10-21. Six
+  in-app guides wrongly said "Released under the MIT License" on the
+  cover; they now state the Apache License, Version 2.0, which is the
+  application's license. No licensing terms changed.
+
+### Upgrading
+
+Replace the application folder with the 1.0.1 package and keep your case
+folders. No database migration is needed: 1.0.0 databases open in 1.0.1
+unchanged, and reports regenerated from them record build 2026-10-21.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.0.1.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.0.1.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.0.1 (build 2026-10-21)`.
+
+The known limitations and planned work listed for 1.0.0 below still apply.
+
+---
+
 ## Version 1.0.0
 
 **Released:** 2026-10-21 · **Build:** 2026-10-20 · **Database schema:** revision 9

@@ -1578,6 +1578,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         try:
             triage_count = 0
             triage_failed = 0
+            # Rows of this triage run, kept so the end-of-run retry of
+            # encrypted files is merged into the same spreadsheet instead
+            # of replacing it.
+            triage_state = {}
 
             def _prompt_locked_triage(locked, xlsx_path, session, progress):
                 from pdf_forensics import passwords as _pw
@@ -1610,16 +1614,24 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                                 f"\u2014 {os.path.basename(path)}")
                 log_to_gui(f"Re-triaging {len(locked)} encrypted file(s) with "
                            f"{len(passwords)} password(s)\u2026","bold")
+                # Merged into the main spreadsheet: the rows for these files
+                # (and their prior versions and comments) are replaced in
+                # place; every other row is kept.
                 p2,s2,o2,still=run_triage(
                     locked, xlsx_path, session=session, progress_callback=progress,
-                    include_prior_versions=False,
-                    password_manager=app["password_manager"])
+                    password_manager=app["password_manager"],
+                    run_state=triage_state)
                 opened=len(locked)-len(still)
-                log_to_gui(f"Encrypted re-triage: {opened} opened, "
-                           f"{len(still)} still not opened. Note: this "
-                           f"re-triage covers only those files; re-run triage "
-                           f"on the full set to refresh the main spreadsheet.",
-                           "bold")
+                if p2:
+                    log_to_gui(f"Encrypted re-triage: {opened} opened, "
+                               f"{len(still)} still not opened. Their rows in "
+                               f"{os.path.basename(xlsx_path)} were updated; "
+                               f"all other rows are unchanged.",
+                               "bold")
+                else:
+                    log_to_gui(f"Encrypted re-triage: no file could be "
+                               f"re-triaged; {os.path.basename(xlsx_path)} "
+                               f"is unchanged.", "bold")
                 from pdf_forensics.reports.case_index import refresh_case_index
                 refresh_case_index(session)
 
@@ -1635,7 +1647,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 list(pdf_files), xlsx_path,
                 session=session,
                 progress_callback=on_triage_progress,
-                password_manager=app.get("password_manager"))
+                password_manager=app.get("password_manager"),
+                run_state=triage_state)
 
             count_processed.set(str(processed))
             count_failed.set(str(skipped))

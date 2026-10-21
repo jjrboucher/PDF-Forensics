@@ -55,7 +55,8 @@ def triage_pdf(pdf_path):
 
 
 def triage_pdf_bytes(data, filename, path, source="Current",
-                     version_number=None, password_manager=None):
+                     version_number=None, password_manager=None,
+                     parent_password=None):
     """
     Fast scan of a PDF held in memory. Used both for files on disk
     (via triage_pdf) and for prior versions reconstructed in memory,
@@ -69,6 +70,12 @@ def triage_pdf_bytes(data, filename, path, source="Current",
                        reconstructed prior version)
       source         : "Current" or a prior-version label
       version_number : the version number for a prior version, else None
+      password_manager : the run's PasswordManager (supplied list and
+                       passwords already found to work), or None
+      parent_password : for a prior version, the password that opened the
+                       current version. Tried first, as in analysis,
+                       because a genuine earlier version normally shares
+                       the parent document's encryption.
 
     Returns a triage result dict, or None if the bytes can't be parsed.
     """
@@ -140,13 +147,27 @@ def triage_pdf_bytes(data, filename, path, source="Current",
             result["encrypted"] = True
             mgr = (password_manager if password_manager is not None
                    else _pw.PasswordManager())
-            res = _pw.try_open(data, mgr)
+            res = None
+            # A prior version: try the parent document's password first.
+            # The empty password is excluded here because try_open below
+            # always tries it first anyway.
+            if parent_password:
+                try:
+                    if _pw._pikepdf_opens(data, parent_password):
+                        res = {"opened": True, "password": parent_password,
+                               "label": "parent document's password"}
+                except Exception:
+                    res = None
+            if res is None:
+                res = _pw.try_open(data, mgr)
             if res["opened"]:
                 enc_pw = res["password"]
                 result["enc_password"] = res["password"]
                 result["enc_status"] = (
                     "Opened with no password (permissions-only)"
                     if res["password"] == ""
+                    else "Opened with the parent document's password"
+                    if res.get("label") == "parent document's password"
                     else "Opened with a supplied password")
             else:
                 result["enc_opened"] = False
@@ -281,7 +302,7 @@ def reconstruct_prior_versions(data, password=None):
 
 def run_triage(pdf_paths, output_path, session=None,
                progress_callback=None, include_prior_versions=True,
-               password_manager=None):
+               password_manager=None, run_state=None):
     """
     Triage a list of PDFs and write results to an Excel file.
 
@@ -297,13 +318,42 @@ def run_triage(pdf_paths, output_path, session=None,
                                appears in the spreadsheet alongside the
                                current version's.
 
-    Returns (processed_count, skipped_count, output_path). The
-    processed count includes prior-version rows.
+      password_manager       : the run's PasswordManager, or None
+      run_state              : optional dict that carries a triage run's
+                               rows between calls, so a later call can be
+                               merged into the same spreadsheet. Pass an
+                               empty dict to the first call; it is filled
+                               with that run's rows. Pass the same dict to
+                               a later call (e.g. the end-of-run retry of
+                               encrypted files with a new password list):
+                               that call re-triages only its files, then
+                               replaces every row for each of them
+                               (current version, prior versions and
+                               comments) in place and rewrites the
+                               spreadsheet with all rows. Rows for other
+                               files are kept unchanged, in their original
+                               order. A file whose re-triage produced no
+                               row keeps its earlier rows. A merging call
+                               uses the first call's include_prior_versions
+                               setting, so prior-version rows are replaced
+                               rather than dropped.
+
+    Returns (processed_count, skipped_count, output_path, locked), where
+    processed_count counts the rows triaged in this call (including
+    prior-version rows) and locked lists the encrypted files this call
+    could not open. When nothing could be triaged, no spreadsheet is
+    written (an existing one is left unchanged) and processed_count is 0.
     """
     from openpyxl import Workbook
     from openpyxl.styles import (
         Font, PatternFill, Alignment, Border, Side)
     from openpyxl.utils import get_column_letter
+
+    merging = (run_state is not None
+               and run_state.get("results") is not None)
+    if merging:
+        include_prior_versions = run_state.get(
+            "include_prior_versions", include_prior_versions)
 
     results = []
     skipped = 0
@@ -313,13 +363,20 @@ def run_triage(pdf_paths, output_path, session=None,
         """Append this row's reviewer comments to all_comments,
         tagged with the row's filename/path/source. Accepts a path
         (str) or raw bytes."""
+        # An encrypted file is opened with the password that opened it for
+        # triage ("" for permissions-only files); one that could not be
+        # opened has no readable comments and is already reported as such.
+        if row.get("encrypted") and not row.get("enc_opened", True):
+            return
+        password = row.get("enc_password") or ""
         try:
             import pikepdf
             from pdf_forensics.analysis.comments import extract_comments
             if isinstance(data_or_path, (bytes, bytearray)):
-                ctx = pikepdf.open(io.BytesIO(data_or_path))
+                ctx = pikepdf.open(io.BytesIO(data_or_path),
+                                   password=password)
             else:
-                ctx = pikepdf.open(data_or_path)
+                ctx = pikepdf.open(data_or_path, password=password)
             with ctx as _cpdf:
                 for c in extract_comments(_cpdf):
                     c = dict(c)
@@ -332,6 +389,22 @@ def run_triage(pdf_paths, output_path, session=None,
                 session.log(
                     f"  Could not extract comments from "
                     f"{row['filename']}: {e}", "warning")
+
+    # PyMuPDF messages raised while triaging (e.g. "corrupt object stream")
+    # are kept off the console by _mupdf.silence() and written to the
+    # session log here, attributed to the file or prior version that
+    # produced them, as analysis does. Anything left over from earlier
+    # processing in the session is logged first under its own label so it
+    # is not attributed to the first triaged file.
+    from pdf_forensics import _mupdf as _mu
+
+    def _log_mupdf(context):
+        try:
+            _mu.drain(session, context)
+        except Exception:
+            pass
+
+    _log_mupdf("before triage")
 
     locked_unopened = []
     for i, pdf_path in enumerate(pdf_paths):
@@ -356,6 +429,7 @@ def run_triage(pdf_paths, output_path, session=None,
                     password_manager=password_manager)
             else:
                 triage = triage_pdf(pdf_path)
+            _log_mupdf(f"triage: {os.path.basename(pdf_path)}")
             if triage and triage.get("encrypted") and not triage.get("enc_opened", True):
                 locked_unopened.append(os.path.abspath(pdf_path))
                 if session:
@@ -410,11 +484,28 @@ def run_triage(pdf_paths, output_path, session=None,
                                 "warning")
                     for vnum, vbytes in priors:
                         vname = f"{base}_version{vnum}.pdf"
+                        # Same password handling as the current version:
+                        # the parent's password first, then the run's
+                        # list. Without these a prior version of an
+                        # encrypted file could not be opened, and was
+                        # reported as "no password list supplied" even
+                        # when one had been.
                         vtriage = triage_pdf_bytes(
                             vbytes, vname,
                             os.path.abspath(pdf_path),
                             source=f"Prior v{vnum}",
-                            version_number=vnum)
+                            version_number=vnum,
+                            password_manager=password_manager,
+                            parent_password=_ppw)
+                        _log_mupdf(f"triage: {vname}")
+                        if (vtriage and vtriage.get("encrypted")
+                                and not vtriage.get("enc_opened", True)
+                                and session):
+                            session.log(
+                                f"    \u21b3 Prior version {vnum} is "
+                                f"encrypted and was not opened: {vname} "
+                                f"\u2014 {vtriage.get('enc_status', '')}",
+                                "warning")
                         if vtriage:
                             results.append(vtriage)
                             _extract_comments(vbytes, vtriage)
@@ -433,7 +524,27 @@ def run_triage(pdf_paths, output_path, session=None,
                             "error")
 
     if not results:
-        return 0, skipped, output_path
+        # Nothing triaged: write nothing, so a spreadsheet from an earlier
+        # call (when merging) is left as it was.
+        if session and merging:
+            session.log(f"Triage re-run produced no rows; "
+                        f"{os.path.basename(output_path)} left unchanged.")
+        return 0, skipped, output_path, locked_unopened
+
+    processed_now = len(results)
+    if merging:
+        replaced = []
+        for r in results:
+            if r["path"] not in replaced:
+                replaced.append(r["path"])
+        results = _merge_rows(run_state["results"], results, replaced)
+        all_comments = _merge_rows(run_state.get("comments") or [],
+                                   all_comments, replaced)
+        # Keep comments in the same file order as the triage rows.
+        order = {}
+        for i, r in enumerate(results):
+            order.setdefault(r["path"], i)
+        all_comments.sort(key=lambda c: order.get(c.get("path"), len(order)))
 
     # Build Excel workbook
     wb = Workbook()
@@ -620,11 +731,49 @@ def run_triage(pdf_paths, output_path, session=None,
     wb.save(output_path)
 
     if session:
-        session.log(f"Triage complete: {len(results)} PDFs -> "
-                    f"{output_path}")
+        if merging:
+            session.log(f"Triage re-run merged: {len(replaced)} file(s) "
+                        f"re-triaged ({processed_now} row(s)) and their "
+                        f"earlier rows replaced; the spreadsheet now has "
+                        f"{len(results)} row(s) -> {output_path}")
+        else:
+            session.log(f"Triage complete: {len(results)} PDFs -> "
+                        f"{output_path}")
         if all_comments:
             session.log(f"  {len(all_comments)} comment(s) extracted "
                         f"to the 'comments' worksheet.")
-        session.register_output("triage", output_path)
+        if ("triage", os.path.abspath(output_path)) not in getattr(
+                session, "outputs", []):
+            session.register_output("triage", output_path)
 
-    return len(results), skipped, output_path, locked_unopened
+    if run_state is not None:
+        run_state["results"] = results
+        run_state["comments"] = all_comments
+        run_state["include_prior_versions"] = include_prior_versions
+        run_state["output_path"] = output_path
+
+    return processed_now, skipped, output_path, locked_unopened
+
+
+def _merge_rows(old_rows, new_rows, paths):
+    """Replace, in place, every old row whose "path" is in paths with the
+    new rows for that path (in their new order); keep all other old rows
+    unchanged and in order. New rows for a path with no old rows are
+    appended at the end."""
+    paths = set(paths)
+    by_path = {}
+    for r in new_rows:
+        by_path.setdefault(r.get("path"), []).append(r)
+    out, emitted = [], set()
+    for r in old_rows:
+        p = r.get("path")
+        if p in paths:
+            if p not in emitted:
+                out.extend(by_path.get(p, []))
+                emitted.add(p)
+            continue
+        out.append(r)
+    for p in paths:
+        if p not in emitted:
+            out.extend(by_path.get(p, []))
+    return out
