@@ -33,3 +33,6 @@ a complete version.
   SHA-256 of every lab PDF and of the ZIP package. Module 00 now links to it
   and Step 2 asks learners to verify each hash against it.
 - Added `Course/LICENSE` containing the full CC BY 4.0 legal code.
+- License & Disclaimer page: the repository is now public. The note that
+  it was private during the beta review period now says it is publicly
+  available.

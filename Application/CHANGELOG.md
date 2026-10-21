@@ -87,6 +87,9 @@ revision 9); databases from 1.0.0 open unchanged.
   the MIT License" on the cover. The application is licensed under the
   Apache License, Version 2.0 (see `LICENSE`); the covers now say so, as
   00 Getting Started already did. No licensing terms changed.
+- Technical Reference Guide: the authorship section said the repository
+  was private during the beta review period; it is now public, and the
+  Guide says so.
 - README files and release notes updated for 1.0.1. The application
   README's Encrypted PDFs section now states how prior versions of
   encrypted files are opened, that the triage retry updates the same
