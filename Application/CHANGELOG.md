@@ -1,6 +1,6 @@
 # PDF Forensics Suite — Changelog
 
-**Released: version 1.0.0 — 2026-10-21 (build 2026-10-20)** · schema revision 8. Version 1.0.0 is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Released: version 1.0.0 — 2026-10-21 (build 2026-10-20)** · schema revision 9. Version 1.0.0 is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
 
 ## Version 1.0.0 — Release (2026-10-21, build 2026-10-20)
 

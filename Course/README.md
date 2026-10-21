@@ -107,9 +107,15 @@ independent examination.
 
 ## Lab files
 
-The lab PDFs are in [`html/sample_pdfs/`](html/sample_pdfs). Hash each file
-before you begin, record the value in your notes, and confirm it matches the
-table below, just as you would for an exhibit. Work on copies.
+The lab PDFs are in [`html/sample_pdfs/`](html/sample_pdfs), and all seven
+are packaged together as
+[`html/sample_pdfs/lab_files.zip`](html/sample_pdfs/lab_files.zip) (MD5
+`6a5ea4d77615cd15b7d46c493976d351`), which is what the Module 00 download
+button provides. Hash each file before you begin, record the value in your
+notes, and confirm it matches the table below, just as you would for an
+exhibit. Work on copies. The same values, together with SHA-256 hashes, file
+sizes and page counts, are in
+[`html/reference/manifest.json`](html/reference/manifest.json).
 
 | File | MD5 |
 |---|---|
@@ -162,6 +168,7 @@ Several course pages point to sections of it for further reading.
 ```
 Course/
 ├── README.md                  This file
+├── LICENSE                    CC BY 4.0 legal code
 ├── Beta_Feedback_Form.docx    Reviewer feedback form (beta only)
 └── html/
     ├── index.html             Course home: start here
@@ -170,8 +177,8 @@ Course/
     │   └── js/course-version.js   Course version number and date
     ├── module_00/ … module_07/    Overview, lesson, lab and quiz pages per module
     ├── final/                 Final assessment and certificate
-    ├── reference/             Answer keys (HTML and JSON) and quick reference
-    ├── sample_pdfs/           The seven lab PDFs
+    ├── reference/             Answer keys (HTML and JSON), quick reference, manifest.json
+    ├── sample_pdfs/           The seven lab PDFs and lab_files.zip
     └── license/               License, authorship and disclaimer
 ```
 
@@ -205,7 +212,8 @@ every change of version is recorded in
 
 This course (all modules, labs, the final assessment and the certificate) is
 licensed under the
-[Creative Commons Attribution 4.0 International License (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
+[Creative Commons Attribution 4.0 International License (CC BY 4.0)](LICENSE)
+([summary](https://creativecommons.org/licenses/by/4.0/)).
 You may share and adapt it for any purpose, including commercially, provided
 you give appropriate credit, link to the license and indicate any changes.
 You may not suggest the author endorses you or your use.

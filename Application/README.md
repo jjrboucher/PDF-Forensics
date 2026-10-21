@@ -87,7 +87,7 @@ the command line for scripted and batch work.
 
 ```bash
 git clone https://github.com/jjrboucher/PDF-Forensics.git
-cd PDF-Forensics
+cd PDF-Forensics/Application
 
 # (Recommended) create and activate a virtual environment
 python -m venv .venv

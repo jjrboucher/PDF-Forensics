@@ -2,7 +2,7 @@
 
 ## Version 1.0.0
 
-**Released:** 2026-10-21 · **Build:** 2026-10-20 · **Database schema:** revision 8
+**Released:** 2026-10-21 · **Build:** 2026-10-20 · **Database schema:** revision 9
 
 First frozen release of the PDF Forensics Suite. Changes after this release
 are issued as incremental updates (1.0.1, 1.0.2, …), each with its own build

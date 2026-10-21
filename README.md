@@ -53,6 +53,7 @@ PDF-Forensics/
 │   └── Documentation/                     User guides (.docx)
 └── Course/                                PDF Forensics Examiner Course (CC BY 4.0)
     ├── README.md                          Course documentation
+    ├── LICENSE                            CC BY 4.0 legal code (course and guide)
     ├── Beta_Feedback_Form.docx            Form for beta reviewers
     └── html/                              The course itself; open html/index.html
 ```
@@ -166,7 +167,8 @@ This repository uses two licenses:
   [`Application/NOTICE`](Application/NOTICE).
 - **Course and Technical Reference Guide** (everything in
   [`Course/`](Course) and `PDF_Forensics_Technical_Guide.docx`): the
-  [Creative Commons Attribution 4.0 International License (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
+  [Creative Commons Attribution 4.0 International License (CC BY 4.0)](Course/LICENSE)
+  ([summary](https://creativecommons.org/licenses/by/4.0/)).
 
 Suggested attribution for the course or guide:
 
