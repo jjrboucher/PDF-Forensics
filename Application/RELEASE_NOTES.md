@@ -1,5 +1,48 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.0.3
+
+**Released:** 2026-10-22 · **Build:** 2026-10-22b · **Database schema:** revision 9 (unchanged)
+
+The third incremental update to 1.0.0. The full change history is in
+[`CHANGELOG.md`](CHANGELOG.md).
+
+### What changed
+
+- **Invalid PDF versions are now reported.** A declared version that does
+  not exist (only 1.0 to 1.7 and 2.0 do), in the header, the Catalog or the
+  XMP metadata, is reported as VERSION_INVALID, and can no longer mask a
+  genuine version gap.
+- **Changed or conflicting version declarations are now reported.** When
+  the XMP version disagrees with the version in effect, or a later update
+  altered a version declaration (as metadata tools such as ExifTool do,
+  since they cannot change the header), the file is reported as
+  VERSION_CONFLICT, with each revision's declarations.
+- **One report for all version problems.** The Version Anachronism report
+  lists all three version findings, with a new Type column.
+
+### Upgrading
+
+Replace the application folder with the 1.0.3 package and keep your case
+folders. No database migration is needed; the new finding types are added
+to existing databases when they are opened. **Re-analyse** documents to
+apply the new checks.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.0.3.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.0.3.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.0.3 (build 2026-10-22b)`.
+
+---
+
 ## Version 1.0.2
 
 **Released:** 2026-10-22 · **Build:** 2026-10-22 · **Database schema:** revision 9 (unchanged)

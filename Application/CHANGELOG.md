@@ -1,6 +1,58 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.0.2 — 2026-10-22 (build 2026-10-22)** · schema revision 9. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.0.3 — 2026-10-22 (build 2026-10-22b)** · schema revision 9. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.0.3 — Release (2026-10-22, build 2026-10-22b)
+
+Third incremental update. No database schema change (still revision 9).
+Two new finding types are added to existing databases automatically when
+they are opened. The build marker carries a letter because 1.0.2 was
+built the same day.
+
+### Version checks: invalid and conflicting PDF versions
+- A declared PDF version that does not exist was not reported. The
+  Version Anachronism check only compared the declared version with the
+  features present, and a file whose header and XMP were edited to 0.3
+  passed if it used none of the features on its list. New finding
+  **VERSION_INVALID** (HIGH, risk +25): any declared version (header,
+  Catalog /Version or XMP pdf:PDFVersion) outside the published versions
+  1.0 to 1.7 and 2.0.
+- Invalid values no longer take part in the anachronism comparison. That
+  comparison uses the highest declared version, so a fictitious high
+  value (e.g. a header edited to 9.9) would have hidden any genuine gap.
+- Versions are parsed whole: 1.10 was read as 1.1.
+- New finding **VERSION_CONFLICT** (MEDIUM, risk +15): the XMP
+  pdf:PDFVersion disagrees with the version in effect (the later of the
+  header and the Catalog /Version), or a later incremental update added,
+  changed or removed the XMP pdf:PDFVersion, or lowered, removed or
+  invalidated the Catalog /Version. Metadata tools such as ExifTool append
+  an update rather than editing the original bytes and cannot change the
+  header, so an attempted version change left the header as it was and
+  went unreported. The Detail lists each revision's declarations. Not
+  reported: a Catalog /Version raised by an update (the standard upgrade,
+  still reported as VERSION_MISMATCH) and an XMP version written by an
+  update that equals the version in effect without lowering an earlier
+  value. An invalid XMP value is reported once, as VERSION_INVALID. The
+  revision comparison runs on submitted files, not on prior versions
+  analysed in their own right. (`analysis/doc_checks.py`,
+  `analysis/engine.py`, `analysis/risk.py`, `database.py`)
+- The Version Anachronism report now lists all three finding types, with
+  a new Type column, so every version problem is in one report. The
+  Document Risk Dossier counts and lists the new types.
+  (`reports/queries.py`)
+
+### Case index: same-day build markers
+- The case index read build markers as a strict date, so a build such as
+  2026-10-22b would have been read as 2026-10-22 and its warning about
+  outputs from more than one build would have missed it. It now reads the
+  optional letter. (`reports/case_index.py`)
+
+### Documentation
+- Technical Reference Guide section 4.4 (comparison, invalid versions,
+  conflicting declarations), finding-type and risk-weight tables; Risk
+  Scoring technical guide (weights table); HTML Reports guides (Version
+  Anachronism report, Dossier). All guides' cover lines, headers and
+  footers state version 1.0.3, build 2026-10-22b.
 
 ## Version 1.0.2 — Release (2026-10-22, build 2026-10-22)
 

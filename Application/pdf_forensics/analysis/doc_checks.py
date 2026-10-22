@@ -515,13 +515,63 @@ def _feature_year(min_version, name):
 
 def _parse_pdf_version(value):
     """Parse a version string ('1.7', 'PDF 1.5', '%PDF-1.4', '/1.6') into
-    a (major, minor) tuple, or None if it cannot be parsed."""
+    a (major, minor) tuple, or None if it cannot be parsed. Multi-digit
+    parts are read whole ('1.10' is (1, 10), not (1, 1))."""
     if value is None:
         return None
-    m = re.search(r"(\d)\.(\d)", str(value))
+    m = re.search(r"(\d+)\.(\d+)", str(value))
     if not m:
         return None
     return (int(m.group(1)), int(m.group(2)))
+
+
+# The PDF versions that exist: 1.0-1.7 (Adobe, ISO 32000-1 for 1.7) and
+# 2.0 (ISO 32000-2). Anything else (0.3, 1.8, 1.10, 3.0, ...) has never
+# been published, so no conforming software writes it.
+VALID_PDF_VERSIONS = frozenset([(1, n) for n in range(8)] + [(2, 0)])
+
+
+def _version_valid(v):
+    return v in VALID_PDF_VERSIONS
+
+
+def _revision_declarations(data, password=None):
+    """Version declarations in each revision of the file, oldest first:
+    a list of (label, end_offset, catalog_version, xmp_version), where
+    the versions are raw strings or None. Only revisions that open as a
+    PDF (valid or encrypted prior versions, and the current file) are
+    included. The header is shared by every revision (it is the first
+    bytes of the file), so it is not listed per revision."""
+    import io
+    try:
+        import pikepdf
+        from pdf_forensics.analysis.metadata import classify_prior_versions
+    except Exception:
+        return []
+    ends = []
+    try:
+        for c in classify_prior_versions(data, password=password):
+            if c.get("status") in ("valid", "encrypted"):
+                ends.append((f"revision {c['version_number']}", c["end"]))
+    except Exception:
+        pass
+    ends.append(("current", len(data)))
+    out = []
+    for label, end in ends:
+        try:
+            kw = {"password": password} if password else {}
+            with pikepdf.open(io.BytesIO(data[:end]), **kw) as pdf:
+                cv = pdf.Root.get("/Version")
+                cv = str(cv).lstrip("/") if cv is not None else None
+                try:
+                    xv = pdf.open_metadata().get("pdf:PDFVersion")
+                    xv = str(xv).strip() if xv is not None and str(xv).strip() else None
+                except Exception:
+                    xv = None
+            out.append((label, end, cv, xv))
+        except Exception:
+            continue
+    return out
 
 
 def _ver_str(v):
@@ -608,7 +658,8 @@ def _scan_catalog_features(doc_pk):
     return found
 
 
-def check_version_anachronism(doc_pk, pdf_path, pdf_metadata):
+def check_version_anachronism(doc_pk, pdf_path, pdf_metadata, password=None,
+                              history=True):
     """
     Detect PDF features that require a newer version than the file
     declares. The declared version can be edited trivially (the header
@@ -633,11 +684,15 @@ def check_version_anachronism(doc_pk, pdf_path, pdf_metadata):
     try:
         with open(pdf_path, "rb") as f:
             head = f.read(1024)
-        m = re.match(rb"%PDF-(\d)\.(\d)", head)
+        m = re.match(rb"%PDF-(\d+)\.(\d+)", head)
         if m:
             header_v = (int(m.group(1)), int(m.group(2)))
+        header_raw = (re.match(rb"%PDF-([^\s%]{0,12})", head).group(1)
+                      .decode("latin-1") if head.startswith(b"%PDF-")
+                      else None)
     except Exception:
         header_v = None
+        header_raw = None
 
     catalog_v = None
     try:
@@ -646,14 +701,60 @@ def check_version_anachronism(doc_pk, pdf_path, pdf_metadata):
     except Exception:
         catalog_v = None
 
-    xmp_v = _parse_pdf_version(
-        _meta_lookup(pdf_metadata, "xmp", "pdfversion"))
+    xmp_raw = _meta_lookup(pdf_metadata, "xmp", "pdfversion")
+    if xmp_raw is None:
+        try:
+            xr = doc_pk.open_metadata().get("pdf:PDFVersion")
+            xmp_raw = str(xr).strip() if xr is not None and str(xr).strip() else None
+        except Exception:
+            xmp_raw = None
+    xmp_v = _parse_pdf_version(xmp_raw)
+    try:
+        cv_obj = doc_pk.Root.get("/Version")
+        catalog_raw = str(cv_obj).lstrip("/") if cv_obj is not None else None
+    except Exception:
+        catalog_raw = None
 
+    results = []
+
+    # --- VERSION_INVALID: a declared version that does not exist ---
+    invalid = []
+    if header_raw is not None and not _version_valid(header_v):
+        invalid.append(f"header %PDF-{header_raw}")
+    if catalog_raw is not None and not _version_valid(catalog_v):
+        invalid.append(f"Catalog /Version {catalog_raw}")
+    if xmp_raw is not None and not _version_valid(xmp_v):
+        invalid.append(f"XMP pdf:PDFVersion {xmp_raw}")
+    if invalid:
+        results.append({
+            "image": None,
+            "type": "VERSION_INVALID",
+            "detail": (
+                "Document-level finding: the file declares a PDF version "
+                "that does not exist.\n"
+                f"    Invalid declaration(s): {'; '.join(invalid)}\n"
+                "    The published PDF versions are 1.0 to 1.7 and 2.0. No "
+                "conforming software writes any other value, so an "
+                "invalid version is a strong indicator that the "
+                "declaration was edited by hand (for example with a hex "
+                "editor or a metadata tool). Invalid values are excluded "
+                "when comparing the declared version against the "
+                "features present (see any Version Anachronism finding)."
+            ),
+        })
+
+    # --- VERSION_CONFLICT: XMP disagrees, or a declaration changed ---
+    results.extend(_version_conflicts(
+        doc_pk, pdf_path, header_v, catalog_v, catalog_raw, xmp_v, xmp_raw,
+        password=password, history=history))
+
+    # Only real versions take part in the anachronism comparison, so an
+    # invalid value (e.g. a fake 9.9) cannot mask a genuine gap.
     declared_candidates = [v for v in (header_v, catalog_v, xmp_v)
-                           if v is not None]
+                           if v is not None and _version_valid(v)]
     if not declared_candidates:
-        # Nothing to compare against; do not guess.
-        return []
+        # No valid declaration to compare against; do not guess.
+        return results
     declared = max(declared_candidates)
 
     # --- detected features ---
@@ -673,7 +774,7 @@ def check_version_anachronism(doc_pk, pdf_path, pdf_metadata):
                  for (minv, name, rel, basis) in features
                  if minv > declared]
     if not exceeding:
-        return []
+        return results
 
     effective = max(minv for (minv, _, _, _) in exceeding)
     # Order the evidence strongest/highest-version first.
@@ -736,11 +837,118 @@ def check_version_anachronism(doc_pk, pdf_path, pdf_metadata):
         "creation date predates the required feature (see above)."
     )
 
-    return [{
+    results.append({
         "image": None,
         "type": "VERSION_ANACHRONISM",
         "detail": detail,
         "_temporal": bool(temporal_note),
+    })
+    return results
+
+
+def _version_conflicts(doc_pk, pdf_path, header_v, catalog_v, catalog_raw,
+                       xmp_v, xmp_raw, password=None, history=True):
+    """VERSION_CONFLICT findings (at most one, listing every reason):
+
+    * the XMP pdf:PDFVersion disagrees with the version in effect (the
+      later of the header and the Catalog /Version, per ISO 32000);
+    * a version declaration (XMP pdf:PDFVersion or Catalog /Version) was
+      added, changed or removed by a later incremental update. Metadata
+      tools such as ExifTool append a new revision rather than editing
+      the original bytes, so the header keeps its original value and the
+      earlier declarations remain in the file.
+    """
+    reasons = []
+    effective = max([v for v in (header_v, catalog_v)
+                     if v is not None and _version_valid(v)], default=None)
+    # An invalid XMP value is reported by VERSION_INVALID; comparing it
+    # here as well would count the same edit twice.
+    if (xmp_v is not None and _version_valid(xmp_v)
+            and effective is not None and xmp_v != effective):
+        reasons.append(
+            f"The XMP pdf:PDFVersion ({xmp_raw}) disagrees with the version "
+            f"in effect ({_ver_str(effective)}: the later of the header "
+            f"{_ver_str(header_v) if header_v else '(none)'} and the "
+            f"Catalog /Version {catalog_raw or '(none)'}). Producers write "
+            f"these in agreement; a mismatch means one was edited "
+            f"separately.")
+
+    hist = []
+    if history:
+        try:
+            with open(pdf_path, "rb") as f:
+                data = f.read()
+            hist = _revision_declarations(data, password=password)
+        except Exception:
+            hist = []
+    changes = []
+    for i in range(1, len(hist)):
+        prev, cur = hist[i - 1], hist[i]
+        for idx, name in ((3, "XMP pdf:PDFVersion"), (2, "Catalog /Version")):
+            a, b = prev[idx], cur[idx]
+            if a == b:
+                continue
+            if idx == 2:
+                # Raising the Catalog /Version in an update is the
+                # standard way to upgrade a file (reported separately as
+                # VERSION_MISMATCH); only a lowered, removed or invalid
+                # Catalog version counts here.
+                pa, pb = _parse_pdf_version(a), _parse_pdf_version(b)
+                if (b is not None and _version_valid(pb)
+                        and (a is None or (pa is not None and pb > pa))):
+                    continue
+            else:
+                # An XMP pdf:PDFVersion written by an update is consistent
+                # when it equals the version in effect for that revision
+                # (the later of the header and that revision's Catalog
+                # /Version) and does not lower an earlier value: that is
+                # what a genuine upgrade or re-save writes.
+                pa, pb = _parse_pdf_version(a), _parse_pdf_version(b)
+                cat_v = _parse_pdf_version(cur[2])
+                eff_rev = max([v for v in (header_v, cat_v)
+                               if v is not None and _version_valid(v)],
+                              default=None)
+                if (b is not None and _version_valid(pb)
+                        and eff_rev is not None and pb == eff_rev
+                        and (a is None or (pa is not None and pb >= pa))):
+                    continue
+            what = ("added" if a is None else "removed" if b is None
+                    else "changed")
+            changes.append(
+                f"{name} {what} in {cur[0]} (update ending at byte "
+                f"{cur[1]:,}): {a or '(absent)'} \u2192 {b or '(absent)'}")
+    if changes:
+        reasons.append(
+            "A version declaration was altered by a later incremental "
+            "update:\n      - " + "\n      - ".join(changes))
+
+    if not reasons:
+        return []
+    table = ""
+    if len(hist) > 1:
+        table = ("\n    Declarations by revision (oldest first): "
+                 + "; ".join(f"{h[0]}: Catalog {h[2] or '-'}, XMP {h[3] or '-'}"
+                             for h in hist))
+    return [{
+        "image": None,
+        "type": "VERSION_CONFLICT",
+        "detail": (
+            "Document-level finding: the file's PDF version declarations "
+            "disagree or were changed after the file was created.\n"
+            f"    Header: {_ver_str(header_v) if header_v else '(unreadable)'}"
+            f"; Catalog /Version: {catalog_raw or '(none)'}"
+            f"; XMP pdf:PDFVersion: {xmp_raw or '(none)'}\n    "
+            + "\n    ".join(reasons)
+            + table
+            + "\n    The header is the first bytes of the file, shared by "
+            "every revision, so a metadata tool cannot change it with an "
+            "incremental update; an altered declaration in a later "
+            "revision alongside an unchanged header is a typical trace of "
+            "an attempt to misstate the version. A Catalog /Version raised "
+            "above the header by a later update is also the legitimate "
+            "way to upgrade a file's version; corroborate with the "
+            "Incremental Updates report and the producer of that update."
+        ),
     }]
 
 

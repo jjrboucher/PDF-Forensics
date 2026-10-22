@@ -396,8 +396,11 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     doc_findings.extend(check_signature_coverage(doc_pk, pdf_path))
     doc_findings.extend(check_structural_integrity(doc_pk))
     doc_findings.extend(check_mixed_cameras(doc_cameras))
+    # Revision history is examined on the submitted file only; a prior
+    # version analysed in its own right is a subset of that history.
     doc_findings.extend(check_version_anachronism(
-        doc_pk, pdf_path, pdf_metadata))
+        doc_pk, pdf_path, pdf_metadata, password=password,
+        history=(version_number is None)))
     if doc_findings and session:
         for df in doc_findings:
             session.log(f"  Document-level finding: {df['type']}")

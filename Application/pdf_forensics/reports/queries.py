@@ -1056,6 +1056,7 @@ REPORTS = [
                                     'REDACT_UNAPPLIED', 'SIGNED_THEN_MODIFIED',
                                     'METADATA_DATE_ANOMALY', 'METADATA_MISMATCH',
                                     'MIXED_CAMERA', 'VERSION_MISMATCH',
+                                    'VERSION_INVALID', 'VERSION_CONFLICT',
                                     'XMP_ID_ANOMALY', 'STRUCTURAL_WARNING')
                 ), '')                          AS "Contributing Findings",
                 (SELECT COUNT(*) FROM comments c
@@ -1093,8 +1094,16 @@ REPORTS = [
         "id": "version_anachronism",
         "name": "Version Anachronism",
         "description":
-            "Documents that use PDF features requiring a newer version "
-            "than they declare. The declared version (header, Catalog "
+            "Every problem with a document's PDF version, one row per "
+            "finding. Type VERSION_INVALID: a declared version (header, "
+            "Catalog /Version or XMP pdf:PDFVersion) that does not exist "
+            "(the published versions are 1.0 to 1.7 and 2.0). Type "
+            "VERSION_CONFLICT: the XMP version disagrees with the version "
+            "in effect, or a version declaration was added, changed or "
+            "removed by a later incremental update (the typical trace of "
+            "a metadata tool such as ExifTool); the Detail lists each "
+            "revision's values. Type VERSION_ANACHRONISM: documents that "
+            "use PDF features requiring a newer version than they declare. The declared version (header, Catalog "
             "/Version, XMP) is trivially editable; the structural "
             "features present cannot be lowered without re-authoring the "
             "file, so they set a hard minimum version and, via each "
@@ -1109,6 +1118,7 @@ REPORTS = [
         "query": """
             SELECT
                 a.pdf_filename       AS "Filename",
+                ft.code              AS "Type",
                 ft.severity          AS "Severity",
                 f.detail             AS "Detail",
                 a.pdf_md5            AS "PDF MD5"
@@ -1116,11 +1126,15 @@ REPORTS = [
             JOIN finding_types ft  ON ft.id = f.finding_type_id
             JOIN pages p           ON p.id = f.page_id
             JOIN analyses a        ON a.id = p.analysis_id
-            WHERE ft.code = 'VERSION_ANACHRONISM'
-            ORDER BY a.pdf_filename
+            WHERE ft.code IN ('VERSION_INVALID', 'VERSION_CONFLICT',
+                              'VERSION_ANACHRONISM')
+            ORDER BY a.pdf_filename,
+                     CASE ft.code WHEN 'VERSION_INVALID' THEN 0
+                                  WHEN 'VERSION_CONFLICT' THEN 1 ELSE 2 END
         """,
         "columns": [
             {"name": "Filename", "label": "Filename", "col_type": "text"},
+            {"name": "Type",     "label": "Type",     "col_type": "text"},
             {"name": "Severity", "label": "Severity", "col_type": "text"},
             {"name": "Detail",   "label": "Detail",   "col_type": "text"},
             {"name": "PDF MD5",  "label": "PDF MD5",  "col_type": "hash"},
@@ -1161,7 +1175,8 @@ REPORTS = [
                    JOIN finding_types ft ON ft.id = f.finding_type_id
                    JOIN pages p ON p.id = f.page_id
                    WHERE p.analysis_id = a.id AND ft.code IN
-                     ('VERSION_MISMATCH','VERSION_ANACHRONISM'))  AS "Version",
+                     ('VERSION_MISMATCH','VERSION_ANACHRONISM',
+                      'VERSION_INVALID','VERSION_CONFLICT'))  AS "Version",
                 (SELECT COUNT(*) FROM findings f
                    JOIN finding_types ft ON ft.id = f.finding_type_id
                    JOIN pages p ON p.id = f.page_id

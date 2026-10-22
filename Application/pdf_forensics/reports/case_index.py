@@ -56,10 +56,10 @@ _esc = html.escape
 TS_RE = re.compile(r"_(\d{8}_\d{6})\.[A-Za-z0-9]+$")
 REPORT_RE = re.compile(r"_report-([A-Za-z0-9_]+)_\d{8}_\d{6}\.html$")
 GRAPH_RE = re.compile(r"_graph-([A-Za-z0-9_-]+)_\d{8}_\d{6}\.html$")
-BUILD_RE = re.compile(rb"build (\d{4}-\d{2}-\d{2})")
+BUILD_RE = re.compile(rb"build (\d{4}-\d{2}-\d{2}[a-z]?)")  # optional same-day letter, e.g. 2026-10-22b
 DB_HTML_RE = re.compile(rb"Database: ([^<\r\n]+?\.db)")
 DB_GRAPH_RE = re.compile(rb'const DB_NAME = "([^"]+)"')
-LOG_BUILD_RE = re.compile(r"\] Build: (\d{4}-\d{2}-\d{2})")
+LOG_BUILD_RE = re.compile(r"\] Build: (\d{4}-\d{2}-\d{2}[a-z]?)")
 LOG_DB_RE = re.compile(r"([^\s\\/]+_forensics_\d{8}_\d{6}\.db)")
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".jp2", ".jpx",
@@ -136,7 +136,7 @@ def _xlsx_db_and_build(path):
     m = re.search(r"Source DB: (\S+\.db)", stamp)
     if m:
         db = m.group(1)
-    b = re.search(r"build (\d{4}-\d{2}-\d{2})", stamp)
+    b = re.search(r"build (\d{4}-\d{2}-\d{2}[a-z]?)", stamp)
     return db, (b.group(1) if b else None)
 
 

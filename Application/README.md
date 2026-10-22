@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.0.2-informational)
+![Version](https://img.shields.io/badge/version-1.0.3-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -49,8 +49,10 @@ the command line for scripted and batch work.
   received rather than as a possibly misleading reconstruction.
 - Image analysis: overlapping and off-page images, soft-mask concealment,
   DPI/resolution anomalies, and cross-document image reuse.
-- Font consistency analysis, version anachronism (features newer than the PDF
-  version a file declares), and unapplied redactions.
+- Font consistency analysis, unapplied redactions, and PDF version checks:
+  versions that do not exist, version declarations that disagree or were
+  changed by a later update, and features newer than the version a file
+  declares.
 
 **Document history and provenance**
 - Metadata, creator/producer and XMP analysis, with timeline anomaly checks.
@@ -265,7 +267,7 @@ positives, counter-verification procedures and chain of custody in depth.
 
 ## Versioning
 
-This is **version 1.0.2** (build 2026-10-22), the second incremental
+This is **version 1.0.3** (build 2026-10-22b), the third incremental
 update to version 1.0.0, the first frozen release. Changes after 1.0 are released
 as incremental updates (1.0.1, 1.0.2, …), each with its own build date.
 `python pdf_forensics.py --version` prints the version and build you are

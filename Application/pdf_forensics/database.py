@@ -66,6 +66,8 @@ FINDING_TYPE_DEFS = {
     "SIGNED_THEN_MODIFIED": ("File modified after digital signature",   "HIGH"),
     "STRUCTURAL_WARNING":   ("Structural integrity warnings (qpdf)",    "INFO"),
     "VERSION_ANACHRONISM":  ("Features exceed declared PDF version",     "MEDIUM"),
+    "VERSION_INVALID":      ("Declared PDF version does not exist",      "HIGH"),
+    "VERSION_CONFLICT":     ("PDF version declarations disagree or changed", "MEDIUM"),
 }
 
 

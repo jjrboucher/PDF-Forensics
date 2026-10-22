@@ -53,6 +53,8 @@ DOC_RISK_WEIGHTS = {
     "MIXED_CAMERA":          15,  # images from 2+ distinct capture devices
     "VERSION_MISMATCH":       5,  # header vs Catalog version differ
     "VERSION_ANACHRONISM":   15,  # features require a newer version than declared
+    "VERSION_INVALID":       25,  # a declared version that does not exist
+    "VERSION_CONFLICT":      15,  # XMP vs effective version, or changed by an update
     "XMP_ID_ANOMALY":         5,  # DocumentID == InstanceID
     "STRUCTURAL_WARNING":     5,  # qpdf structural warnings present
 }
