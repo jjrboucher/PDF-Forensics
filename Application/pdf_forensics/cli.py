@@ -158,6 +158,56 @@ def main_cli():
     print("Processing complete.")
 
 
+def _expand_pdf_args(items, session=None):
+    """Expand wildcard patterns (* and ?) in PDF arguments.
+
+    macOS and Linux shells expand `*.pdf` before the program sees it, but
+    Windows (cmd and PowerShell) passes the pattern through unchanged, so it
+    was reported as "not found". Patterns are therefore expanded here, the
+    same way on every platform.
+
+    - An argument naming an existing file is used as is, even if its name
+      contains wildcard characters.
+    - Square brackets are matched literally first, so exhibit prefixes such
+      as "[010] *.pdf" work; only if that finds nothing are they given their
+      glob meaning (a character class).
+    - A pattern that matches nothing is passed through unchanged and is
+      reported as not found, as before.
+    - Matches are sorted, and a file already listed is not added twice.
+    """
+    import glob as _glob
+    out, seen = [], set()
+
+    def _key(p):
+        return os.path.normcase(os.path.abspath(p))
+
+    for item in items:
+        if os.path.exists(item) or not any(c in item for c in "*?["):
+            out.append(item)
+            seen.add(_key(item))
+            continue
+        literal = item.replace("[", "[[]")
+        matches = _glob.glob(literal)
+        if not matches and "[" in item:
+            matches = _glob.glob(item)
+        matches = sorted(m for m in matches if os.path.isfile(m))
+        if not matches:
+            out.append(item)
+            continue
+        added = 0
+        for m in matches:
+            k = _key(m)
+            if k not in seen:
+                seen.add(k)
+                out.append(m)
+                added += 1
+        msg = f"Pattern {item}: {len(matches)} file(s) matched, {added} added"
+        print(msg)
+        if session:
+            session.log(msg)
+    return out
+
+
 def _build_password_manager(list_path, session=None, quiet=False):
     """Build a PasswordManager from a password-list file, or None when no
     list was given (the engine still tries the empty password and records
@@ -185,7 +235,7 @@ def _cli_analyze(args, session, case):
     """Handle the 'analyze' CLI subcommand."""
     from pdf_forensics.analysis.engine import process_pdfs
 
-    pdfs = list(args.pdf) if args.pdf else []
+    pdfs = _expand_pdf_args(list(args.pdf), session) if args.pdf else []
 
     # Load from list file
     if args.pdf_list:
@@ -407,7 +457,7 @@ def _cli_triage(args, session, case):
     """Handle the 'triage' CLI subcommand."""
     from pdf_forensics.analysis.triage import run_triage
 
-    pdfs = list(args.pdf) if args.pdf else []
+    pdfs = _expand_pdf_args(list(args.pdf), session) if args.pdf else []
 
     if args.pdf_list:
         if not os.path.isfile(args.pdf_list):

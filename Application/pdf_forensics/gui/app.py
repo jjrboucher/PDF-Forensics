@@ -1150,6 +1150,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         count_failed.set("0")
         count_skipped.set("0")
         count_images.set("0")
+        count_encrypted.set("0")
         update_counters()
 
         log_to_gui(f"Processing {len(pdf_files)} PDF(s)...", "bold")
@@ -1461,6 +1462,14 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     force=True, password=enc["password"])
                 if summary and not summary.get("skipped"):
                     opened += 1
+                    # The file is no longer locked: move it from the Locked
+                    # counter to Processed and add its images, so the
+                    # counters match the run summary after the retry.
+                    count_processed.set(str(int(count_processed.get() or 0) + 1))
+                    count_images.set(str(int(count_images.get() or 0)
+                                         + (summary.get("total_extracted") or 0)))
+                    count_encrypted.set(str(max(0, len(locked) - opened)))
+                    root.update_idletasks()
                     # Update the file's earlier "not opened" record rather
                     # than adding a second row, so it is counted once.
                     cur = conn.execute(
@@ -1489,6 +1498,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 still += 1
                 if session:
                     session.log_pdf_error(pdf_path, e)
+        count_encrypted.set(str(still))
         log_to_gui(f"Encrypted retry: {opened} opened and analysed, "
                    f"{still} still not opened", "bold")
         if session:
@@ -1569,6 +1579,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         count_processed.set("0")
         count_failed.set("0")
         count_images.set("0")
+        count_encrypted.set("0")
 
         log_to_gui(f"Triage: {len(pdf_files)} PDF(s)...", "bold")
         log_to_gui(f"Output: {xlsx_path}", "dim")
@@ -1617,12 +1628,20 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 # Merged into the main spreadsheet: the rows for these files
                 # (and their prior versions and comments) are replaced in
                 # place; every other row is kept.
+                def _retry_progress(idx, total, filename):
+                    log_to_gui(f"  \u25cb {filename} ({idx}/{total})", "dim")
                 p2,s2,o2,still=run_triage(
-                    locked, xlsx_path, session=session, progress_callback=progress,
+                    locked, xlsx_path, session=session,
+                    progress_callback=_retry_progress,
                     password_manager=app["password_manager"],
                     run_state=triage_state)
                 opened=len(locked)-len(still)
+                # Counters after the merge: Processed = rows now in the
+                # spreadsheet, Locked = files still not opened.
+                count_encrypted.set(str(len(still)))
                 if p2:
+                    count_processed.set(
+                        str(len(triage_state.get("results") or [])))
                     log_to_gui(f"Encrypted re-triage: {opened} opened, "
                                f"{len(still)} still not opened. Their rows in "
                                f"{os.path.basename(xlsx_path)} were updated; "
@@ -1652,6 +1671,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
             count_processed.set(str(processed))
             count_failed.set(str(skipped))
+            count_encrypted.set(str(len(locked)))
             progress_done(processed, skipped)
 
             log_to_gui("")

@@ -1,6 +1,47 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.0.1 — 2026-10-21 (build 2026-10-21)** · schema revision 9. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.0.2 — 2026-10-22 (build 2026-10-22)** · schema revision 9. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.0.2 — Release (2026-10-22, build 2026-10-22)
+
+Second incremental update. No database schema change (still revision 9);
+databases from 1.0.0 and 1.0.1 open unchanged.
+
+### Command line: wildcards now work on Windows
+- `analyze` and `triage` accept patterns such as `*.pdf`, but did not
+  expand them: macOS and Linux shells expand a pattern before the program
+  sees it, while Windows (cmd and PowerShell) passes it through unchanged,
+  so `triage *.pdf` reported "*.pdf" as not found.
+- Patterns containing `*` or `?` are now expanded by the application
+  itself, the same way on every platform. Square brackets are matched
+  literally first, so exhibit prefixes work (`"[010]*.pdf"`); only if that
+  finds nothing are they treated as a character class. An argument that
+  names an existing file is always used as is. A pattern that matches
+  nothing is still reported as not found. Matches are sorted, a file
+  already listed is not added twice, and each pattern's match count is
+  printed and written to the session log. (`cli.py`)
+
+### GUI: the Locked counter
+- After a password retry opened a locked file, the Locked counter still
+  counted it, and Processed and Images did not include it. Each file the
+  retry opens now moves from Locked to Processed, with its images added,
+  so the counters match the run summary.
+- The Locked counter was not reset at the start of a run, so a run could
+  start showing the previous run's locked files. It is now reset with the
+  other counters.
+- Triage never set the Locked counter; it now shows the files triage could
+  not open, and is updated after the triage retry.
+- The triage retry reused the main run's progress handler, which set
+  Processed to the retry's own count (1, 2, …). It now logs its progress
+  only, and afterwards Processed shows the rows in the merged spreadsheet.
+  (`gui/app.py`)
+
+### Documentation
+- All seven in-app guides and the Technical Reference Guide: cover line,
+  running header and footer now state version 1.0.2, build 2026-10-22.
+- README files and release notes updated for 1.0.2; the application
+  README's command-line section notes that wildcards work on every
+  platform.
 
 ## Version 1.0.1 — Release (2026-10-21, build 2026-10-21)
 

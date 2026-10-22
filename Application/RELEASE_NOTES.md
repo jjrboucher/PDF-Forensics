@@ -1,5 +1,42 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.0.2
+
+**Released:** 2026-10-22 · **Build:** 2026-10-22 · **Database schema:** revision 9 (unchanged)
+
+The second incremental update to 1.0.0. The full change history is in
+[`CHANGELOG.md`](CHANGELOG.md).
+
+### What changed
+
+- **Command line: wildcards on Windows.** `analyze` and `triage` now
+  expand patterns such as `*.pdf` themselves, so they work in Windows cmd
+  and PowerShell as they already did on macOS and Linux. Exhibit prefixes
+  in square brackets work in patterns (`"[010]*.pdf"`).
+- **GUI: Locked counter.** After a password retry opens a file, it moves
+  from Locked to Processed (with its images). The counter is reset at the
+  start of each run, and triage now sets it too.
+
+### Upgrading
+
+Replace the application folder with the 1.0.2 package and keep your case
+folders. No database migration is needed.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.0.2.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.0.2.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.0.2 (build 2026-10-22)`.
+
+---
+
 ## Version 1.0.1
 
 **Released:** 2026-10-21 · **Build:** 2026-10-21 · **Database schema:** revision 9 (unchanged)

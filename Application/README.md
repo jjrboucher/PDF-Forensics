@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.0.1-informational)
+![Version](https://img.shields.io/badge/version-1.0.2-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -144,6 +144,12 @@ python pdf_forensics.py --case 2026-0001 report case.db -r metadata text_overlay
 python pdf_forensics.py --case 2026-0001 graph case.db -s cross_document -o graph.html
 ```
 
+Wildcards such as `*.pdf` work on every platform: on Windows (cmd and
+PowerShell), where the shell does not expand them, the application expands
+them itself. Quote a pattern that contains spaces, for example
+`"Exhibits\[010]*.pdf"`; square brackets in file names are matched
+literally.
+
 Key options:
 
 | Option | Commands | Meaning |
@@ -259,8 +265,8 @@ positives, counter-verification procedures and chain of custody in depth.
 
 ## Versioning
 
-This is **version 1.0.1** (build 2026-10-21), the first incremental update
-to version 1.0.0, the first frozen release. Changes after 1.0 are released
+This is **version 1.0.2** (build 2026-10-22), the second incremental
+update to version 1.0.0, the first frozen release. Changes after 1.0 are released
 as incremental updates (1.0.1, 1.0.2, …), each with its own build date.
 `python pdf_forensics.py --version` prints the version and build you are
 running. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for what changed in
