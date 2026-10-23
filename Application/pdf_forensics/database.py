@@ -69,6 +69,8 @@ FINDING_TYPE_DEFS = {
     "VERSION_INVALID":      ("Declared PDF version does not exist",      "HIGH"),
     "VERSION_CONFLICT":     ("PDF version declarations disagree or changed", "MEDIUM"),
     "TIMELINE_INCONSISTENT": ("Timestamps out of chronological order",   "HIGH"),
+    "METADATA_REVISED":     ("Metadata changed by a later revision",     "MEDIUM"),
+    "EXIFTOOL_EDIT":        ("Edited with ExifTool (update marker)",     "MEDIUM"),
 }
 
 

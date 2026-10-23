@@ -736,7 +736,10 @@ REPORTS = [
             "specification, so linearized files appear here only with "
             "three or more; the Linearized column shows each file's "
             "detected state ('indeterminate' if the file head could "
-            "not be read).",
+            "not be read). The Editing Tool Identified column names a "
+            "tool that marks its own updates: ExifTool ends each update "
+            "with a %EndExifToolUpdate comment (see the EXIFTOOL_EDIT "
+            "finding for the original file length).",
         "query": """
             SELECT
                 a.pdf_filename       AS "Filename",
@@ -750,6 +753,13 @@ REPORTS = [
                 ), 'unknown')        AS "Linearized",
                 MIN(v.eof_offset)    AS "First EOF Offset",
                 MAX(v.eof_offset)    AS "Last EOF Offset",
+                COALESCE((
+                    SELECT 'ExifTool (update marker present)'
+                    FROM findings f
+                    JOIN finding_types ft ON ft.id = f.finding_type_id
+                    JOIN pages p ON p.id = f.page_id
+                    WHERE p.analysis_id = a.id AND ft.code = 'EXIFTOOL_EDIT'
+                    LIMIT 1), '') AS "Editing Tool",
                 a.pdf_md5            AS "PDF MD5",
                 a.analyzed_at        AS "Analyzed"
             FROM pdf_versions v
@@ -771,6 +781,7 @@ REPORTS = [
             {"name": "Linearized",       "label": "Linearized",       "col_type": "text"},
             {"name": "First EOF Offset", "label": "First EOF",        "col_type": "numeric"},
             {"name": "Last EOF Offset",  "label": "Last EOF",         "col_type": "numeric"},
+            {"name": "Editing Tool",     "label": "Editing Tool Identified", "col_type": "text"},
             {"name": "PDF MD5",          "label": "PDF MD5",          "col_type": "hash"},
             {"name": "Analyzed",         "label": "Analyzed",         "col_type": "date"},
         ],
@@ -1244,7 +1255,8 @@ REPORTS = [
                                     'METADATA_DATE_ANOMALY', 'METADATA_MISMATCH',
                                     'MIXED_CAMERA', 'VERSION_MISMATCH',
                                     'VERSION_INVALID', 'VERSION_CONFLICT',
-                                    'TIMELINE_INCONSISTENT',
+                                    'TIMELINE_INCONSISTENT', 'METADATA_REVISED',
+                                    'EXIFTOOL_EDIT',
                                     'XMP_ID_ANOMALY', 'STRUCTURAL_WARNING')
                 ), '')                          AS "Contributing Findings",
                 (SELECT COUNT(*) FROM comments c
@@ -1395,7 +1407,7 @@ REPORTS = [
                    JOIN pages p ON p.id = f.page_id
                    WHERE p.analysis_id = a.id AND ft.code IN
                      ('METADATA_DATE_ANOMALY','METADATA_MISMATCH',
-                      'TIMELINE_INCONSISTENT',
+                      'TIMELINE_INCONSISTENT','METADATA_REVISED','EXIFTOOL_EDIT',
                       'XMP_ID_ANOMALY'))                AS "Metadata",
                 (SELECT COUNT(*) FROM findings f
                    JOIN finding_types ft ON ft.id = f.finding_type_id

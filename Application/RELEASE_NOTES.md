@@ -1,5 +1,41 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.1.2
+
+**Released:** 2026-10-22 · **Build:** 2026-10-22e · **Database schema:** revision 10 (unchanged)
+
+### What changed
+
+- **Metadata edits are now caught.** Fields changed by a later revision
+  are reported with their old and new values (METADATA_REVISED), with a
+  "silent edit" warning when no modification date changed; ExifTool's own
+  update marker is recognised (EXIFTOOL_EDIT).
+- **Info vs XMP comparison** now covers Creator, Author, Title, Subject and
+  Keywords as well as Producer and the dates.
+- **Version format:** a value such as "1.05" is now invalid; it previously
+  counted as 1.5 and could hide a version anachronism.
+- **XMP list fields** (such as dc:creator) are stored as plain text.
+
+### Upgrading
+
+Replace the application folder with the 1.1.2 package. No database
+migration is needed. Re-analyse documents to apply the new checks.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.1.2.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.1.2.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.1.2 (build 2026-10-22e)`.
+
+---
+
 ## Version 1.1.1
 
 **Released:** 2026-10-22 · **Build:** 2026-10-22d · **Database schema:** revision 10 (unchanged)

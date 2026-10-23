@@ -39,7 +39,7 @@ from pdf_forensics.analysis.doc_checks import (
     check_metadata_consistency, check_signature_coverage,
     check_structural_integrity, check_mixed_cameras,
     check_unapplied_redactions, extract_camera_info,
-    check_version_anachronism,
+    check_version_anachronism, check_metadata_history,
 )
 from pdf_forensics.analysis.timeline import (
     build_timeline, timeline_findings, timeline_rows, exif_dates,
@@ -402,6 +402,11 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     doc_findings = []
     doc_findings.extend(check_metadata_consistency(pdf_metadata))
     doc_findings.extend(check_signature_coverage(doc_pk, pdf_path))
+    # Metadata changed by later revisions, and ExifTool's update marker:
+    # submitted files only (a prior version is a subset of that history).
+    if version_number is None:
+        doc_findings.extend(check_metadata_history(pdf_path,
+                                                   password=password))
     doc_findings.extend(check_structural_integrity(doc_pk))
     doc_findings.extend(check_mixed_cameras(doc_cameras))
     # Revision history is examined on the submitted file only; a prior

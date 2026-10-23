@@ -2,7 +2,7 @@
 
 ![Application: Apache 2.0](https://img.shields.io/badge/Application-Apache_2.0-blue.svg)
 ![Course & Guide: CC BY 4.0](https://img.shields.io/badge/Course_%26_Guide-CC_BY_4.0-lightgrey.svg)
-![Application version](https://img.shields.io/badge/app-v1.1.1-informational)
+![Application version](https://img.shields.io/badge/app-v1.1.2-informational)
 ![Course version](https://img.shields.io/badge/course-0.9_pre--release-orange)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
@@ -11,9 +11,9 @@ documents. This repository brings together three companion pieces:
 
 | Component | What it is | Location | Status |
 |---|---|---|---|
-| **PDF Forensics Suite** | A desktop and command-line application that examines PDFs for signs of alteration and produces reports, graphs, spreadsheets and a case index | [`Application/`](Application) | v1.1.1 (build 2026-10-22d) |
+| **PDF Forensics Suite** | A desktop and command-line application that examines PDFs for signs of alteration and produces reports, graphs, spreadsheets and a case index | [`Application/`](Application) | v1.1.2 (build 2026-10-22e) |
 | **PDF Forensics Examiner Course** | A self-paced, browser-based course with lessons, hands-on labs, quizzes, a capstone exercise, a final assessment and a certificate | [`Course/`](Course) | 0.9 pre-release (beta review) |
-| **Technical Reference Guide** | An in-depth guide to PDF structure, detection logic, risk scoring, false positives, counter-verification and chain of custody | [`PDF_Forensics_Technical_Guide.docx`](PDF_Forensics_Technical_Guide.docx) | v1.2 (applies to Suite v1.1.1) |
+| **Technical Reference Guide** | An in-depth guide to PDF structure, detection logic, risk scoring, false positives, counter-verification and chain of custody | [`PDF_Forensics_Technical_Guide.docx`](PDF_Forensics_Technical_Guide.docx) | v1.2 (applies to Suite v1.1.2) |
 
 The application tells you **where to look**; the course teaches you **how to
 look** with independent tools; the guide explains **why** each finding matters
@@ -64,7 +64,8 @@ The Suite analyses one or more PDFs and flags indicators of alteration and
 concealment, including text overlays (annotation, white-box and text-over-text),
 hidden, overlapping, off-page and reused images, metadata and timeline
 inconsistencies, incremental updates (with prior versions extracted and
-analysed), font and version anomalies, timestamps out of chronological order,
+analysed), font and version anomalies, metadata changed by later updates
+(including ExifTool edits), timestamps out of chronological order,
 unapplied redactions and modification after signing. Results are stored in a
 SQLite database and presented as 22 interactive HTML reports (including a
 timeline of every timestamp, normalised to UTC), a Visual Overlay Report, image-relationship graphs,
@@ -129,7 +130,7 @@ The course is in **beta review** and has not yet been released as version 1.0.
 ## Technical Reference Guide
 
 [`PDF_Forensics_Technical_Guide.docx`](PDF_Forensics_Technical_Guide.docx)
-(version 1.2, applies to PDF Forensics Suite v1.1.1, build 2026-10-22d) is the
+(version 1.2, applies to PDF Forensics Suite v1.1.2, build 2026-10-22e) is the
 in-depth companion to both the application and the course. It covers the
 applicable standards, a PDF structure primer, every artifact the Suite
 analyses and its detection logic, risk scoring, known false positives,
@@ -157,7 +158,7 @@ Get-FileHash PDF_Forensics_Technical_Guide.docx -Algorithm SHA256
 
 The value must match the one in `SHA256SUMS.txt`. After installing the
 application, `python pdf_forensics.py --version` should print
-`pdf_forensics 1.1.1 (build 2026-10-22d)`.
+`pdf_forensics 1.1.2 (build 2026-10-22e)`.
 
 ## Licensing
 

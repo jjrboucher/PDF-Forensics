@@ -30,7 +30,8 @@ import io
 import re
 from datetime import datetime, timezone, timedelta
 
-from pdf_forensics.analysis.doc_checks import parse_pdf_date, _has_explicit_tz
+from pdf_forensics.analysis.doc_checks import (
+    parse_pdf_date, _has_explicit_tz, revision_metadata)
 
 # Cross-source comparisons allow for producers writing two related
 # timestamps a few seconds apart. Same-field comparisons (a value against
@@ -334,7 +335,8 @@ def build_timeline(pdf_path, password=None, exif=None, include_history=True,
             kw = {"password": password} if password else {}
             src = io.BytesIO(data[:end]) if end < len(data) else io.BytesIO(data)
             with pikepdf.open(src, **kw) as pdf:
-                per_rev.append((label, _collect_revision(pdf)))
+                per_rev.append((label, _collect_revision(pdf),
+                                revision_metadata(pdf)[0]))
         except Exception as e:
             skipped.append(f"{label} could not be opened ({e})")
     if not per_rev:
@@ -351,7 +353,7 @@ def build_timeline(pdf_path, password=None, exif=None, include_history=True,
         return parsed[raw]
 
     occs, index = [], {}
-    for pos, (label, items) in enumerate(per_rev):
+    for pos, (label, items, _meta) in enumerate(per_rev):
         for cat, source, field, obj, raw in items:
             key = (cat, source, field, obj)
             if (key, pos) in index:
@@ -434,6 +436,25 @@ def build_timeline(pdf_path, password=None, exif=None, include_history=True,
                      f"{name} goes backwards: {labels[pos]} records an "
                      f"earlier modification than {labels[pos - 1]}. "
                      f"{fmt(ea)}, then {fmt(eb)}.", [ea, eb])
+
+    # Rule 3b: a revision that changes the document's text metadata but
+    # keeps the previous revision's modification dates (a silent edit, as
+    # made by metadata editors such as ExifTool).
+    for pos in range(1, len(per_rev)):
+        fa, fb = per_rev[pos - 1][2], per_rev[pos][2]
+        changed = sorted(k for k in set(fa) | set(fb) if fa.get(k) != fb.get(k))
+        if not changed:
+            continue
+        same = [(val(pos - 1, k), val(pos, k)) for k in (im, xm, xd)]
+        present = [(a, b) for a, b in same if a and b]
+        if present and all(a["raw"] == b["raw"] for a, b in present):
+            shown = ", ".join(changed[:6]) + (" ..." if len(changed) > 6 else "")
+            flag("silent_metadata_edit",
+                 f"{labels[pos]} changed the document metadata ({shown}) but "
+                 f"kept the modification dates of {labels[pos - 1]}: the "
+                 f"document still claims its last modification was "
+                 f"{present[0][1]['utc']:%Y-%m-%d %H:%M:%S} UTC, before "
+                 f"this edit was made.", [b for _, b in present])
 
     created = min([o for pos in range(len(per_rev))
                    for o in (val(pos, ic), val(pos, xc)) if o],

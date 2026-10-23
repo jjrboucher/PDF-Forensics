@@ -264,7 +264,9 @@ def triage_pdf_bytes(data, filename, path, source="Current",
             try:
                 with doc_pk.open_metadata() as xmp:
                     for k, v in xmp.items():
-                        if isinstance(v, (list, tuple)):
+                        if isinstance(v, (set, frozenset)):
+                            val = ", ".join(sorted(_safe_str(x) for x in v))
+                        elif isinstance(v, (list, tuple)):
                             val = ", ".join(_safe_str(x) for x in v)
                         else:
                             val = _safe_str(v)

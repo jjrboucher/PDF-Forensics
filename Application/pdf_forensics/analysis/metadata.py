@@ -40,7 +40,11 @@ def extract_pdf_metadata(doc_pk, doc_mu):
         with doc_pk.open_metadata() as xmp:
             for k, v in xmp.items():
                 key = str(k)
-                if isinstance(v, (list, tuple)):
+                # XMP arrays: rdf:Seq/Alt come back as lists, rdf:Bag as a
+                # set (e.g. dc:creator, dc:subject); join both as text.
+                if isinstance(v, (set, frozenset)):
+                    value = ", ".join(sorted(str(x) for x in v))
+                elif isinstance(v, (list, tuple)):
                     value = ", ".join(str(x) for x in v)
                 else:
                     value = str(v)

@@ -98,6 +98,13 @@ def _meta_lookup(pdf_metadata, source, key_suffix):
     return None
 
 
+def _norm_text(v):
+    """Compare text fields loosely: case, whitespace and list separators
+    (Info "A; B" vs XMP list "A, B") are not differences."""
+    t = re.sub(r"[;,]", ",", str(v or "")).lower()
+    return ",".join(x.strip() for x in t.split(",") if x.strip())
+
+
 def check_metadata_consistency(pdf_metadata):
     """
     Automated cross-checks over the extracted (source, key, value)
@@ -168,18 +175,39 @@ def check_metadata_consistency(pdf_metadata):
                 ),
             })
 
-    if info_producer and xmp_producer and \
-            info_producer.strip() != xmp_producer.strip():
+    # Text fields that the Info dictionary and XMP both carry. ISO 32000-2
+    # (14.3.3) pairs them: Creator ~ xmp:CreatorTool, Author ~ dc:creator,
+    # Title ~ dc:title, Subject ~ dc:description, Keywords ~ pdf:Keywords,
+    # Producer ~ pdf:Producer. Legitimate producers write both in step; a
+    # metadata editor that updates one (or maps a field onto the wrong
+    # counterpart, as ExifTool does when -Creator writes both Info Creator
+    # and dc:creator) leaves them disagreeing.
+    pairs = []
+    for label, info_suffix, xmp_suffix in (
+            ("Producer", "producer", "}producer"),
+            ("Creator (creating application)", "creator", "creatortool"),
+            ("Author", "author", "elements/1.1/}creator"),
+            ("Title", "title", "elements/1.1/}title"),
+            ("Subject", "subject", "elements/1.1/}description"),
+            ("Keywords", "keywords", "}keywords")):
+        iv = _meta_lookup(pdf_metadata, "info_dict", info_suffix)
+        xv = _meta_lookup(pdf_metadata, "xmp", xmp_suffix)
+        if iv and xv and _norm_text(iv) != _norm_text(xv):
+            pairs.append((label, iv, xv))
+    # One finding per disagreeing field, as for the date fields: each
+    # scores separately (Technical Reference Guide, risk weights).
+    for lbl, iv, xv in pairs:
         findings.append({
             "image": None,
             "type": "METADATA_MISMATCH",
             "detail": (
-                "Document-level finding: Info dictionary and XMP stream "
-                "disagree on Producer. Legitimate producers write both "
-                "in sync; manual editing of one source frequently "
-                "leaves the other unchanged.\n"
-                f"    Info dictionary: {info_producer}\n"
-                f"    XMP stream:      {xmp_producer}"
+                f"Document-level finding: Info dictionary and XMP stream "
+                f"disagree on {lbl}. Legitimate producers write both in "
+                f"sync; editing one source with a metadata tool frequently "
+                f"leaves the other unchanged or maps a field onto the wrong "
+                f"counterpart.\n"
+                f"    Info dictionary: {iv}\n"
+                f"    XMP stream:      {xv}"
             ),
         })
     _cmp_dates("CreationDate", info_created, xmp_created)
@@ -535,6 +563,22 @@ def _version_valid(v):
     return v in VALID_PDF_VERSIONS
 
 
+# A declared version must be written as one digit, a dot and one digit
+# (ISO 32000: "1.N"; "2.0"). "1.05", "1.4.0" or "01.4" are not valid ways
+# to write a version even where the numbers could be read as one, and a
+# lenient reading would let them pass (ExifTool accepts "1.05" and writes
+# it to XMP; read as 1.5 it masked a genuine 1.5 anachronism).
+_CANON_VERSION_RE = re.compile(r"^\s*/?(\d)\.(\d)\s*$")
+
+
+def _declared_ok(raw):
+    """True only for a canonically written, published PDF version."""
+    if raw is None:
+        return False
+    m = _CANON_VERSION_RE.match(str(raw))
+    return bool(m) and (int(m.group(1)), int(m.group(2))) in VALID_PDF_VERSIONS
+
+
 def _revision_declarations(data, password=None):
     """Version declarations in each revision of the file, oldest first:
     a list of (label, end_offset, catalog_version, xmp_version), where
@@ -719,11 +763,11 @@ def check_version_anachronism(doc_pk, pdf_path, pdf_metadata, password=None,
 
     # --- VERSION_INVALID: a declared version that does not exist ---
     invalid = []
-    if header_raw is not None and not _version_valid(header_v):
+    if header_raw is not None and not _declared_ok(header_raw):
         invalid.append(f"header %PDF-{header_raw}")
-    if catalog_raw is not None and not _version_valid(catalog_v):
+    if catalog_raw is not None and not _declared_ok(catalog_raw):
         invalid.append(f"Catalog /Version {catalog_raw}")
-    if xmp_raw is not None and not _version_valid(xmp_v):
+    if xmp_raw is not None and not _declared_ok(xmp_raw):
         invalid.append(f"XMP pdf:PDFVersion {xmp_raw}")
     if invalid:
         results.append({
@@ -746,12 +790,14 @@ def check_version_anachronism(doc_pk, pdf_path, pdf_metadata, password=None,
     # --- VERSION_CONFLICT: XMP disagrees, or a declaration changed ---
     results.extend(_version_conflicts(
         doc_pk, pdf_path, header_v, catalog_v, catalog_raw, xmp_v, xmp_raw,
-        password=password, history=history))
+        password=password, history=history, header_raw=header_raw))
 
     # Only real versions take part in the anachronism comparison, so an
     # invalid value (e.g. a fake 9.9) cannot mask a genuine gap.
-    declared_candidates = [v for v in (header_v, catalog_v, xmp_v)
-                           if v is not None and _version_valid(v)]
+    declared_candidates = [v for raw, v in ((header_raw, header_v),
+                                            (catalog_raw, catalog_v),
+                                            (xmp_raw, xmp_v))
+                           if v is not None and _declared_ok(raw)]
     if not declared_candidates:
         # No valid declaration to compare against; do not guess.
         return results
@@ -847,7 +893,8 @@ def check_version_anachronism(doc_pk, pdf_path, pdf_metadata, password=None,
 
 
 def _version_conflicts(doc_pk, pdf_path, header_v, catalog_v, catalog_raw,
-                       xmp_v, xmp_raw, password=None, history=True):
+                       xmp_v, xmp_raw, password=None, history=True,
+                       header_raw=None):
     """VERSION_CONFLICT findings (at most one, listing every reason):
 
     * the XMP pdf:PDFVersion disagrees with the version in effect (the
@@ -859,11 +906,13 @@ def _version_conflicts(doc_pk, pdf_path, header_v, catalog_v, catalog_raw,
       earlier declarations remain in the file.
     """
     reasons = []
-    effective = max([v for v in (header_v, catalog_v)
-                     if v is not None and _version_valid(v)], default=None)
+    header_ok = header_raw is None or _declared_ok(header_raw)
+    effective = max([v for v, ok in ((header_v, header_ok),
+                                     (catalog_v, _declared_ok(catalog_raw)))
+                     if v is not None and ok], default=None)
     # An invalid XMP value is reported by VERSION_INVALID; comparing it
     # here as well would count the same edit twice.
-    if (xmp_v is not None and _version_valid(xmp_v)
+    if (xmp_v is not None and _declared_ok(xmp_raw)
             and effective is not None and xmp_v != effective):
         reasons.append(
             f"The XMP pdf:PDFVersion ({xmp_raw}) disagrees with the version "
@@ -894,7 +943,7 @@ def _version_conflicts(doc_pk, pdf_path, header_v, catalog_v, catalog_raw,
                 # VERSION_MISMATCH); only a lowered, removed or invalid
                 # Catalog version counts here.
                 pa, pb = _parse_pdf_version(a), _parse_pdf_version(b)
-                if (b is not None and _version_valid(pb)
+                if (b is not None and _declared_ok(b)
                         and (a is None or (pa is not None and pb > pa))):
                     continue
             else:
@@ -905,10 +954,11 @@ def _version_conflicts(doc_pk, pdf_path, header_v, catalog_v, catalog_raw,
                 # what a genuine upgrade or re-save writes.
                 pa, pb = _parse_pdf_version(a), _parse_pdf_version(b)
                 cat_v = _parse_pdf_version(cur[2])
-                eff_rev = max([v for v in (header_v, cat_v)
-                               if v is not None and _version_valid(v)],
+                eff_rev = max([v for v, ok in ((header_v, header_ok),
+                                               (cat_v, _declared_ok(cur[2])))
+                               if v is not None and ok],
                               default=None)
-                if (b is not None and _version_valid(pb)
+                if (b is not None and _declared_ok(b)
                         and eff_rev is not None and pb == eff_rev
                         and (a is None or (pa is not None and pb >= pa))):
                     continue
@@ -1014,3 +1064,157 @@ def check_unapplied_redactions(page_pk, page_num):
         except Exception:
             continue
     return findings
+
+
+# ---------------------------------------------------------------------
+# Metadata history across revisions; ExifTool update markers
+# ---------------------------------------------------------------------
+
+# XMP properties compared across revisions (local names, case-insensitive).
+# Dates are covered by the timeline, pdf:PDFVersion by VERSION_CONFLICT,
+# and xmpMM IDs change legitimately on every save.
+_XMP_TEXT_FIELDS = {"creatortool", "creator", "title", "description",
+                    "subject", "keywords", "producer", "author", "rights"}
+_DATE_KEYS = {"CreationDate", "ModDate"}
+_EXIFTOOL_RE = re.compile(rb"%EndExifToolUpdate[ \t]+(\d+)")
+
+
+def revision_metadata(pdf):
+    """Text metadata of one opened revision, and its modification dates:
+    ({"Info /Creator": value, "XMP xmp:CreatorTool": value, ...},
+     (Info ModDate, XMP ModifyDate, XMP MetadataDate))."""
+    fields = {}
+    try:
+        info = pdf.trailer.get("/Info")
+        if info is not None:
+            for k, v in info.items():
+                name = str(k).lstrip("/")
+                if name not in _DATE_KEYS:
+                    fields[f"Info /{name}"] = str(v)
+            mod = info.get("/ModDate")
+            mod = str(mod) if mod is not None else None
+        else:
+            mod = None
+    except Exception:
+        mod = None
+    xmod = xmd = None
+    try:
+        meta = pdf.open_metadata()
+        for k, v in meta.items():
+            key = str(k)
+            local = key.rsplit("}", 1)[-1] if "}" in key else key.split(":")[-1]
+            if local.lower() in _XMP_TEXT_FIELDS:
+                prefix = {"http://purl.org/dc/elements/1.1/": "dc",
+                          "http://ns.adobe.com/xap/1.0/": "xmp",
+                          "http://ns.adobe.com/pdf/1.3/": "pdf"}.get(
+                    key[1:].split("}")[0] if key.startswith("{") else "", "")
+                label = f"{prefix}:{local}" if prefix else local
+                if isinstance(v, (set, frozenset)):
+                    val = ", ".join(sorted(str(x) for x in v))
+                elif isinstance(v, (list, tuple)):
+                    val = ", ".join(str(x) for x in v)
+                else:
+                    val = str(v)
+                fields[f"XMP {label}"] = val
+            elif local == "ModifyDate":
+                xmod = str(v)
+            elif local == "MetadataDate":
+                xmd = str(v)
+    except Exception:
+        pass
+    return fields, (mod, xmod, xmd)
+
+
+def check_metadata_history(pdf_path, password=None):
+    """METADATA_REVISED: text metadata (Info dictionary or XMP) added,
+    changed or removed by a later incremental update; a revision that
+    changes metadata without changing any modification date is called
+    out as a silent edit. EXIFTOOL_EDIT: ExifTool's own update marker."""
+    import io
+    try:
+        import pikepdf
+        from pdf_forensics.analysis.metadata import classify_prior_versions
+        with open(pdf_path, "rb") as fh:
+            data = fh.read()
+    except Exception:
+        return []
+    revs = []
+    try:
+        for c in classify_prior_versions(data, password=password):
+            if c.get("status") in ("valid", "encrypted"):
+                revs.append((f"revision {c['version_number']}", c["end"]))
+    except Exception:
+        pass
+    revs.append(("current", len(data)))
+    states = []
+    for label, end in revs:
+        try:
+            kw = {"password": password} if password else {}
+            with pikepdf.open(io.BytesIO(data[:end]), **kw) as pdf:
+                states.append((label, end) + revision_metadata(pdf))
+        except Exception:
+            continue
+
+    results = []
+    changes, silent = [], []
+    for (la, ea, fa, da), (lb, eb, fb, db) in zip(states, states[1:]):
+        diff = []
+        for k in sorted(set(fa) | set(fb)):
+            a, b = fa.get(k), fb.get(k)
+            if a != b:
+                what = ("added" if a is None else "removed" if b is None
+                        else "changed")
+                diff.append(f"{k} {what}: {a if a is not None else '(absent)'}"
+                            f" \u2192 {b if b is not None else '(absent)'}")
+        if not diff:
+            continue
+        dates_same = any(x is not None for x in da + db) and da == db
+        if dates_same:
+            silent.append(lb)
+        changes.append(f"In {lb} (update ending at byte {eb:,})"
+                       + (", WITHOUT any change to the modification dates"
+                          if dates_same else "") + ":\n        - "
+                       + "\n        - ".join(diff))
+    if changes:
+        detail = ("Document-level finding: document metadata was changed by "
+                  "a later incremental update.\n    " + "\n    ".join(changes))
+        if silent:
+            detail += ("\n    Silent edit: " + ", ".join(silent)
+                       + " changed metadata but kept the previous "
+                       "revision's Info ModDate and XMP ModifyDate/"
+                       "MetadataDate. Software that saves a document "
+                       "normally updates its modification date; a metadata "
+                       "editor such as ExifTool does not, so the document "
+                       "still claims to have been last modified before the "
+                       "edit (see the Timeline Analysis report).")
+        detail += ("\n    The earlier values remain in the file and are shown "
+                   "in each prior version's row of the PDF Metadata report. "
+                   "A legitimate re-save can also change metadata (for "
+                   "example the Producer); corroborate with the producer of "
+                   "the update and the Incremental Updates report.")
+        results.append({"image": None, "type": "METADATA_REVISED",
+                        "detail": detail})
+
+    markers = [int(m.group(1)) for m in _EXIFTOOL_RE.finditer(data)]
+    if markers:
+        ends = {end: label for label, end, *_ in states}
+        lines = []
+        for n in markers:
+            rev = ends.get(n)
+            lines.append(f"%EndExifToolUpdate {n}: the file before this "
+                         f"ExifTool edit is the first {n:,} bytes"
+                         + (f" ({rev}, extracted as a prior version)"
+                            if rev else ""))
+        results.append({
+            "image": None, "type": "EXIFTOOL_EDIT",
+            "detail": (
+                "Document-level finding: the file was edited with ExifTool. "
+                "ExifTool writes PDF metadata as an incremental update and "
+                "ends it with a %EndExifToolUpdate comment recording the "
+                "original file length, so the edit can be identified and "
+                "undone.\n    " + "\n    ".join(lines) +
+                "\n    ExifTool cannot change the header or page content this "
+                "way; compare the prior version's metadata with the current "
+                "file's (see METADATA_REVISED and VERSION_CONFLICT)."),
+        })
+    return results

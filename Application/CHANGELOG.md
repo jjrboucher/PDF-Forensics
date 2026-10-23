@@ -1,6 +1,60 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.1.1 — 2026-10-22 (build 2026-10-22d)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.1.2 — 2026-10-22 (build 2026-10-22e)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.1.2 — Release (2026-10-22, build 2026-10-22e)
+
+No database schema change. Two new finding types are added to existing
+databases automatically. Re-analyse documents to apply the new checks.
+Prompted by a file edited with
+`exiftool -PDFVersion="1.05" -Creator=... -Author=... -Producer=...`,
+of which 1.1.1 reported only VERSION_CONFLICT.
+
+### Version format: "1.05" is invalid, and no longer masks an anachronism
+- Declared versions were read leniently, so ExifTool's XMP pdf:PDFVersion
+  "1.05" counted as 1.5. That raised the highest declared version to 1.5
+  and hid a genuine 1.5 anachronism (cross-reference streams under a 1.4
+  header) that the same file's prior version still showed. A version must
+  now be written as one digit, a dot and one digit (1.0 to 1.7, 2.0);
+  anything else is VERSION_INVALID and excluded from the comparison.
+  (`analysis/doc_checks.py`)
+
+### Info vs XMP: six text fields compared
+- METADATA_MISMATCH compared only Producer and the two dates. It now also
+  compares Creator with xmp:CreatorTool, Author with dc:creator, Title with
+  dc:title, Subject with dc:description and Keywords with pdf:Keywords,
+  ignoring case, spacing and list separators; one finding per field.
+  ExifTool's -Creator writes the Info Creator and XMP dc:creator (the
+  author) and leaves xmp:CreatorTool unchanged; both disagreements are now
+  reported.
+
+### New: metadata changed by a later revision (METADATA_REVISED)
+- Each revision's text metadata (Info dictionary and XMP) is compared with
+  the revision before; every field added, changed or removed is listed
+  with both values (MEDIUM, risk +15). A revision that changes metadata
+  but keeps every modification date is called out as a silent edit.
+- Timeline: the silent edit is also flagged there, on the unchanged
+  modification dates of that revision. (`analysis/timeline.py`)
+
+### New: ExifTool updates identified (EXIFTOOL_EDIT)
+- ExifTool ends each update with `%EndExifToolUpdate` and the original
+  file length. The marker is now reported (MEDIUM, risk +15), naming the
+  prior version that is the original file, and the Incremental Updates
+  report has an Editing Tool Identified column. (`reports/queries.py`)
+
+### XMP arrays stored correctly
+- XMP properties that are unordered lists (rdf:Bag, such as dc:creator in
+  some files) were stored as Python set text, e.g. {'Steve Miller Band'}.
+  They are now stored as plain text in analysis and triage.
+  (`analysis/metadata.py`, `analysis/triage.py`)
+
+### Documentation
+- Technical Reference Guide: new section 4.6 (metadata changes across
+  revisions, silent edits, ExifTool markers) with a table-of-contents
+  entry; 4.4 (version format), 4.5 (silent edits); finding-type and
+  risk-weight tables. Risk Scoring technical guide and HTML Reports
+  technical guide updated. All guides state version 1.1.2, build
+  2026-10-22e.
 
 ## Version 1.1.1 — Release (2026-10-22, build 2026-10-22d)
 

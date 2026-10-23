@@ -56,6 +56,8 @@ DOC_RISK_WEIGHTS = {
     "VERSION_INVALID":       25,  # a declared version that does not exist
     "VERSION_CONFLICT":      15,  # XMP vs effective version, or changed by an update
     "TIMELINE_INCONSISTENT": 20,  # timestamps out of chronological order
+    "METADATA_REVISED":      15,  # metadata changed by a later revision
+    "EXIFTOOL_EDIT":         15,  # ExifTool's %EndExifToolUpdate marker
     "XMP_ID_ANOMALY":         5,  # DocumentID == InstanceID
     "STRUCTURAL_WARNING":     5,  # qpdf structural warnings present
 }
