@@ -445,6 +445,18 @@ def _cli_report(args, session):
     except Exception as e:
         ov_path = None
         print(f"  Document Risk Overview skipped: {e}")
+    try:
+        from pdf_forensics.reports.timeline_xlsx import generate_timeline_xlsx
+        tl_path = os.path.join(
+            out_dir, session.make_filename("timeline-analysis", "xlsx"))
+        ntl = generate_timeline_xlsx(
+            args.database, tl_path, session=session,
+            case_number=session.case_number)
+        session.register_output("timeline_xlsx", tl_path)
+        print(f"  Timeline Analysis spreadsheet: {ntl} document(s) -> "
+              f"{os.path.basename(tl_path)}")
+    except Exception as e:
+        print(f"  Timeline Analysis spreadsheet skipped: {e}")
     from pdf_forensics.reports.case_index import refresh_case_index
     _idx = refresh_case_index(session, log=print)
     if _idx:

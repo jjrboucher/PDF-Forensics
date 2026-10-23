@@ -1546,6 +1546,16 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     case_number=(session.case_number if session else None))
         except Exception:
             pass
+        # and the Timeline Analysis spreadsheet, if present
+        try:
+            from pdf_forensics.reports.timeline_xlsx import (
+                generate_timeline_xlsx)
+            for tx in glob.glob(os.path.join(glob.escape(rdir), "*timeline-analysis*.xlsx")):
+                generate_timeline_xlsx(
+                    db, tx, session=session,
+                    case_number=(session.case_number if session else None))
+        except Exception:
+            pass
         if done:
             log_to_gui(f"  \u21bb Rebuilt {done} report(s) to include the "
                        f"newly opened file(s)", "dim")
@@ -2277,6 +2287,21 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             except Exception as e:
                 ov_path = None
                 r_log(f"  Document Risk Overview skipped — {e}", "dim")
+            # Timeline Analysis (Excel), listed under Spreadsheets in the
+            # case index.
+            try:
+                from pdf_forensics.reports.timeline_xlsx import (
+                    generate_timeline_xlsx)
+                tl_path = os.path.join(
+                    out_dir, session.make_filename("timeline-analysis", "xlsx"))
+                ntl = generate_timeline_xlsx(
+                    db, tl_path, session=session,
+                    case_number=session.case_number)
+                session.register_output("timeline_xlsx", tl_path)
+                r_log(f"  \u2713 Timeline Analysis (xlsx) — "
+                      f"{ntl} document(s)", "success")
+            except Exception as e:
+                r_log(f"  Timeline Analysis spreadsheet skipped — {e}", "dim")
             from pdf_forensics.reports.case_index import (
                 refresh_case_index)
             if refresh_case_index(session, log=lambda m: r_log(f"  {m}",

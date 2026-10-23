@@ -420,9 +420,10 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
             doc_findings.extend(timeline_findings(timeline))
             if session:
                 session.log(
-                    f"  Timeline: {len(timeline['events'])} timestamp(s) in "
-                    f"{timeline['revisions']} revision(s), "
-                    f"{len(timeline['issues'])} out of order, "
+                    f"  Timeline: {len(timeline['occurrences'])} timestamp(s) "
+                    f"in {len(timeline['revisions'])} revision(s) "
+                    f"({', '.join(timeline['revisions'])}), "
+                    f"{len(timeline['issues'])} inconsistency(ies), "
                     f"{timeline['assumed_utc']} with no timezone "
                     f"(assumed UTC)")
         except Exception as e:

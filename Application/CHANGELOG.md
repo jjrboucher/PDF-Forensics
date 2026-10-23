@@ -1,6 +1,49 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.1.0 — 2026-10-22 (build 2026-10-22c)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.1.1 — 2026-10-22 (build 2026-10-22d)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.1.1 — Release (2026-10-22, build 2026-10-22d)
+
+No database schema change (still revision 10). Re-analyse documents to
+record their timelines revision by revision.
+
+### Timeline Analysis: every revision listed in full
+- 1.1.0 listed each distinct timestamp once, with the span of revisions
+  in which it appeared ("revision 2 to current"). The checks did cover
+  every revision, but the report did not show it: a prior version's
+  timestamps had no rows of their own unless they changed, and the
+  prior-version sections said only "included in parent". The timeline
+  now lists every timestamp of every revision, including values
+  unchanged from the revision before. (`analysis/timeline.py`)
+- Each prior version's section lists the timestamps of its revision, with
+  its own verdict (CONSISTENT or INCONSISTENT, as checked within its
+  parent's timeline), so filtering on a prior version shows its place in
+  the timeline directly.
+- The parent's summary states the revisions examined, naming each by its
+  extracted file ("revision 2 (..._version2.pdf)"), and explains any
+  %%EOF marker that is not a revision (for example the first marker of a
+  linearized file). The Revision column now follows the UTC column.
+- A comment edited in a later revision is now checked against that
+  revision's save as well as the revision where it first appeared.
+- A problem that persists across revisions is reported once in the
+  TIMELINE_INCONSISTENT finding, while every revision's row is flagged.
+- Databases from 1.1.0 still display; their rows keep the old spans.
+  (`reports/queries.py`)
+
+### New: Timeline Analysis spreadsheet
+- An Excel workbook with the same content, generated with the reports
+  (GUI and command line) and listed under Spreadsheets in the case index:
+  a timeline sheet (flagged rows and verdicts highlighted, filters,
+  frozen header) and a summary sheet (one row per document: verdict,
+  timestamps, flagged, timestamps assumed UTC). A note above each sheet
+  states that all times are normalised to UTC. Rebuilt with the reports
+  after a password retry. (`reports/timeline_xlsx.py`, `gui/app.py`,
+  `cli.py`, `reports/case_index.py`)
+
+### Documentation
+- Technical Reference Guide 4.5, Risk Scoring technical guide 5.5, HTML
+  Reports guides (Timeline Analysis report and the new spreadsheet);
+  all guides' covers state version 1.1.1, build 2026-10-22d.
 
 ## Version 1.1.0 — Release (2026-10-22, build 2026-10-22c)
 

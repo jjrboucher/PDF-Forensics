@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.1.0-informational)
+![Version](https://img.shields.io/badge/version-1.1.1-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -73,10 +73,11 @@ the command line for scripted and batch work.
 
 **Outputs**
 - 22 interactive HTML reports (sortable, filterable, exportable to CSV),
-  including a Timeline Analysis of every timestamp in each document and its
-  prior versions, normalised to UTC.
+  including a Timeline Analysis of every timestamp of every revision of each
+  document, normalised to UTC (also as an Excel spreadsheet).
 - Relationship graphs of reused images across pages and documents.
-- Excel triage spreadsheet and a Document Risk Overview spreadsheet.
+- Excel triage spreadsheet, Document Risk Overview spreadsheet and Timeline
+  Analysis spreadsheet.
 - A **case index**: one landing page linking to every output for the case, with
   a manifest of output files and their MD5 hashes.
 - All results stored in a SQLite database for repeatable, auditable review.
@@ -269,7 +270,7 @@ positives, counter-verification procedures and chain of custody in depth.
 
 ## Versioning
 
-This is **version 1.1.0** (build 2026-10-22c), the first feature release
+This is **version 1.1.1** (build 2026-10-22d), an update to the first feature release
 after version 1.0.0, the first frozen release. Changes after 1.0 are released
 as incremental updates (1.0.1, 1.0.2, …) and new features raise the minor
 version (1.1.0); each release has its own build marker.

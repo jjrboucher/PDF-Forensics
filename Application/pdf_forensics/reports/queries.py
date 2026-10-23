@@ -17,6 +17,7 @@ col_type is one of:
   - "hash"    : hash string, displayed monospace, prefix-match filter
 """
 
+import re
 from collections import OrderedDict
 
 
@@ -420,89 +421,154 @@ def _query_exif_pivoted(conn):
 # Report definitions
 # ===================================================================
 
+def _rev_number(label):
+    m = re.match(r"revision (\d+)", label or "")
+    return int(m.group(1)) if m else None
+
+
+def _span_includes(span, n):
+    """Whether a revision label or a 1.1.0-style span ("revision 2 to
+    current", "revision 2 to revision 3") includes revision n."""
+    span = span or ""
+    if " to " not in span:
+        return _rev_number(span) == n
+    a, b = span.split(" to ", 1)
+    lo = _rev_number(a)
+    hi = None if b.strip() == "current" else _rev_number(b)
+    if lo is None:
+        return False
+    return lo <= n and (hi is None or n <= hi)
+
+
 def _query_timeline(conn):
-    """Timeline Analysis: for each analysed document, a summary row (the
-    verdict) followed by every timestamp in chronological (UTC) order."""
+    """Timeline Analysis: for each submitted document, a SUMMARY row (the
+    verdict and the revisions examined) followed by every timestamp of
+    every revision in chronological (UTC) order. Each prior version gets
+    its own section listing the timestamps of its revision, as checked
+    within its parent's timeline."""
     cur = conn.cursor()
-    cur.execute("""
+    docs = cur.execute("""
         SELECT a.id, a.pdf_filename, a.pdf_md5, a.version_number,
-               (SELECT p.pdf_filename FROM analyses p
-                 WHERE p.id = a.source_analysis_id)
+               a.source_analysis_id
         FROM analyses a ORDER BY a.pdf_filename, a.id
-    """)
-    docs = cur.fetchall()
+    """).fetchall()
     have_table = cur.execute(
         "SELECT name FROM sqlite_master WHERE type='table' "
         "AND name='timeline_events'").fetchone() is not None
+    by_id = {d[0]: d for d in docs}
+    # Prior-version filenames by (parent id, version number).
+    vname = {(d[4], d[3]): d[1] for d in docs if d[3] is not None}
     columns = [
         {"name": "Filename", "label": "Filename", "col_type": "text"},
         {"name": "#", "label": "#", "col_type": "numeric"},
         {"name": "Status", "label": "Status", "col_type": "text"},
         {"name": "UTC", "label": "UTC (normalised)", "col_type": "text"},
+        {"name": "Revision", "label": "Revision", "col_type": "text"},
         {"name": "Timezone", "label": "Timezone in source", "col_type": "text"},
         {"name": "Raw value", "label": "Raw value", "col_type": "text"},
         {"name": "Category", "label": "Category", "col_type": "text"},
         {"name": "Source", "label": "Source", "col_type": "text"},
         {"name": "Field", "label": "Field", "col_type": "text"},
-        {"name": "Revisions", "label": "Revisions", "col_type": "text"},
         {"name": "Issue", "label": "Issue", "col_type": "text"},
         {"name": "Object", "label": "Object (for validation)", "col_type": "text"},
         {"name": "PDF MD5", "label": "PDF MD5", "col_type": "hash"},
     ]
-    data = []
-    for aid, fname, md5, vnum, parent in docs:
-        rows = []
-        if have_table:
-            rows = cur.execute("""
-                SELECT seq, revisions, category, source, field, obj_ref,
-                       raw_value, timezone, utc, status, issue
-                FROM timeline_events WHERE analysis_id = ? ORDER BY seq
-            """, (aid,)).fetchall()
-        base = {"Filename": fname, "PDF MD5": md5, "#": 0, "UTC": "",
-                "Timezone": "", "Raw value": "", "Category": "",
-                "Source": "", "Field": "", "Revisions": "", "Object": ""}
-        if not rows:
-            if vnum is not None:
-                verdict = ("INCLUDED IN PARENT",
-                           f"Prior version {vnum}: its timestamps form part of "
-                           f"the timeline of {parent or 'its submitted file'}.")
-            else:
-                verdict = ("NOT AVAILABLE",
-                           "No timeline was recorded for this document. "
-                           "Documents analysed before version 1.1.0 have none; "
-                           "re-analyse to build it.")
-            data.append(dict(base, Status=verdict[0], Issue=verdict[1],
-                             Source="SUMMARY"))
-            continue
-        flagged = [r for r in rows if r[9] == "FLAGGED"]
+
+    def rows_for(aid):
+        if not have_table:
+            return None, []
+        rows = cur.execute("""
+            SELECT seq, revisions, category, source, field, obj_ref,
+                   raw_value, timezone, utc, status, issue
+            FROM timeline_events WHERE analysis_id = ? ORDER BY seq
+        """, (aid,)).fetchall()
+        meta = next((r for r in rows if r[9] == "META"), None)
+        return meta, [r for r in rows if r[9] != "META"]
+
+    def rev_label(parent_id, label):
+        n = _rev_number(label)
+        if n is not None and (parent_id, n) in vname and " to " not in label:
+            return f"{label} ({vname[(parent_id, n)]})"
+        return label
+
+    def summary(fname, md5, status, msg):
+        return {"Filename": fname, "#": 0, "Status": status, "UTC": "",
+                "Revision": "", "Timezone": "", "Raw value": "",
+                "Category": "", "Source": "SUMMARY", "Field": "",
+                "Issue": msg, "Object": "", "PDF MD5": md5}
+
+    def row(fname, md5, parent_id, r, seq=None):
+        (s_, revisions, cat, src, field, obj, raw, tz, utc, st, issue) = r
+        return {"Filename": fname, "#": seq if seq is not None else s_,
+                "Status": st, "UTC": utc or "",
+                "Revision": rev_label(parent_id, revisions),
+                "Timezone": tz, "Raw value": raw or "", "Category": cat,
+                "Source": src, "Field": field, "Issue": issue or "",
+                "Object": obj or "", "PDF MD5": md5}
+
+    def notes(rows):
         assumed = sum(1 for r in rows if r[7] == "none (assumed UTC)")
         unparse = sum(1 for r in rows if r[9] == "UNPARSEABLE")
-        revs = rows[0][1]
-        if flagged:
-            status = "INCONSISTENT"
-            msg = (f"{len(flagged)} of {len(rows)} timestamp(s) are out of "
-                   f"chronological order (see the rows marked FLAGGED).")
-        else:
-            status = "CONSISTENT"
-            msg = (f"All {len(rows) - unparse} timestamp(s) are in "
-                   f"chronological order.")
         extra = []
         if assumed:
             extra.append(f"{assumed} carry no timezone and were assumed to "
                          f"be UTC")
         if unparse:
             extra.append(f"{unparse} could not be parsed and are listed last")
-        if extra:
-            msg += " " + "; ".join(extra).capitalize() + "."
-        data.append(dict(base, Status=status, Issue=msg, Source="SUMMARY"))
-        for (seq, revisions, cat, src, field, obj, raw, tz, utc, st,
-             issue) in rows:
-            data.append({"Filename": fname, "#": seq, "Status": st,
-                         "UTC": utc or "", "Timezone": tz,
-                         "Raw value": raw or "", "Category": cat,
-                         "Source": src, "Field": field,
-                         "Revisions": revisions, "Issue": issue or "",
-                         "Object": obj or "", "PDF MD5": md5})
+        return (" " + "; ".join(extra).capitalize() + ".") if extra else ""
+
+    data = []
+    for aid, fname, md5, vnum, parent_id in docs:
+        if vnum is not None:
+            pmeta, prow = rows_for(parent_id) if parent_id else (None, [])
+            pname = by_id[parent_id][1] if parent_id in by_id else "its submitted file"
+            mine = [r for r in prow if _span_includes(r[1], vnum)]
+            if not mine:
+                data.append(summary(fname, md5, "NOT AVAILABLE",
+                    f"Prior version {vnum} of {pname}: no timestamps were "
+                    f"recorded for revision {vnum} (it could not be opened, "
+                    f"or the parent was analysed before version 1.1.0)."))
+                continue
+            flagged = [r for r in mine if r[9] == "FLAGGED"]
+            st = "INCONSISTENT" if flagged else "CONSISTENT"
+            msg = (f"Prior version {vnum} of {pname} (revision {vnum} in "
+                   f"its timeline): {len(mine)} timestamp(s), checked "
+                   f"within the parent's timeline; "
+                   + (f"{len(flagged)} flagged." if flagged
+                      else "all in chronological order.")
+                   + notes(mine)
+                   + " The parent's section shows the full timeline.")
+            data.append(summary(fname, md5, st, msg))
+            for k, r in enumerate(mine, 1):
+                data.append(row(fname, md5, parent_id, r, seq=k))
+            continue
+        meta, rows = rows_for(aid)
+        if not rows:
+            data.append(summary(fname, md5, "NOT AVAILABLE",
+                "No timeline was recorded for this document. Documents "
+                "analysed before version 1.1.0 have none; re-analyse to "
+                "build it."))
+            continue
+        flagged = [r for r in rows if r[9] == "FLAGGED"]
+        unparse = sum(1 for r in rows if r[9] == "UNPARSEABLE")
+        revs = [x.strip() for x in (meta[1] if meta else "").split(",") if x.strip()]
+        cover = (f" across {len(revs)} revision(s): "
+                 + ", ".join(rev_label(aid, x) for x in revs) + "."
+                 if revs else ".")
+        if flagged:
+            st = "INCONSISTENT"
+            msg = (f"{len(flagged)} of {len(rows)} timestamp(s) are out of "
+                   f"chronological order (marked FLAGGED){cover}")
+        else:
+            st = "CONSISTENT"
+            msg = (f"All {len(rows) - unparse} timestamp(s) are in "
+                   f"chronological order{cover}")
+        msg += notes(rows)
+        if meta and meta[10]:
+            msg += " " + " ".join(n.rstrip(".") + "." for n in meta[10].split("\n"))
+        data.append(summary(fname, md5, st, msg))
+        for r in rows:
+            data.append(row(fname, md5, aid, r))
     return columns, data
 
 
@@ -1216,9 +1282,10 @@ REPORTS = [
         "id": "timeline",
         "name": "Timeline Analysis",
         "description":
-            "Every timestamp in each document, across all its revisions "
-            "(each prior version recovered from an incremental update), in "
-            "chronological order: Info dictionary and XMP dates, XMP edit "
+            "Every timestamp of every revision of each document (each prior "
+            "version recovered from an incremental update, and the current "
+            "file), listed revision by revision even when a value is "
+            "unchanged, in chronological order: Info dictionary and XMP dates, XMP edit "
             "history, comments and other annotations, digital signatures, "
             "embedded files, and photo EXIF capture dates. ALL TIMES ARE "
             "NORMALISED TO UTC for comparison; the raw value and whether it "
@@ -1227,7 +1294,9 @@ REPORTS = [
             "involving one of them may reflect an unknown local offset (up "
             "to 14 hours). Each document starts with a SUMMARY row: "
             "CONSISTENT when every timestamp is in order, INCONSISTENT when "
-            "any is not. Rows marked FLAGGED break an expected order: a "
+            "any is not, with the revisions examined. Each prior version "
+            "also has its own section listing the timestamps of its "
+            "revision, as checked within its parent's timeline. Rows marked FLAGGED break an expected order: a "
             "modified date before its created date; a creation date changed "
             "by a later update; a modification date that goes backwards "
             "from one revision to the next; XMP history out of order or "

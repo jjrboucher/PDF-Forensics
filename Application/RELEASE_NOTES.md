@@ -1,5 +1,41 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.1.1
+
+**Released:** 2026-10-22 · **Build:** 2026-10-22d · **Database schema:** revision 10 (unchanged)
+
+### What changed
+
+- **Timeline Analysis lists every revision in full.** Each prior version's
+  timestamps are listed, even when unchanged from the next revision, and
+  each prior version has its own section and verdict. The summary names
+  the revisions examined and explains any %%EOF marker that is not a
+  revision. (The checks already covered every revision in 1.1.0; the
+  report now shows it.)
+- **New Timeline Analysis spreadsheet,** listed under Spreadsheets in the
+  case index: the full timeline plus a one-row-per-document summary.
+
+### Upgrading
+
+Replace the application folder with the 1.1.1 package. No database
+migration is needed. Re-analyse documents to record their timelines
+revision by revision; documents analysed with 1.1.0 still display.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.1.1.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.1.1.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.1.1 (build 2026-10-22d)`.
+
+---
+
 ## Version 1.1.0
 
 **Released:** 2026-10-22 · **Build:** 2026-10-22c · **Database schema:** revision 10

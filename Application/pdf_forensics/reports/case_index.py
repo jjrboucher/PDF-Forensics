@@ -340,7 +340,8 @@ def _submitted_html(st):
 def _scan_case(root):
     cache = _HashCache(root)
     data = {"dbs": {}, "reports": [], "visual": [], "graphs": [],
-            "triage": [], "risk_overview": [], "logs": [], "other": [],
+            "triage": [], "risk_overview": [], "timeline_xlsx": [],
+            "logs": [], "other": [],
             "images": [], "versions": []}
 
     # Databases at the case root.
@@ -385,6 +386,10 @@ def _scan_case(root):
             db, build = _xlsx_db_and_build(p)
             data["risk_overview"].append(_file_rec(
                 p, root, cache, "risk_overview", db=db, build=build))
+        elif "timeline-analysis" in low and low.endswith(".xlsx"):
+            db, build = _xlsx_db_and_build(p)
+            data["timeline_xlsx"].append(_file_rec(
+                p, root, cache, "timeline_xlsx", db=db, build=build))
         elif "_triage" in low and low.endswith(".xlsx"):
             data["triage"].append(_file_rec(p, root, cache, "triage"))
         else:
@@ -441,7 +446,8 @@ def _scan_case(root):
     # Link outputs to databases; fall back to a matching timestamp.
     known = set(data["dbs"])
     by_ts = {d["ts"]: n for n, d in data["dbs"].items() if d["ts"]}
-    for key in ("reports", "visual", "graphs", "risk_overview"):
+    for key in ("reports", "visual", "graphs", "risk_overview",
+                "timeline_xlsx"):
         for rec in data[key]:
             db = rec.get("db")
             if db not in known:
@@ -671,7 +677,8 @@ def generate_case_index(case_root, case_number=None, session=None):
                  key=lambda d: (d["ts"] or "", d["mtime"]), reverse=True)
     db_keys = [d["name"] for d in dbs]
     has_unlinked = any(r["db"] == UNLINKED for k in
-                       ("reports", "visual", "graphs", "risk_overview")
+                       ("reports", "visual", "graphs", "risk_overview",
+                        "timeline_xlsx")
                        for r in data[k])
     if has_unlinked:
         db_keys.append(UNLINKED)
@@ -718,7 +725,7 @@ def generate_case_index(case_root, case_number=None, session=None):
         d = data["dbs"][k]
         st = d["stats"]
         builds = {r["build"] for kind in ("reports", "visual", "graphs",
-                                           "risk_overview")
+                                           "risk_overview", "timeline_xlsx")
                   for r in outs(kind, k) if r.get("build")}
         if d.get("build"):
             builds.add(d["build"])
@@ -773,7 +780,8 @@ def generate_case_index(case_root, case_number=None, session=None):
     for d in dbs:
         st = d["stats"]
         n_out = sum(len(outs(kind, d["name"])) for kind in
-                    ("reports", "visual", "graphs", "risk_overview"))
+                    ("reports", "visual", "graphs", "risk_overview",
+                     "timeline_xlsx"))
         sess_rows.append(
             f'<tr><td><a href="#overview" class="pick" '
             f'data-pick="{_db_key(d["name"])}">'
@@ -822,9 +830,14 @@ def generate_case_index(case_root, case_number=None, session=None):
                             "signal counts; sortable and filterable.",
                             ("Excel", "xls"))
                  for r in _newest(outs("risk_overview", k))]
+        cards += [_file_card(r, "Timeline Analysis",
+                             "Every timestamp of every revision of each "
+                             "document, normalised to UTC, with a verdict "
+                             "per document and a summary sheet.",
+                             ("Excel", "xls"))
+                  for r in _newest(outs("timeline_xlsx", k))]
         sp.append(per_db(k, f'<div class="grid">{"".join(cards)}</div>'
-                         if cards else _empty("No risk overview "
-                                              "spreadsheet for this "
+                         if cards else _empty("No spreadsheets for this "
                                               "database yet.")))
     tri = [_file_card(r, "Triage Spreadsheet",
                       "Fast pre-analysis scan: metadata and counts per PDF, "
@@ -889,6 +902,7 @@ def generate_case_index(case_root, case_number=None, session=None):
     for kind_key, label in (("dbs", "Database"), ("reports", "Report"),
                             ("visual", "Visual report"), ("graphs", "Graph"),
                             ("risk_overview", "Spreadsheet"),
+                            ("timeline_xlsx", "Spreadsheet"),
                             ("triage", "Spreadsheet"), ("logs", "Log"),
                             ("other", "Other")):
         recs = (list(data[kind_key].values()) if kind_key == "dbs"
