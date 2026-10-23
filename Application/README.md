@@ -31,6 +31,7 @@ the command line for scripted and batch work.
 - [Encrypted PDFs](#encrypted-pdfs)
 - [Documentation](#documentation)
 - [Forensic handling](#forensic-handling)
+- [A caveat about metadata](#a-caveat-about-metadata)
 - [Versioning](#versioning)
 - [Disclaimer](#disclaimer)
 - [License](#license)
@@ -268,9 +269,44 @@ positives, counter-verification procedures and chain of custody in depth.
   terminal and labelled with the file they came from).
 - **Findings are leads, not conclusions.** Soft indicators are labelled as
   such, and each report section points back to its source data so findings can
-  be verified independently.
+  be verified independently. See also [A caveat about metadata](#a-caveat-about-metadata).
 - **Reproducibility.** Every output records the build that produced it, and the
   case index records each output's MD5.
+
+## A caveat about metadata
+
+The application reports what is written in the PDF: the dates, application
+names, authors, version numbers and other metadata fields recorded in each
+version of the document. It cannot know whether those values are true. A
+value may be inaccurate for reasons that range from deliberate anti-forensics
+(a field edited to mislead) to entirely benign ones, such as a PDF
+application or library that writes a field incorrectly, leaves it out of
+date, or omits it.
+
+Findings that rest on metadata are therefore leads to examine, not
+conclusions. Two common situations produce findings that have an innocent
+explanation:
+
+- **A document edited with several applications.** A PDF created with
+  application A, edited with application B (producing a second version) and
+  edited again with application C (a third version) records a different
+  producing application in each version. The application flags the change
+  between versions for your attention, and it adds to the document's risk
+  score (METADATA_REVISED, and METADATA_MISMATCH where an application updated
+  only one of the Info dictionary and the XMP metadata). If the document's
+  known history accounts for those applications, the inconsistency has a
+  proper explanation.
+- **An application that does not write every field.** Some software updates
+  one metadata store but not the other, does not update a modification date
+  when it saves, or leaves a field out of a later version altogether. Each of
+  these can raise a finding for your review (an Info/XMP mismatch, a field
+  removed by a later version, a timeline inconsistency) whose cause is how
+  the software behaves rather than any attempt to deceive.
+
+Weigh each finding against everything else known about the document: how it
+was produced and handled, the software its authors use, its content, and the
+other findings. Verify independently anything you rely on; the Technical
+Reference Guide describes counter-verification procedures for each artifact.
 
 ## Versioning
 
