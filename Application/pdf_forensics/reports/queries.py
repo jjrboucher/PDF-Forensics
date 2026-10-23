@@ -488,7 +488,9 @@ def _query_timeline(conn):
     def rev_label(parent_id, label):
         n = _rev_number(label)
         if n is not None and (parent_id, n) in vname and " to " not in label:
-            return f"{label} ({vname[(parent_id, n)]})"
+            return re.sub(r"^(revision \d+)",
+                          lambda m: f"{m.group(1)} ({vname[(parent_id, n)]})",
+                          label, count=1)
         return label
 
     def summary(fname, md5, status, msg):

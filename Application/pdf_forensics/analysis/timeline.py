@@ -31,7 +31,8 @@ import re
 from datetime import datetime, timezone, timedelta
 
 from pdf_forensics.analysis.doc_checks import (
-    parse_pdf_date, _has_explicit_tz, revision_metadata)
+    parse_pdf_date, _has_explicit_tz, revision_metadata, exiftool_attribution,
+    ATTRIBUTION_CAVEAT)
 
 # Cross-source comparisons allow for producers writing two related
 # timestamps a few seconds apart. Same-field comparisons (a value against
@@ -342,7 +343,20 @@ def build_timeline(pdf_path, password=None, exif=None, include_history=True,
     if not per_rev:
         return {"occurrences": [], "issues": [], "revisions": [],
                 "skipped": skipped, "assumed_utc": 0}
-    labels = [p[0] for p in per_rev]
+    # Revisions written by ExifTool (per its update marker, checked
+    # against the file's structure) carry the attribution in their label.
+    attrib = exiftool_attribution(data, revs)
+    tool = {a["attributed"] for a in attrib if a["consistent"]}
+    labels = [p[0] + (" [written by ExifTool per its update marker]"
+                      if p[0] in tool else "") for p in per_rev]
+    if tool:
+        skipped.append(ATTRIBUTION_CAVEAT)
+    for a in attrib:
+        if not a["consistent"]:
+            skipped.append(f"An ExifTool update marker (%EndExifToolUpdate "
+                           f"{a['marker']}) does not match the file's "
+                           f"structure ({a['reason']}); no revision is "
+                           f"attributed to ExifTool on the strength of it.")
     last = len(per_rev) - 1
 
     parsed = {}

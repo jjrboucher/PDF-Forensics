@@ -1,6 +1,34 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.1.2 — 2026-10-22 (build 2026-10-22e)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.1.3 — 2026-10-22 (build 2026-10-22f)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.1.3 — Release (2026-10-22, build 2026-10-22f)
+
+No database schema change. Re-analyse documents to apply the changes.
+
+### ExifTool attribution: tied to each change, checked, and caveated
+- 1.1.2 reported ExifTool's update marker and the metadata changes as
+  separate findings, leaving the examiner to connect them by byte offset.
+  The revision ExifTool wrote is now named in METADATA_REVISED ("written
+  by ExifTool per its update marker") and labelled in the Timeline
+  Analysis report and spreadsheet ("[written by ExifTool per its update
+  marker]"), including in a silent-edit flag.
+- Each %EndExifToolUpdate marker is checked against the file's structure:
+  its number must equal the end of a revision, and the marker must sit
+  inside the update that follows. Only then is that update attributed to
+  ExifTool. A marker that fails (a number matching no revision boundary,
+  or one that names the whole file as the original) is reported as not
+  consistent with the file's structure, and nothing is attributed to it.
+- Every report that attributes an update to ExifTool states the caveat:
+  the marker is ordinary text that anyone could add, remove or alter, so
+  it corroborates rather than proves which tool made a change. The
+  findings and guides no longer call the marker a "definitive trace".
+  (`analysis/doc_checks.py`, `analysis/timeline.py`, `reports/queries.py`)
+
+### Documentation
+- Technical Reference Guide 4.6 and risk-weight table; Risk Scoring and
+  HTML Reports technical guides. All guides state version 1.1.3, build
+  2026-10-22f.
 
 ## Version 1.1.2 — Release (2026-10-22, build 2026-10-22e)
 

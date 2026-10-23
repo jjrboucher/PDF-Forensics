@@ -1,5 +1,40 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.1.3
+
+**Released:** 2026-10-22 · **Build:** 2026-10-22f · **Database schema:** revision 10 (unchanged)
+
+### What changed
+
+- **ExifTool attribution on each change.** The revision ExifTool wrote is
+  named in the metadata-change finding and labelled in the Timeline
+  Analysis report and spreadsheet.
+- **Markers are checked.** An %EndExifToolUpdate marker attributes an
+  update only if it matches the file's structure; a marker that does not
+  is reported as possibly added or altered.
+- **Caveat stated.** Every attribution notes that the marker is plain text
+  and corroborates, rather than proves, which tool made a change.
+
+### Upgrading
+
+Replace the application folder with the 1.1.3 package. No database
+migration is needed. Re-analyse documents to apply the changes.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.1.3.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.1.3.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.1.3 (build 2026-10-22f)`.
+
+---
+
 ## Version 1.1.2
 
 **Released:** 2026-10-22 · **Build:** 2026-10-22e · **Database schema:** revision 10 (unchanged)

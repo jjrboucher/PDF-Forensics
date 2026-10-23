@@ -1125,6 +1125,54 @@ def revision_metadata(pdf):
     return fields, (mod, xmod, xmd)
 
 
+ATTRIBUTION_CAVEAT = (
+    "Attribution to ExifTool rests on the marker ExifTool writes at the end "
+    "of its update. The marker is ordinary text and could have been added, "
+    "removed or altered by anyone, so it corroborates, rather than proves, "
+    "which tool made a change.")
+
+
+def exiftool_attribution(data, revision_ends):
+    """Check each %EndExifToolUpdate marker against the file's structure.
+
+    revision_ends: [(label, end_offset)] for the revisions, oldest first
+    (the current file last). ExifTool writes "%EndExifToolUpdate N" at
+    the end of its update, where N is the length of the file before the
+    edit. A genuine marker therefore (a) has an N equal to the end of a
+    revision, and (b) sits inside the update that follows that revision.
+    Returns [{marker, offset, base, attributed, consistent, reason}],
+    where attributed is the label of the revision ExifTool wrote (only
+    when consistent)."""
+    out = []
+    ends = [(lbl, end) for lbl, end in revision_ends]
+    for m in _EXIFTOOL_RE.finditer(data):
+        n, at = int(m.group(1)), m.start()
+        base = next((i for i, (_, e) in enumerate(ends) if e == n), None)
+        rec = {"marker": n, "offset": at, "base": None, "attributed": None,
+               "consistent": False, "reason": ""}
+        if base is None:
+            rec["reason"] = (f"its number ({n:,}) does not match the end of "
+                             f"any revision of the file")
+        elif base + 1 >= len(ends):
+            rec["base"] = ends[base][0]
+            rec["reason"] = (f"it names {ends[base][0]} as the original file, "
+                             f"but no later update follows it")
+        else:
+            nxt_lbl, nxt_end = ends[base + 1]
+            rec["base"] = ends[base][0]
+            if n < at < nxt_end:
+                rec["attributed"], rec["consistent"] = nxt_lbl, True
+                rec["reason"] = (f"its number matches the end of "
+                                 f"{ends[base][0]} exactly, and it sits inside "
+                                 f"the update that follows ({nxt_lbl})")
+            else:
+                rec["reason"] = (f"its number matches the end of "
+                                 f"{ends[base][0]}, but the marker lies at byte "
+                                 f"{at:,}, outside the update that follows it")
+        out.append(rec)
+    return out
+
+
 def check_metadata_history(pdf_path, password=None):
     """METADATA_REVISED: text metadata (Info dictionary or XMP) added,
     changed or removed by a later incremental update; a revision that
@@ -1156,6 +1204,8 @@ def check_metadata_history(pdf_path, password=None):
             continue
 
     results = []
+    attrib = exiftool_attribution(data, [(lbl, end) for lbl, end, *_ in states])
+    by_tool = {a["attributed"]: a for a in attrib if a["consistent"]}
     changes, silent = [], []
     for (la, ea, fa, da), (lb, eb, fb, db) in zip(states, states[1:]):
         diff = []
@@ -1172,6 +1222,8 @@ def check_metadata_history(pdf_path, password=None):
         if dates_same:
             silent.append(lb)
         changes.append(f"In {lb} (update ending at byte {eb:,})"
+                       + (", written by ExifTool per its update marker"
+                          if lb in by_tool else "")
                        + (", WITHOUT any change to the modification dates"
                           if dates_same else "") + ":\n        - "
                        + "\n        - ".join(diff))
@@ -1187,6 +1239,8 @@ def check_metadata_history(pdf_path, password=None):
                        "editor such as ExifTool does not, so the document "
                        "still claims to have been last modified before the "
                        "edit (see the Timeline Analysis report).")
+        if any(lbl in by_tool for lbl in silent) or by_tool:
+            detail += "\n    " + ATTRIBUTION_CAVEAT
         detail += ("\n    The earlier values remain in the file and are shown "
                    "in each prior version's row of the PDF Metadata report. "
                    "A legitimate re-save can also change metadata (for "
@@ -1195,26 +1249,38 @@ def check_metadata_history(pdf_path, password=None):
         results.append({"image": None, "type": "METADATA_REVISED",
                         "detail": detail})
 
-    markers = [int(m.group(1)) for m in _EXIFTOOL_RE.finditer(data)]
-    if markers:
-        ends = {end: label for label, end, *_ in states}
+    if attrib:
         lines = []
-        for n in markers:
-            rev = ends.get(n)
-            lines.append(f"%EndExifToolUpdate {n}: the file before this "
-                         f"ExifTool edit is the first {n:,} bytes"
-                         + (f" ({rev}, extracted as a prior version)"
-                            if rev else ""))
+        for a in attrib:
+            if a["consistent"]:
+                lines.append(
+                    f"%EndExifToolUpdate {a['marker']} (at byte {a['offset']:,}): "
+                    f"consistent with a genuine ExifTool update: {a['reason']}. "
+                    f"The update that wrote {a['attributed']} is attributed "
+                    f"to ExifTool; the file before the edit is {a['base']} "
+                    f"(the first {a['marker']:,} bytes, extracted as a prior "
+                    f"version).")
+            else:
+                lines.append(
+                    f"%EndExifToolUpdate {a['marker']} (at byte {a['offset']:,}): "
+                    f"NOT consistent with the file's structure: {a['reason']}. "
+                    f"No update is attributed to ExifTool on the strength of "
+                    f"this marker; it may have been added, copied or altered.")
         results.append({
             "image": None, "type": "EXIFTOOL_EDIT",
             "detail": (
-                "Document-level finding: the file was edited with ExifTool. "
-                "ExifTool writes PDF metadata as an incremental update and "
-                "ends it with a %EndExifToolUpdate comment recording the "
-                "original file length, so the edit can be identified and "
-                "undone.\n    " + "\n    ".join(lines) +
-                "\n    ExifTool cannot change the header or page content this "
-                "way; compare the prior version's metadata with the current "
-                "file's (see METADATA_REVISED and VERSION_CONFLICT)."),
+                "Document-level finding: the file carries ExifTool's update "
+                "marker. ExifTool writes PDF metadata as an incremental "
+                "update and ends it with a %EndExifToolUpdate comment "
+                "recording the original file length, so the edit can be "
+                "identified and undone. Each marker is checked against the "
+                "file's structure: a genuine marker's number equals the end "
+                "of a revision and the marker sits inside the update that "
+                "follows.\n    " + "\n    ".join(lines) +
+                "\n    " + ATTRIBUTION_CAVEAT +
+                "\n    ExifTool cannot change the header or page content "
+                "this way; compare the prior version's metadata with the "
+                "current file's (see METADATA_REVISED and "
+                "VERSION_CONFLICT)."),
         })
     return results

@@ -4,7 +4,7 @@ PDF Forensics Suite
 A unified forensic analysis toolkit for PDF documents.
 """
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 # Version policy: 1.0.0 is the first frozen release. Fixes are released as
 # incremental updates (1.0.1, 1.0.2, ...); new features raise the minor
 # version (1.1.0). Each release has its own build marker; a second build on
@@ -12,6 +12,6 @@ __version__ = "1.1.2"
 # footers, GUI About), so it identifies the build that produced it. For
 # each update, change __version__ and BUILD_DATE together and add a dated
 # CHANGELOG entry.
-BUILD_DATE = "2026-10-22e"
+BUILD_DATE = "2026-10-22f"
 __tool_name__ = "PDF Forensics Suite"
 SCHEMA_REVISION = 10  # Increment when DB schema changes

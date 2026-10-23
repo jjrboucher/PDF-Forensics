@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.1.2-informational)
+![Version](https://img.shields.io/badge/version-1.1.3-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -50,8 +50,9 @@ the command line for scripted and batch work.
 - Image analysis: overlapping and off-page images, soft-mask concealment,
   DPI/resolution anomalies, and cross-document image reuse.
 - Metadata edits: fields changed by a later revision (with a warning when no
-  modification date changed), Info vs XMP disagreements, and ExifTool's own
-  update marker.
+  modification date changed), Info vs XMP disagreements, and attribution of
+  an update to ExifTool when its own update marker matches the file's
+  structure (corroborative, not proof: the marker is plain text).
 - Font consistency analysis, unapplied redactions, and PDF version checks:
   versions that do not exist, version declarations that disagree or were
   changed by a later update, and features newer than the version a file
@@ -273,7 +274,7 @@ positives, counter-verification procedures and chain of custody in depth.
 
 ## Versioning
 
-This is **version 1.1.2** (build 2026-10-22e), an update to the first feature release
+This is **version 1.1.3** (build 2026-10-22f), an update to the first feature release
 after version 1.0.0, the first frozen release. Changes after 1.0 are released
 as incremental updates (1.0.1, 1.0.2, …) and new features raise the minor
 version (1.1.0); each release has its own build marker.
