@@ -68,6 +68,7 @@ FINDING_TYPE_DEFS = {
     "VERSION_ANACHRONISM":  ("Features exceed declared PDF version",     "MEDIUM"),
     "VERSION_INVALID":      ("Declared PDF version does not exist",      "HIGH"),
     "VERSION_CONFLICT":     ("PDF version declarations disagree or changed", "MEDIUM"),
+    "TIMELINE_INCONSISTENT": ("Timestamps out of chronological order",   "HIGH"),
 }
 
 
@@ -247,6 +248,26 @@ def init_db(db_path, session=None):
             duplicate_of    TEXT,
             reason          TEXT
         );
+
+        -- Every timestamp in a submitted document, across all its
+        -- revisions, normalised to UTC (schema rev 10). One row per
+        -- distinct value; feeds the Timeline Analysis report.
+        CREATE TABLE IF NOT EXISTS timeline_events (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id   INTEGER NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+            seq           INTEGER NOT NULL,  -- chronological order (unparseable last)
+            revisions     TEXT,              -- e.g. "revision 2 to current"
+            category      TEXT,              -- document, history, annotation, signature, embedded file, photo EXIF
+            source        TEXT,
+            field         TEXT,
+            obj_ref       TEXT,
+            raw_value     TEXT,
+            timezone      TEXT,              -- explicit / none (assumed UTC) / unparseable
+            utc           TEXT,              -- YYYY-MM-DD HH:MM:SS, UTC
+            status        TEXT,              -- OK / FLAGGED / UNPARSEABLE
+            issue         TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_timeline_analysis ON timeline_events(analysis_id);
 
         -- Encryption outcome per submitted file (schema rev 9). Separate
         -- from submissions so it is additive; one row per file handled in
@@ -515,6 +536,23 @@ def check_pdf_already_analyzed(conn, pdf_path):
         }
     return False, None
 
+
+
+def save_timeline(conn, analysis_id, rows):
+    """Store a document's timeline (see analysis/timeline.py). rows are
+    (seq, revisions, category, source, field, obj_ref, raw_value,
+    timezone, utc, status, issue). Replaces any earlier rows for the
+    analysis."""
+    if not analysis_id:
+        return
+    conn.execute("DELETE FROM timeline_events WHERE analysis_id = ?",
+                 (analysis_id,))
+    conn.executemany("""
+        INSERT INTO timeline_events (analysis_id, seq, revisions, category,
+            source, field, obj_ref, raw_value, timezone, utc, status, issue)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, [(analysis_id,) + tuple(r) for r in rows])
+    conn.commit()
 
 
 def save_to_db(conn, pdf_path, total_pages, page_data,

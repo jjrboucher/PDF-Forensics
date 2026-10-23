@@ -33,6 +33,30 @@ _META_KEY_ORDER = [
 ]
 
 
+def _dates_match(a_raw, b_raw):
+    """'TRUE' when two date strings (PDF or XMP format) denote the same
+    moment within 60 seconds after conversion to UTC, 'FALSE' when they
+    do not, '' when either is missing or unparseable. Values with no
+    timezone are taken as UTC, as in the METADATA_MISMATCH check."""
+    from pdf_forensics.analysis.doc_checks import parse_pdf_date
+    if not a_raw or not b_raw:
+        return ""
+    a, b = parse_pdf_date(a_raw), parse_pdf_date(b_raw)
+    if a is None or b is None:
+        return ""
+    return "TRUE" if abs((a - b).total_seconds()) <= 60 else "FALSE"
+
+
+def _info_xmp_pair(values, info_key, xmp_suffix):
+    """values: {(source, key): value}. Info value by exact key, XMP value
+    by case-insensitive key suffix."""
+    info = values.get(("info_dict", info_key))
+    xmp = next((v for (src, k), v in values.items()
+                if src == "xmp" and str(k).lower().endswith(xmp_suffix)
+                and v), None)
+    return info, xmp
+
+
 def _query_metadata_pivoted(conn):
     """
     Pivot pdf_metadata into one row per PDF, one column per
@@ -54,6 +78,7 @@ def _query_metadata_pivoted(conn):
     all_keys = OrderedDict()  # (source, key) -> display_label
     pdf_data = OrderedDict()  # analysis_id -> {display_label: value}
     pdf_info = {}             # analysis_id -> (filename, md5, ...)
+    pdf_raw = {}              # analysis_id -> {(source, key): value}
 
     for row in rows:
         aid = row[0]
@@ -81,6 +106,7 @@ def _query_metadata_pivoted(conn):
 
             all_keys[(source, key)] = display
             pdf_data[aid][display] = value or ""
+            pdf_raw.setdefault(aid, {})[(source, key)] = value
 
     # Sort keys: preferred order first, then alphabetical
     def key_sort(item):
@@ -101,6 +127,10 @@ def _query_metadata_pivoted(conn):
         {"name": "Size (bytes)", "label": "Size (bytes)", "col_type": "numeric"},
         {"name": "PDF MD5",      "label": "PDF MD5",      "col_type": "hash"},
         {"name": "Analyzed",     "label": "Analyzed",     "col_type": "date"},
+        {"name": "CreationDate: Info = XMP",
+         "label": "CreationDate: Info = XMP", "col_type": "text"},
+        {"name": "ModDate: Info = XMP",
+         "label": "ModDate: Info = XMP", "col_type": "text"},
     ]
     meta_col_names = []
     for (source, key), display in sorted_keys:
@@ -113,6 +143,11 @@ def _query_metadata_pivoted(conn):
     data = []
     for aid in pdf_data:
         record = dict(pdf_info[aid])
+        raw = pdf_raw.get(aid, {})
+        record["CreationDate: Info = XMP"] = _dates_match(
+            *_info_xmp_pair(raw, "CreationDate", "createdate"))
+        record["ModDate: Info = XMP"] = _dates_match(
+            *_info_xmp_pair(raw, "ModDate", "modifydate"))
         for col_name in meta_col_names:
             record[col_name] = pdf_data[aid].get(col_name, "")
         data.append(record)
@@ -384,6 +419,92 @@ def _query_exif_pivoted(conn):
 # ===================================================================
 # Report definitions
 # ===================================================================
+
+def _query_timeline(conn):
+    """Timeline Analysis: for each analysed document, a summary row (the
+    verdict) followed by every timestamp in chronological (UTC) order."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT a.id, a.pdf_filename, a.pdf_md5, a.version_number,
+               (SELECT p.pdf_filename FROM analyses p
+                 WHERE p.id = a.source_analysis_id)
+        FROM analyses a ORDER BY a.pdf_filename, a.id
+    """)
+    docs = cur.fetchall()
+    have_table = cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name='timeline_events'").fetchone() is not None
+    columns = [
+        {"name": "Filename", "label": "Filename", "col_type": "text"},
+        {"name": "#", "label": "#", "col_type": "numeric"},
+        {"name": "Status", "label": "Status", "col_type": "text"},
+        {"name": "UTC", "label": "UTC (normalised)", "col_type": "text"},
+        {"name": "Timezone", "label": "Timezone in source", "col_type": "text"},
+        {"name": "Raw value", "label": "Raw value", "col_type": "text"},
+        {"name": "Category", "label": "Category", "col_type": "text"},
+        {"name": "Source", "label": "Source", "col_type": "text"},
+        {"name": "Field", "label": "Field", "col_type": "text"},
+        {"name": "Revisions", "label": "Revisions", "col_type": "text"},
+        {"name": "Issue", "label": "Issue", "col_type": "text"},
+        {"name": "Object", "label": "Object (for validation)", "col_type": "text"},
+        {"name": "PDF MD5", "label": "PDF MD5", "col_type": "hash"},
+    ]
+    data = []
+    for aid, fname, md5, vnum, parent in docs:
+        rows = []
+        if have_table:
+            rows = cur.execute("""
+                SELECT seq, revisions, category, source, field, obj_ref,
+                       raw_value, timezone, utc, status, issue
+                FROM timeline_events WHERE analysis_id = ? ORDER BY seq
+            """, (aid,)).fetchall()
+        base = {"Filename": fname, "PDF MD5": md5, "#": 0, "UTC": "",
+                "Timezone": "", "Raw value": "", "Category": "",
+                "Source": "", "Field": "", "Revisions": "", "Object": ""}
+        if not rows:
+            if vnum is not None:
+                verdict = ("INCLUDED IN PARENT",
+                           f"Prior version {vnum}: its timestamps form part of "
+                           f"the timeline of {parent or 'its submitted file'}.")
+            else:
+                verdict = ("NOT AVAILABLE",
+                           "No timeline was recorded for this document. "
+                           "Documents analysed before version 1.1.0 have none; "
+                           "re-analyse to build it.")
+            data.append(dict(base, Status=verdict[0], Issue=verdict[1],
+                             Source="SUMMARY"))
+            continue
+        flagged = [r for r in rows if r[9] == "FLAGGED"]
+        assumed = sum(1 for r in rows if r[7] == "none (assumed UTC)")
+        unparse = sum(1 for r in rows if r[9] == "UNPARSEABLE")
+        revs = rows[0][1]
+        if flagged:
+            status = "INCONSISTENT"
+            msg = (f"{len(flagged)} of {len(rows)} timestamp(s) are out of "
+                   f"chronological order (see the rows marked FLAGGED).")
+        else:
+            status = "CONSISTENT"
+            msg = (f"All {len(rows) - unparse} timestamp(s) are in "
+                   f"chronological order.")
+        extra = []
+        if assumed:
+            extra.append(f"{assumed} carry no timezone and were assumed to "
+                         f"be UTC")
+        if unparse:
+            extra.append(f"{unparse} could not be parsed and are listed last")
+        if extra:
+            msg += " " + "; ".join(extra).capitalize() + "."
+        data.append(dict(base, Status=status, Issue=msg, Source="SUMMARY"))
+        for (seq, revisions, cat, src, field, obj, raw, tz, utc, st,
+             issue) in rows:
+            data.append({"Filename": fname, "#": seq, "Status": st,
+                         "UTC": utc or "", "Timezone": tz,
+                         "Raw value": raw or "", "Category": cat,
+                         "Source": src, "Field": field,
+                         "Revisions": revisions, "Issue": issue or "",
+                         "Object": obj or "", "PDF MD5": md5})
+    return columns, data
+
 
 REPORTS = [
 
@@ -1057,6 +1178,7 @@ REPORTS = [
                                     'METADATA_DATE_ANOMALY', 'METADATA_MISMATCH',
                                     'MIXED_CAMERA', 'VERSION_MISMATCH',
                                     'VERSION_INVALID', 'VERSION_CONFLICT',
+                                    'TIMELINE_INCONSISTENT',
                                     'XMP_ID_ANOMALY', 'STRUCTURAL_WARNING')
                 ), '')                          AS "Contributing Findings",
                 (SELECT COUNT(*) FROM comments c
@@ -1084,6 +1206,40 @@ REPORTS = [
             {"name": "PDF MD5",               "label": "PDF MD5",
              "col_type": "hash"},
         ],
+        "sticky_cols": 1,
+    },
+
+    # -----------------------------------------------------------------
+    # Timeline Analysis
+    # -----------------------------------------------------------------
+    {
+        "id": "timeline",
+        "name": "Timeline Analysis",
+        "description":
+            "Every timestamp in each document, across all its revisions "
+            "(each prior version recovered from an incremental update), in "
+            "chronological order: Info dictionary and XMP dates, XMP edit "
+            "history, comments and other annotations, digital signatures, "
+            "embedded files, and photo EXIF capture dates. ALL TIMES ARE "
+            "NORMALISED TO UTC for comparison; the raw value and whether it "
+            "carried a timezone are shown beside each one. Values with no "
+            "timezone are assumed to be UTC, so an ordering problem "
+            "involving one of them may reflect an unknown local offset (up "
+            "to 14 hours). Each document starts with a SUMMARY row: "
+            "CONSISTENT when every timestamp is in order, INCONSISTENT when "
+            "any is not. Rows marked FLAGGED break an expected order: a "
+            "modified date before its created date; a creation date changed "
+            "by a later update; a modification date that goes backwards "
+            "from one revision to the next; XMP history out of order or "
+            "after the last save; a comment or signature dated before the "
+            "document was created, or a comment dated after the revision "
+            "that added it was saved; a revision saved after a signature but "
+            "dated before it; a photograph taken after the document's last "
+            "modification; a date in the future, or before the PDF format "
+            "existed (1993). Comparisons between different sources allow 60 "
+            "seconds. Inconsistencies add to the document risk score "
+            "(TIMELINE_INCONSISTENT).",
+        "query_fn": _query_timeline,
         "sticky_cols": 1,
     },
 
@@ -1170,6 +1326,7 @@ REPORTS = [
                    JOIN pages p ON p.id = f.page_id
                    WHERE p.analysis_id = a.id AND ft.code IN
                      ('METADATA_DATE_ANOMALY','METADATA_MISMATCH',
+                      'TIMELINE_INCONSISTENT',
                       'XMP_ID_ANOMALY'))                AS "Metadata",
                 (SELECT COUNT(*) FROM findings f
                    JOIN finding_types ft ON ft.id = f.finding_type_id
@@ -1395,6 +1552,7 @@ REPORT_GROUPS = [
         "exif_gps",
         "incremental_updates",
         "version_anachronism",
+        "timeline",
     ]),
     ("Manipulation & Alteration", [
         "concealment_overview",

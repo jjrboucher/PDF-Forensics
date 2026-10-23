@@ -347,7 +347,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         "main":     (780, 540),
         "analysis": (1200, 936),
         "graph":    (1060, 540),
-        "reports":  (1180, 1000),
+        "reports":  (1180, 1030),  # 22 reports; clamped to the screen
     }
 
     def center_window(w, h):
@@ -2072,7 +2072,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             col = 0 if _i < half else 1
             row = _i if _i < half else _i - half
             cb = ttk.Checkbutton(grid, text=rname, variable=var)
-            cb.grid(row=row, column=col, sticky="w", padx=(0, 10), pady=1)
+            # pady=0: the 22nd report (1.1.0) adds a row; tighter rows keep
+            # the list within a 1080p screen, where the height is clamped.
+            cb.grid(row=row, column=col, sticky="w", padx=(0, 10), pady=0)
             attach_tooltip(cb, rdesc)
 
     # Select all / none buttons

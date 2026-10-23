@@ -208,6 +208,26 @@ def extract_image_metadata(image_bytes, ext):
                             ("exif_gps", str(tag_name), str(value)))
             except Exception:
                 pass
+
+            # Exif sub-IFD: capture time (DateTimeOriginal), digitising
+            # time, their timezone offsets, exposure and lens details.
+            # These live in IFD 0x8769, not the main IFD read above.
+            try:
+                exif_ifd = exif.get_ifd(0x8769)
+                if exif_ifd:
+                    for tag_id, value in exif_ifd.items():
+                        tag_name = ExifTags.TAGS.get(tag_id, f"Tag_{tag_id}")
+                        if isinstance(value, bytes):
+                            if len(value) > 256:
+                                continue  # MakerNote and similar blobs
+                            try:
+                                value = value.decode("utf-8",
+                                                     errors="replace")
+                            except Exception:
+                                value = value.hex()
+                        metadata.append(("exif", str(tag_name), str(value)))
+            except Exception:
+                pass
     except Exception:
         pass
 

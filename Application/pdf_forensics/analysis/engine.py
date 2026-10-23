@@ -41,6 +41,10 @@ from pdf_forensics.analysis.doc_checks import (
     check_unapplied_redactions, extract_camera_info,
     check_version_anachronism,
 )
+from pdf_forensics.analysis.timeline import (
+    build_timeline, timeline_findings, timeline_rows, exif_dates,
+)
+from pdf_forensics.database import save_timeline
 
 
 def print_report(all_findings):
@@ -212,6 +216,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     total_extracted = 0
     doc_font_spans = []   # accumulated across pages for font analysis (ANAL-03)
     doc_cameras = {}      # {label: (make, model)} for mixed-camera check
+    doc_exif_dates = []   # photo capture dates for the timeline
 
     for page_idx in range(total_pages):
         page_num = page_idx + 1
@@ -329,6 +334,9 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 label_to_info[label].get("ext"))
             if cam:
                 doc_cameras[label] = cam
+            doc_exif_dates.extend(exif_dates(
+                label, label_to_info[label].get("image_bytes"),
+                label_to_info[label].get("ext")))
 
         # Collect font usage for document-level font consistency analysis
         doc_font_spans.extend(collect_page_fonts(
@@ -401,6 +409,27 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     doc_findings.extend(check_version_anachronism(
         doc_pk, pdf_path, pdf_metadata, password=password,
         history=(version_number is None)))
+    # Timeline: every timestamp in every revision, normalised to UTC.
+    # Built for submitted files only; a prior version analysed in its own
+    # right is already part of its parent's timeline.
+    timeline = None
+    if version_number is None:
+        try:
+            timeline = build_timeline(pdf_path, password=password,
+                                      exif=doc_exif_dates)
+            doc_findings.extend(timeline_findings(timeline))
+            if session:
+                session.log(
+                    f"  Timeline: {len(timeline['events'])} timestamp(s) in "
+                    f"{timeline['revisions']} revision(s), "
+                    f"{len(timeline['issues'])} out of order, "
+                    f"{timeline['assumed_utc']} with no timezone "
+                    f"(assumed UTC)")
+        except Exception as e:
+            timeline = None
+            if session:
+                session.log(f"  Timeline analysis failed: {e}", "warning")
+
     if doc_findings and session:
         for df in doc_findings:
             session.log(f"  Document-level finding: {df['type']}")
@@ -453,6 +482,13 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                              doc_risk=doc_risk,
                              source_analysis_id=source_analysis_id,
                              version_number=version_number)
+    if timeline is not None:
+        try:
+            save_timeline(conn, analysis_id, timeline_rows(timeline))
+        except Exception as e:
+            if session:
+                session.log(f"  Timeline could not be stored: {e}",
+                            "warning")
     record_submission(conn, pdf_path, "analysed", session=session,
                       analysis_id=analysis_id,
                       is_version=version_number is not None)

@@ -1,5 +1,51 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.1.0
+
+**Released:** 2026-10-22 · **Build:** 2026-10-22c · **Database schema:** revision 10
+
+The first feature release after 1.0. The full change history is in
+[`CHANGELOG.md`](CHANGELOG.md).
+
+### What's new
+
+- **Timeline Analysis report.** Every timestamp in a document and its
+  earlier versions (document dates, edit history, comments, signatures,
+  embedded files and photo capture dates), normalised to UTC and checked
+  for chronological sense. Each document is marked CONSISTENT or
+  INCONSISTENT; out-of-order timestamps are flagged with the reason, and
+  an inconsistent timeline adds to the document risk score.
+- **Info = XMP date columns** in the triage spreadsheet's metadata sheet
+  and the PDF Metadata report: TRUE when the two creation (or
+  modification) dates agree, FALSE when they do not.
+- **Photo capture dates** (EXIF DateTimeOriginal) now appear in the EXIF &
+  GPS report.
+- **Technical Reference Guide:** Timeline Analysis (section 4.5), where
+  a PDF version can be declared (4.3), and a new annex of PDF versions.
+
+### Upgrading
+
+Replace the application folder with the 1.1.0 package and keep your case
+folders. The database is upgraded automatically (schema revision 10) when
+opened. **Re-analyse** documents to build their timelines; documents
+analysed with an earlier version show "NOT AVAILABLE" in the Timeline
+Analysis report.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.1.0.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.1.0.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.1.0 (build 2026-10-22c)`.
+
+---
+
 ## Version 1.0.3
 
 **Released:** 2026-10-22 · **Build:** 2026-10-22b · **Database schema:** revision 9 (unchanged)

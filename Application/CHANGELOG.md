@@ -1,6 +1,75 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.0.3 — 2026-10-22 (build 2026-10-22b)** · schema revision 9. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.1.0 — 2026-10-22 (build 2026-10-22c)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.1.0 — Release (2026-10-22, build 2026-10-22c)
+
+First feature release after 1.0. Database schema revision 10: a new
+`timeline_events` table, added to existing databases automatically when
+they are opened. Re-analyse documents to build their timelines.
+
+### New report: Timeline Analysis
+- Every timestamp in each submitted document, across all its revisions
+  (each prior version recovered from an incremental update, and the
+  current file), in chronological order. Sources: Info dictionary
+  CreationDate and ModDate; XMP CreateDate, ModifyDate and MetadataDate;
+  the XMP edit history (xmpMM:History); annotation /CreationDate and /M;
+  digital signature signing times; embedded file dates; and photo EXIF
+  DateTimeOriginal and DateTimeDigitized. Each distinct value is listed
+  once with the span of revisions in which it appears.
+- All timestamps are normalised to UTC, and the report says so. A value
+  with no timezone is assumed to be UTC, compared and flagged like any
+  other, and marked "none (assumed UTC)".
+- Checks: created not after modified (Info, XMP, annotations, embedded
+  files; photos digitised not before taken); creation date unchanged
+  across revisions; modification dates never going backwards from one
+  revision to the next; XMP history in order and not after the
+  revision's last save; comments and signatures not dated before the
+  document was created; a comment not dated after the save of the
+  revision that added it; no revision saved after a signature but dated
+  before it; no photo taken after the document's last modification; no
+  date in the future or before 1993. Different sources allow 60 seconds.
+- Each document opens with a SUMMARY row: CONSISTENT, INCONSISTENT,
+  INCLUDED IN PARENT (prior versions) or NOT AVAILABLE (analysed before
+  1.1.0). (`analysis/timeline.py`, `reports/queries.py`)
+- New finding **TIMELINE_INCONSISTENT** (HIGH, risk +20), one per
+  document, listed in the Document Risk Summary and counted in the
+  Document Risk Dossier. An Info ModDate before the Info CreationDate in
+  the current revision on its own is not counted twice (it is already
+  METADATA_DATE_ANOMALY). (`analysis/engine.py`, `analysis/risk.py`,
+  `database.py`)
+- The Reports screen lists 22 reports; its checkbox rows are tighter so
+  the list still fits a 1080p screen. (`gui/app.py`)
+
+### Info vs XMP date columns
+- The triage spreadsheet's pdf-metadata sheet and the PDF Metadata report
+  have two new columns, CreationDate: Info = XMP and ModDate: Info = XMP:
+  TRUE when both values denote the same moment within 60 seconds after
+  conversion to UTC, FALSE (bold red in the spreadsheet) when they do
+  not, blank when either is missing. (`analysis/triage.py`,
+  `reports/queries.py`)
+
+### EXIF capture dates
+- EXIF extraction read only the main image directory, so DateTimeOriginal,
+  DateTimeDigitized, their offsets and the other Exif sub-IFD tags
+  (exposure, lens) never reached the EXIF & GPS report. They are now
+  extracted. (`analysis/metadata.py`)
+
+### Documentation
+- Technical Reference Guide: section 4.3 explains the three places a
+  version can be declared and how a metadata tool's edit lands in a later
+  revision; new section 4.5 Timeline Analysis; a note in 4.2 on the Info =
+  XMP columns; new Annex A, PDF Versions (each version's specification,
+  publication date and main features, from the bibliographies of ISO
+  32000-1 and 32000-2); table of contents entries for 4.4, 4.5 and Annex
+  A (4.4 had none); finding-type and risk-weight tables.
+- Risk Scoring technical guide: TIMELINE_INCONSISTENT weight; section 5.5
+  Timeline Events (schema revision 10).
+- HTML Reports guides: new Timeline Analysis section; PDF Metadata
+  columns; Document Risk Summary list; report count 22. The plain-language
+  guide's report table also gained its missing Encrypted Files row.
+- All guides' cover lines, headers and footers state version 1.1.0, build
+  2026-10-22c.
 
 ## Version 1.0.3 — Release (2026-10-22, build 2026-10-22b)
 

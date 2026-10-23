@@ -630,7 +630,21 @@ def run_triage(pdf_paths, output_path, session=None,
                 all_meta_keys.append(k)
                 seen_keys.add(k)
 
-    meta_headers = ["Filename", "Source", "Path"] + all_meta_keys
+    # Info vs XMP date comparison: TRUE when both denote the same moment
+    # (within 60 seconds, after conversion to UTC), FALSE when they do
+    # not, blank when either is missing or unparseable.
+    cmp_headers = ["CreationDate: Info = XMP", "ModDate: Info = XMP"]
+
+    def _cmp(meta, info_key, xmp_suffix):
+        from pdf_forensics.reports.queries import _dates_match
+        info = meta.get(f"info:{info_key}")
+        xmp = next((v for k, v in meta.items()
+                    if k.startswith("xmp:") and k.lower().endswith(xmp_suffix)
+                    and v), None)
+        return _dates_match(info, xmp)
+
+    meta_headers = (["Filename", "Source", "Path"] + cmp_headers
+                    + all_meta_keys)
 
     for col, hdr in enumerate(meta_headers, 1):
         cell = ws2.cell(row=1, column=col, value=_safe_str(hdr))
@@ -646,9 +660,18 @@ def run_triage(pdf_paths, output_path, session=None,
                  value=r.get("source", "Current")).font = cell_font
         ws2.cell(row=row_idx, column=3,
                  value=r["path"]).font = cell_font
+        for ci, (ik, xs) in enumerate((("CreationDate", "createdate"),
+                                       ("ModDate", "modifydate"))):
+            v = _cmp(r["metadata"], ik, xs)
+            cell = ws2.cell(row=row_idx, column=4 + ci, value=v)
+            cell.font = cell_font
+            cell.border = border
+            if v == "FALSE":
+                cell.font = Font(name=cell_font.name, size=cell_font.size,
+                                 bold=True, color="C00000")
         for col_offset, key in enumerate(all_meta_keys):
             val = _safe_str(r["metadata"].get(key, ""))
-            cell = ws2.cell(row=row_idx, column=col_offset + 4,
+            cell = ws2.cell(row=row_idx, column=col_offset + 6,
                             value=val)
             cell.font = cell_font
             cell.border = border

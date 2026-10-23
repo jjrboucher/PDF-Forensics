@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.0.3-informational)
+![Version](https://img.shields.io/badge/version-1.1.0-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -72,7 +72,9 @@ the command line for scripted and batch work.
   supply (see [Encrypted PDFs](#encrypted-pdfs)).
 
 **Outputs**
-- 21 interactive HTML reports (sortable, filterable, exportable to CSV).
+- 22 interactive HTML reports (sortable, filterable, exportable to CSV),
+  including a Timeline Analysis of every timestamp in each document and its
+  prior versions, normalised to UTC.
 - Relationship graphs of reused images across pages and documents.
 - Excel triage spreadsheet and a Document Risk Overview spreadsheet.
 - A **case index**: one landing page linking to every output for the case, with
@@ -172,7 +174,7 @@ Key options:
 
 | Group | Reports |
 |---|---|
-| Document Overview & Provenance | Encrypted Files · Document Risk Summary · Document Risk Dossier · PDF Metadata · Creator / Producer Analysis · EXIF & GPS Data · Incremental Updates (%%EOF Analysis) · Version Anachronism |
+| Document Overview & Provenance | Encrypted Files · Document Risk Summary · Document Risk Dossier · PDF Metadata · Creator / Producer Analysis · EXIF & GPS Data · Incremental Updates (%%EOF Analysis) · Version Anachronism · Timeline Analysis |
 | Manipulation & Alteration | Concealment Overview · Manipulation Detail · Text Overlay Detection · Font Consistency Analysis · Overlap & Concealment Detail · DPI / Resolution Analysis |
 | Image Analysis | High-Risk Images · Off-Page Images · Stamp / Signature Reuse Candidates |
 | Cross-Document & Review | Duplicate Submissions · Cross-Document Image Reuse · Document Comparison Matrix · Document Comments |
@@ -267,9 +269,10 @@ positives, counter-verification procedures and chain of custody in depth.
 
 ## Versioning
 
-This is **version 1.0.3** (build 2026-10-22b), the third incremental
-update to version 1.0.0, the first frozen release. Changes after 1.0 are released
-as incremental updates (1.0.1, 1.0.2, …), each with its own build date.
+This is **version 1.1.0** (build 2026-10-22c), the first feature release
+after version 1.0.0, the first frozen release. Changes after 1.0 are released
+as incremental updates (1.0.1, 1.0.2, …) and new features raise the minor
+version (1.1.0); each release has its own build marker.
 `python pdf_forensics.py --version` prints the version and build you are
 running. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for what changed in
 this release and [`CHANGELOG.md`](CHANGELOG.md) for the full history.
