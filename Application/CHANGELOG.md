@@ -1,6 +1,79 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.1.3 — 2026-10-22 (build 2026-10-22f)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.1.4 — 2026-10-22 (build 2026-10-22g)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.1.4 — Release (2026-10-22, build 2026-10-22g)
+
+No database schema change.
+
+### Paths written one consistent way
+- On Windows, Tk's file and folder dialogs return forward slashes and
+  os.path.join adds backslashes, so a path could be shown and recorded with
+  both (for example O:/pdf-forensics/work\extracted_images). Windows
+  accepts either, but paths are part of the forensic record, so every path
+  is now normalised (absolute, native separators: O:\pdf-forensics\work\
+  extracted_images) where it enters the application: file and folder
+  dialogs, typed path fields when read (and shown normalised), command-line
+  arguments, path-list files, and the case folder. Paths built from them
+  are consistent too. Wildcards, bracketed exhibit prefixes and network
+  (UNC) paths are preserved. (`pathutil.py`, `gui/app.py`, `cli.py`,
+  `pathlist.py`, `session.py`)
+
+### GUI: Processing mode as two choices
+- The analysis screen had a "Triage mode" checkbox, ticked by default;
+  unticking it enabled three analysis options that were otherwise greyed
+  out and unticked. The choice is now made with two radio buttons under
+  Processing: Triage (the default) and Full parsing. Selecting Full
+  parsing reveals its three options and, below them, the database, which
+  has moved from its own panel because only full parsing writes to the
+  database. The options keep their settings while triage is selected.
+  The Output folder stays visible in both modes, since triage writes its
+  spreadsheet there. (`gui/app.py`)
+- A note under the two options says what the selected mode produces:
+  triage writes a spreadsheet only and nothing to the database; full
+  parsing builds the case database and does not write a triage
+  spreadsheet (run Triage separately for one). Full parsing could
+  otherwise be mistaken for "triage plus more".
+- The radio buttons are styled like the checkboxes. Without their own
+  style they fell back to Tk's default, which painted a white box behind
+  the selected option's label. (`gui/theme.py`)
+- The counters are in two rows (Selected, Processed, Prior versions,
+  Failed; then Copies, Locked, Images) on one grid, so the columns line
+  up, and the window opens wide enough
+  for the top row, measured from the widgets so it holds at any display
+  scaling; seven counters on one row did not fit. (`gui/app.py`)
+
+### Triage spreadsheets no longer overwrite each other
+- Output names used the session's start time, so a second triage run in
+  the same session (even on different files) wrote to the same file name
+  and silently replaced the first spreadsheet. Each triage run's
+  spreadsheet is now named with the time of that run, with _2, _3 ...
+  added if two runs start in the same second. A file named with -o on
+  the command line is used as given. Reports, which are regenerated from
+  the same database, still replace their earlier copies by design.
+  (`session.py` `make_run_path()`, `gui/app.py`, `cli.py`)
+
+### GUI: a Prior versions counter
+- Triage and analysis process the prior versions recovered from
+  incremental updates, and counted them in Processed, so Processed could
+  exceed Selected with no explanation (in triage it jumped at the end of
+  the run to the number of spreadsheet rows). Processed now counts the
+  selected files only, and a new Prior versions counter beside it counts
+  the versions recovered from them, in both modes and after a retry. The
+  triage completion line says so: "Done: 8 of 8 selected PDF(s) triaged,
+  plus 3 prior version(s) recovered from them (11 rows in the
+  spreadsheet)". (`gui/app.py`)
+
+### Documentation
+- Application README: new section "A caveat about metadata". The
+  application reports what is written in the PDF, which may or may not be
+  accurate, for reasons from anti-forensics to software that writes a
+  field incorrectly or not at all; a document edited with several
+  applications, or by software that omits fields, produces findings with a
+  proper explanation.
+- Getting Started guide: the processing choice, where the database is
+  chosen, and the Prior versions counter.
+- All guides' covers state version 1.1.4, build 2026-10-22g.
 
 ## Version 1.1.3 — Release (2026-10-22, build 2026-10-22f)
 

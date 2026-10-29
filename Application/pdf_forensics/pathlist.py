@@ -88,7 +88,7 @@ def read_path_list(list_path):
             dups += 1
             continue
         seen.add(key)
-        found.append(hit)
+        found.append(os.path.abspath(hit))  # native separators (pathutil)
     return {"paths": found, "missing": missing, "duplicates": dups,
             "entries": entries, "encoding": enc,
             "md5": hashlib.md5(raw).hexdigest(),

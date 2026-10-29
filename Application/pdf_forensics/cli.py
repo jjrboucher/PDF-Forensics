@@ -115,6 +115,16 @@ def main_cli():
 
     args = parser.parse_args()
 
+    # Paths are normalised where they enter (native separators, absolute;
+    # see pathutil). Wildcard patterns keep their * and ?.
+    from pdf_forensics.pathutil import norm_path
+    for name in ("pdf_list", "password_list", "database", "extract_dir",
+                 "output_dir", "output"):
+        if getattr(args, name, None):
+            setattr(args, name, norm_path(getattr(args, name)))
+    if getattr(args, "pdf", None):
+        args.pdf = [norm_path(p) for p in args.pdf]
+
     # No command and no --gui → launch GUI
     if not args.command and not args.gui:
         from pdf_forensics.gui.app import launch_app
@@ -497,9 +507,13 @@ def _cli_triage(args, session, case):
     output_dir = os.path.join(os.getcwd(), case)
     session.set_db_dir(output_dir)
 
-    xlsx_path = args.output or session.make_filename("triage", "xlsx")
-    if not os.path.isabs(xlsx_path):
-        xlsx_path = os.path.join(output_dir, xlsx_path)
+    if args.output:
+        xlsx_path = args.output
+        if not os.path.isabs(xlsx_path):
+            xlsx_path = os.path.join(output_dir, xlsx_path)
+    else:
+        # Timed per run, so an earlier triage spreadsheet is never replaced.
+        xlsx_path = session.make_run_path(output_dir, "triage", "xlsx")
 
     print(f"Case: {case}")
     print(f"Triaging {len(valid)} PDF(s)")

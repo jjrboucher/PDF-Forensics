@@ -72,7 +72,8 @@ class Session:
         self.case_number = case_number
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.start_time = datetime.now()
-        self.db_dir = db_dir  # Set later when DB path is chosen
+        # Set later when the DB path is chosen; native separators (pathutil).
+        self.db_dir = os.path.abspath(db_dir) if db_dir else db_dir
         self.outputs = []     # list of (kind, path) tuples
         self.logger = None
         self.log_path = None
@@ -88,6 +89,7 @@ class Session:
         output folders are created relative to this path.
         Creates the directory structure if it doesn't exist.
         """
+        db_dir = os.path.abspath(db_dir)  # native separators (pathutil)
         self.db_dir = db_dir
         os.makedirs(db_dir, exist_ok=True)
         os.makedirs(self.logs_dir, exist_ok=True)
@@ -203,6 +205,19 @@ class Session:
     def make_filename(self, kind, ext):
         """Generate: {case}_{kind}_{timestamp}.{ext}"""
         return f"{self.case_number}_{kind}_{self.timestamp}.{ext}"
+
+    def make_run_path(self, folder, kind, ext):
+        """A path for an output of one run, timed when the run starts (not
+        when the session started), so a second run in the same session
+        never replaces the first one's output: {case}_{kind}_{now}.{ext}.
+        If that name exists (two runs in the same second), _2, _3, ... is
+        added."""
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = os.path.join(folder, f"{self.case_number}_{kind}_{stamp}")
+        path, n = f"{base}.{ext}", 2
+        while os.path.exists(path):
+            path, n = f"{base}_{n}.{ext}", n + 1
+        return path
 
     def make_db_path(self):
         """Generate the session-named database path."""

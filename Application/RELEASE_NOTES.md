@@ -1,5 +1,49 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.1.4
+
+**Released:** 2026-10-22 · **Build:** 2026-10-22g · **Database schema:** revision 10 (unchanged)
+
+### What changed
+
+- **Consistent paths.** Paths are shown and recorded with one kind of
+  separator (on Windows, O:\pdf-forensics\work\extracted_images rather than
+  O:/pdf-forensics/work\extracted_images), in the GUI, logs, reports and
+  the case index.
+- **Clearer choice of processing.** Two options under Processing, Triage
+  (the default) and Full parsing; choosing Full parsing shows its options
+  and the database, which only full parsing uses. A note under them says
+  what each produces (full parsing does not write a triage spreadsheet).
+- **Each triage run keeps its own spreadsheet.** A second triage run in
+  the same session used to replace the first one's spreadsheet; each run's
+  spreadsheet is now named with the time of that run.
+- **Prior versions counter.** Processed now counts only the PDFs you
+  selected; prior versions recovered from them have their own counter, so
+  Processed no longer appears to exceed Selected.
+- **README: a caveat about metadata.** What the application reports is
+  what the PDF says, which may be inaccurate for benign or deliberate
+  reasons; a new README section explains how to weigh such findings.
+
+### Upgrading
+
+Replace the application folder with the 1.1.4 package. No database
+migration or re-analysis is needed.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.1.4.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.1.4.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.1.4 (build 2026-10-22g)`.
+
+---
+
 ## Version 1.1.3
 
 **Released:** 2026-10-22 · **Build:** 2026-10-22f · **Database schema:** revision 10 (unchanged)

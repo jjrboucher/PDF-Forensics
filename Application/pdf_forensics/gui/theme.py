@@ -100,3 +100,17 @@ def apply_theme(style):
                               ("active", BG_HOVER)],
               foreground=[("disabled", "#555555")],
               background=[("active", BG_PANEL)])
+    # Radio buttons match the checkboxes. Without their own style they
+    # fall back to Tk's default, which paints a light box behind the label
+    # when focused or hovered.
+    style.configure("TRadiobutton", background=BG_PANEL,
+                    foreground=TEXT_PRIM, indicatorcolor=BG_INPUT,
+                    focuscolor=ACCENT, font=FONT_BASE, padding=4)
+    style.map("TRadiobutton",
+              indicatorcolor=[("disabled", "#2A2A2A"),
+                              ("selected", ACCENT),
+                              ("active", BG_HOVER)],
+              foreground=[("disabled", "#555555"),
+                          ("active", TEXT_PRIM)],
+              background=[("active", BG_PANEL), ("focus", BG_PANEL),
+                          ("selected", BG_PANEL), ("!active", BG_PANEL)])

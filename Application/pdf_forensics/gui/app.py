@@ -44,6 +44,13 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     """Launch the unified PDF Forensics Suite GUI."""
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox, simpledialog
+    from pdf_forensics.pathutil import norm_path, NormalisingDialogs
+    # Every dialog returns paths with native separators (see pathutil).
+    filedialog = NormalisingDialogs(filedialog)
+    initial_db = norm_path(initial_db)
+    initial_output = norm_path(initial_output)
+    if initial_pdfs:
+        initial_pdfs = [norm_path(p) for p in initial_pdfs]
 
     root = tk.Tk()
     root.title(f"{__tool_name__} v{__version__}")
@@ -342,6 +349,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # ---------------------------------------------------------------
     frames = {}
 
+    # Per-frame minimum widths measured from the widgets (filled in once
+    # the frames are built): {name: function returning a width}.
+    frame_min_width = {}
+
     # Per-frame window sizes: (width, height)
     frame_sizes = {
         "main":     (780, 540),
@@ -371,6 +382,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         frame.pack(in_=content_area, fill="both", expand=True)
         app["current_frame"] = frame
         w, h = frame_sizes.get(name, (780, 620))
+        if name in frame_min_width:
+            try:
+                w = max(w, frame_min_width[name]())
+            except Exception:
+                pass
         center_window(w, h)
 
     # ---------------------------------------------------------------
@@ -855,9 +871,82 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
              font=FONT_SUBTITLE, anchor="w").pack(
                  side="left", fill="x", expand=True)
 
-    # Database panel
-    db_body = make_panel(left_panel, "Database")
-    db_row = tk.Frame(db_body, bg=BG_PANEL)
+    # Output folder panel (both modes: triage writes its spreadsheet here)
+    out_body = make_panel(left_panel, "Output folder")
+    out_row = tk.Frame(out_body, bg=BG_PANEL)
+    out_row.pack(fill="x")
+    out_entry = ttk.Entry(out_row, textvariable=output_dir_var)
+    out_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+    def choose_output():
+        path = filedialog.askdirectory(
+            title="Select output folder")
+        if path:
+            output_dir_var.set(path)
+
+    ttk.Button(out_row, text="Browse",
+               command=choose_output).pack(side="left")
+
+    # Processing panel: two modes as radio buttons. Full parsing reveals
+    # its options and the database below them, since only full parsing
+    # writes to the database.
+    opt_body = make_panel(left_panel, "Processing")
+
+    triage_var = tk.BooleanVar(value=True)     # read by run_analysis()
+    mode_var = tk.StringVar(value="triage")
+    triage_rb = ttk.Radiobutton(
+        opt_body, text="Triage (quick scan to Excel)",
+        variable=mode_var, value="triage")
+    triage_rb.pack(anchor="w")
+    full_rb = ttk.Radiobutton(
+        opt_body, text="Full parsing (forensic analysis into the case database)",
+        variable=mode_var, value="full")
+    full_rb.pack(anchor="w", pady=(2, 0))
+
+    # What the selected mode produces, and what it does not (so full
+    # parsing is not mistaken for "triage plus more").
+    MODE_NOTES = {
+        "triage": ("Writes a triage spreadsheet only. Nothing is written "
+                   "to the database and no reports are produced."),
+        "full": ("Builds the case database for reports, graphs and the "
+                 "case index. It does not write a triage spreadsheet; run "
+                 "Triage separately if you want one."),
+    }
+    mode_note_var = tk.StringVar(value=MODE_NOTES["triage"])
+    ttk.Label(opt_body, textvariable=mode_note_var, style="Hint.TLabel",
+              wraplength=520, justify="left").pack(anchor="w",
+                                                   padx=(22, 0),
+                                                   pady=(4, 0))
+
+    # Shown only for full parsing.
+    full_frame = tk.Frame(opt_body, bg=BG_PANEL)
+    full_opts = tk.Frame(full_frame, bg=BG_PANEL)
+    full_opts.pack(fill="x", padx=(22, 0), pady=(6, 0))
+
+    store_cb = ttk.Checkbutton(
+        full_opts,
+        text="Store extracted images in database",
+        variable=store_images_var)
+    store_cb.pack(anchor="w")
+    extract_versions_var = tk.BooleanVar(value=True)
+    versions_cb = ttk.Checkbutton(
+        full_opts,
+        text="Extract and process prior PDF versions",
+        variable=extract_versions_var)
+    versions_cb.pack(anchor="w")
+    skip_duplicates_var = tk.BooleanVar(value=True)
+    skip_cb = ttk.Checkbutton(
+        full_opts,
+        text="Skip PDFs already in the database",
+        variable=skip_duplicates_var)
+    skip_cb.pack(anchor="w")
+
+    # Database, under the full-parsing options
+    db_wrap = tk.Frame(full_frame, bg=BG_PANEL)
+    db_wrap.pack(fill="x", padx=(22, 0), pady=(10, 0))
+    ttk.Label(db_wrap, text="DATABASE", style="Section.TLabel").pack(
+        anchor="w", pady=(0, 4))
+    db_row = tk.Frame(db_wrap, bg=BG_PANEL)
     db_row.pack(fill="x")
     db_entry = ttk.Entry(db_row, textvariable=db_path_var)
     db_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
@@ -876,62 +965,19 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
     ttk.Button(db_row, text="Browse",
                command=choose_db).pack(side="left")
-    ttk.Label(db_body, text="Existing databases will be appended to.",
+    ttk.Label(db_wrap, text="Existing databases will be appended to.",
               style="Hint.TLabel").pack(anchor="w", pady=(6, 0))
 
-    # Output folder panel
-    out_body = make_panel(left_panel, "Output folder")
-    out_row = tk.Frame(out_body, bg=BG_PANEL)
-    out_row.pack(fill="x")
-    out_entry = ttk.Entry(out_row, textvariable=output_dir_var)
-    out_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
-
-    def choose_output():
-        path = filedialog.askdirectory(
-            title="Select output folder")
-        if path:
-            output_dir_var.set(path)
-
-    ttk.Button(out_row, text="Browse",
-               command=choose_output).pack(side="left")
-
-    # Options panel
-    opt_body = make_panel(left_panel, "Options")
-
-    triage_var = tk.BooleanVar(value=True)
-    triage_cb = ttk.Checkbutton(
-        opt_body,
-        text="Triage mode (quick scan to Excel)",
-        variable=triage_var)
-    triage_cb.pack(anchor="w", pady=(0, 6))
-
-    store_cb = ttk.Checkbutton(
-        opt_body,
-        text="Store extracted images in database",
-        variable=store_images_var)
-    store_cb.pack(anchor="w")
-    extract_versions_var = tk.BooleanVar(value=True)
-    versions_cb = ttk.Checkbutton(
-        opt_body,
-        text="Extract and process prior PDF versions",
-        variable=extract_versions_var)
-    versions_cb.pack(anchor="w")
-    skip_duplicates_var = tk.BooleanVar(value=True)
-    skip_cb = ttk.Checkbutton(
-        opt_body,
-        text="Skip PDFs already in the database",
-        variable=skip_duplicates_var)
-    skip_cb.pack(anchor="w")
-
-    # Controls that get disabled in triage mode
-    advanced_widgets = [store_cb, versions_cb, skip_cb,
-                        db_entry]
-
-    attach_tooltip(triage_cb,
+    attach_tooltip(triage_rb,
                    "Quick scan that writes a triage spreadsheet (Excel) "
                    "instead of running the full forensic analysis \u2014 a "
-                   "fast overview of many files, with per-file metadata and "
-                   "any reviewer comments.")
+                   "fast overview of many files, with per-file metadata, "
+                   "prior versions and any reviewer comments. Nothing is "
+                   "written to the database.")
+    attach_tooltip(full_rb,
+                   "Full forensic analysis of every page, stored in the case "
+                   "database, from which the reports, graphs and case index "
+                   "are built.")
     attach_tooltip(store_cb,
                    "Save each extracted image into the database so reports "
                    "and the relationship graph can show image thumbnails. "
@@ -944,35 +990,22 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                    "Skip any PDF whose hash already exists in the selected "
                    "database, avoiding duplicate analysis on re-runs.")
 
-    # Remember pre-triage checkbox states
-    _pre_triage_state = {
-        "store": True,
-        "versions": True,
-        "skip": True,
-    }
-
     def on_triage_toggle(*_):
-        is_triage = triage_var.get()
-        state = "disabled" if is_triage else "normal"
-        for w in advanced_widgets:
-            w.config(state=state)
+        """Show the full-parsing options and database only for full
+        parsing. The options keep their values while hidden; triage does
+        not use them."""
+        is_triage = mode_var.get() == "triage"
+        if triage_var.get() != is_triage:
+            triage_var.set(is_triage)
+        mode_note_var.set(MODE_NOTES["triage" if is_triage else "full"])
         if is_triage:
-            # Save current states and uncheck
-            _pre_triage_state["store"] = store_images_var.get()
-            _pre_triage_state["versions"] = extract_versions_var.get()
-            _pre_triage_state["skip"] = skip_duplicates_var.get()
-            store_images_var.set(False)
-            extract_versions_var.set(False)
-            skip_duplicates_var.set(False)
+            full_frame.pack_forget()
             run_btn_a.config(text="Run triage")
         else:
-            # Restore previous states
-            store_images_var.set(_pre_triage_state["store"])
-            extract_versions_var.set(_pre_triage_state["versions"])
-            skip_duplicates_var.set(_pre_triage_state["skip"])
+            full_frame.pack(fill="x")
             run_btn_a.config(text="Run analysis")
 
-    triage_var.trace_add("write", on_triage_toggle)
+    mode_var.trace_add("write", on_triage_toggle)
 
     # Run button at bottom of left panel
     action_row_a = tk.Frame(left_panel, bg=BG_DARK)
@@ -985,8 +1018,12 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     counter_outer.pack(fill="x", pady=(0, 8))
     counter_inner = tk.Frame(counter_outer, bg=BG_PANEL)
     counter_inner.pack(fill="x")
+    # Two rows on one grid, so the columns line up: the counts that
+    # describe the selection on top, the others below, so the window need
+    # not be very wide. Each counter takes two grid columns (number, label);
+    # a column is as wide as its widest entry in either row.
     counter_row = tk.Frame(counter_inner, bg=BG_PANEL)
-    counter_row.pack(fill="x", padx=10, pady=8)
+    counter_row.pack(anchor="w", padx=10, pady=8)
 
     count_selected = tk.StringVar(value="0")
     count_processed = tk.StringVar(value="0")
@@ -994,22 +1031,39 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     count_skipped = tk.StringVar(value="0")
     count_encrypted = tk.StringVar(value="0")
     count_images = tk.StringVar(value="0")
+    # Prior versions recovered from incremental updates are counted
+    # separately, so Processed never exceeds Selected.
+    count_versions = tk.StringVar(value="0")
 
-    def counter_label(parent, label_text, var, color=TEXT_SEC):
-        f = tk.Frame(parent, bg=BG_PANEL)
-        f.pack(side="left", padx=(0, 24))
-        tk.Label(f, textvariable=var, bg=BG_PANEL, fg=color,
+    def counter_label(row, col, label_text, var, color=TEXT_SEC):
+        tk.Label(counter_row, textvariable=var, bg=BG_PANEL, fg=color,
                  font=(FONT_FAMILY, 14, "bold"),
-                 width=5, anchor="e").pack(side="left")
-        tk.Label(f, text=f"  {label_text}", bg=BG_PANEL, fg=TEXT_DIM,
-                 font=(FONT_FAMILY, 9)).pack(side="left")
+                 width=5, anchor="e").grid(row=row, column=2 * col,
+                                           sticky="e",
+                                           pady=(0, 4) if row == 0 else 0)
+        tk.Label(counter_row, text=f"  {label_text}", bg=BG_PANEL,
+                 fg=TEXT_DIM, font=(FONT_FAMILY, 9), anchor="w").grid(
+                     row=row, column=2 * col + 1, sticky="w",
+                     padx=(0, 24), pady=(0, 4) if row == 0 else 0)
 
-    counter_label(counter_row, "Selected", count_selected)
-    counter_label(counter_row, "Processed", count_processed, SUCCESS)
-    counter_label(counter_row, "Failed", count_failed, ACCENT)
-    counter_label(counter_row, "Copies", count_skipped)
-    counter_label(counter_row, "Locked", count_encrypted, ACCENT)
-    counter_label(counter_row, "Images", count_images)
+    counter_label(0, 0, "Selected", count_selected)
+    counter_label(0, 1, "Processed", count_processed, SUCCESS)
+    counter_label(0, 2, "Prior versions", count_versions, SUCCESS)
+    counter_label(0, 3, "Failed", count_failed, ACCENT)
+    counter_label(1, 0, "Copies", count_skipped)
+    counter_label(1, 1, "Locked", count_encrypted, ACCENT)
+    counter_label(1, 2, "Images", count_images)
+
+    def _analysis_min_width():
+        """Window width at which the top counter row (Selected to Failed)
+        shows in full: left panel, gap and the row with its padding,
+        measured from the widgets so it holds at any display scaling."""
+        root.update_idletasks()
+        return (20 + 580 + 10                       # split padding, form, gap
+                + counter_row.winfo_reqwidth() + 2 * 10 + 2   # row, padding, border
+                + 20 + 16)                          # split padding, margin
+
+    frame_min_width["analysis"] = _analysis_min_width
 
     # Progress bar + per-PDF status label (GUI-03). Shown during batch
     # analysis/triage so the operator sees overall progress and which file
@@ -1124,8 +1178,13 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         log_text.config(state="disabled")
 
         session = app["session"]
-        db_val = db_path_var.get()
-        out_dir = output_dir_var.get()
+        # Typed paths are normalised when read, and shown normalised.
+        db_val = norm_path(db_path_var.get())
+        out_dir = norm_path(output_dir_var.get())
+        if db_val:
+            db_path_var.set(db_val)
+        if out_dir:
+            output_dir_var.set(out_dir)
 
         if not out_dir:
             out_dir = session.extracted_images_dir or "extracted_images"
@@ -1147,6 +1206,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         total_findings = 0
 
         count_processed.set("0")
+        count_versions.set("0")
         count_failed.set("0")
         count_skipped.set("0")
         count_images.set("0")
@@ -1359,7 +1419,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                                   reason=e, is_version=this_is_version)
 
             root.update_idletasks()
-            count_processed.set(str(processed))
+            # Processed counts the selected files; prior versions extracted
+            # from them are counted on their own.
+            count_processed.set(str(processed - versions_done))
+            count_versions.set(str(versions_done))
             count_failed.set(str(failed))
             count_images.set(str(total_imgs))
 
@@ -1571,7 +1634,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         log_text.config(state="disabled")
 
         session = app["session"]
-        out_dir = output_dir_var.get()
+        out_dir = norm_path(output_dir_var.get())
+        if out_dir:
+            output_dir_var.set(out_dir)
 
         if not out_dir:
             out_dir = session.db_dir or os.getcwd()
@@ -1580,16 +1645,23 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         # Save triage Excel to the reports subfolder
         reports_dir = session.reports_dir or os.path.join(out_dir, "reports")
         os.makedirs(reports_dir, exist_ok=True)
-        xlsx_path = os.path.join(
-            reports_dir,
-            session.make_filename("triage", "xlsx"))
+        # Timed per run, so a later triage run in the same session keeps
+        # the earlier spreadsheet instead of replacing it.
+        xlsx_path = session.make_run_path(reports_dir, "triage", "xlsx")
 
         # Reset counters
         count_selected.set(str(len(pdf_files)))
         count_processed.set("0")
+        count_versions.set("0")
         count_failed.set("0")
         count_images.set("0")
         count_encrypted.set("0")
+
+        def _triage_counts():
+            """(selected files triaged, prior versions triaged, rows)."""
+            rows = triage_state.get("results") or []
+            vers = sum(1 for r in rows if r.get("version_number") is not None)
+            return len(rows) - vers, vers, len(rows)
 
         log_to_gui(f"Triage: {len(pdf_files)} PDF(s)...", "bold")
         log_to_gui(f"Output: {xlsx_path}", "dim")
@@ -1650,8 +1722,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 # spreadsheet, Locked = files still not opened.
                 count_encrypted.set(str(len(still)))
                 if p2:
-                    count_processed.set(
-                        str(len(triage_state.get("results") or [])))
+                    files_n, vers_n, _rows = _triage_counts()
+                    count_processed.set(str(files_n))
+                    count_versions.set(str(vers_n))
                     log_to_gui(f"Encrypted re-triage: {opened} opened, "
                                f"{len(still)} still not opened. Their rows in "
                                f"{os.path.basename(xlsx_path)} were updated; "
@@ -1679,14 +1752,20 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 password_manager=app.get("password_manager"),
                 run_state=triage_state)
 
-            count_processed.set(str(processed))
+            files_n, vers_n, rows_n = _triage_counts()
+            count_processed.set(str(files_n))
+            count_versions.set(str(vers_n))
             count_failed.set(str(skipped))
             count_encrypted.set(str(len(locked)))
             progress_done(processed, skipped)
 
             log_to_gui("")
             log_to_gui(
-                f"Done: {processed} triaged, {skipped} skipped",
+                f"Done: {files_n} of {len(pdf_files)} selected PDF(s) "
+                f"triaged"
+                + (f", plus {vers_n} prior version(s) recovered from them "
+                   f"({rows_n} rows in the spreadsheet)" if vers_n else "")
+                + f"; {skipped} skipped",
                 "bold")
             if processed:
                 log_to_gui(
@@ -1694,8 +1773,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     "success")
 
             status_var.set(
-                f"Triage done. {processed} PDF(s) -> "
-                f"{os.path.basename(xlsx_path)}")
+                f"Triage done. {files_n} PDF(s)"
+                + (f" + {vers_n} prior version(s)" if vers_n else "")
+                + f" -> {os.path.basename(xlsx_path)}")
             status_label.config(fg=SUCCESS)
             from pdf_forensics.reports.case_index import (
                 refresh_case_index)
@@ -1869,7 +1949,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 "networkx and/or pyvis are not installed.\n\n"
                 "Install with: pip install networkx pyvis")
             return
-        db = graph_db_var.get()
+        db = norm_path(graph_db_var.get())
+        if db:
+            graph_db_var.set(db)
         if not db or not os.path.isfile(db):
             messagebox.showerror("No database",
                                  "Please select a valid database file.")
@@ -2157,7 +2239,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         root.update_idletasks()
 
     def run_reports():
-        db = report_db_var.get()
+        db = norm_path(report_db_var.get())
+        if db:
+            report_db_var.set(db)
         if not db or not os.path.isfile(db):
             messagebox.showerror("No database",
                                  "Please select a valid database file.")

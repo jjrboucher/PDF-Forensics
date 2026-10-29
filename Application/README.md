@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.1.3-informational)
+![Version](https://img.shields.io/badge/version-1.1.4-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -310,7 +310,7 @@ Reference Guide describes counter-verification procedures for each artifact.
 
 ## Versioning
 
-This is **version 1.1.3** (build 2026-10-22f), an update to the first feature release
+This is **version 1.1.4** (build 2026-10-22g), an update to the first feature release
 after version 1.0.0, the first frozen release. Changes after 1.0 are released
 as incremental updates (1.0.1, 1.0.2, …) and new features raise the minor
 version (1.1.0); each release has its own build marker.
