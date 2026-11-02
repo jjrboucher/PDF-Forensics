@@ -1,5 +1,51 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.1.5
+
+**Released:** 2026-11-02 · **Build:** 2026-11-02c · **Database schema:** revision 10 (unchanged)
+
+### What changed
+
+- **Faster with repeated images.** An image placed on many pages is now
+  extracted and read once per document instead of once per page, and
+  prior versions reuse their parent's images. Large documents with a logo
+  or background on every page benefit most; findings are unchanged.
+- **The window stays responsive.** Processing, reports and graphs run in
+  the background, so the window no longer appears frozen during long runs;
+  the progress line also counts the images written for the current
+  document. Controls are locked until the run finishes.
+- **Timeline spreadsheet:** the raw timestamp sits beside its UTC value,
+  and the UTC column is a real Excel date-time.
+- **Reports much faster on large cases.** Database indexes and planner
+  statistics cut the slowest reports from minutes to seconds; existing
+  databases gain them automatically.
+- **Malformed text no longer fails an analysis.** Text a PDF stores
+  incorrectly (unpaired UTF-16 surrogates) is saved with visible escapes
+  instead of failing the whole document.
+- **Performance log.** Each session writes a performance log with timings
+  per file and per stage and system details, but no case number, file
+  names or paths, so it can be shared if processing is slow.
+
+### Upgrading
+
+Replace the application folder with the 1.1.5 package. No database
+migration or re-analysis is needed.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.1.5.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.1.5.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.1.5 (build 2026-11-02c)`.
+
+---
+
 ## Version 1.1.4
 
 **Released:** 2026-10-22 · **Build:** 2026-10-22g · **Database schema:** revision 10 (unchanged)

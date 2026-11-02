@@ -50,6 +50,10 @@ def _duplicate_notice(conn):
             f"Duplicate Submissions report for the full list.")
 
 
+from pdf_forensics.perf import timed as _timed
+
+
+@_timed("report", lambda db_path, report_def, *a, **k: report_def.get("id", "?"))
 def generate_report(db_path, report_def, output_path, session=None):
     """
     Run a report query and write the result as a self-contained

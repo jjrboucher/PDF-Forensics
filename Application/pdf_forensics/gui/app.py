@@ -343,6 +343,120 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     disclaimer_status.pack(side="right", padx=14, fill="y")
     # Clicking the reminder opens the full disclaimer in About.
     disclaimer_status.bind("<Button-1>", lambda e: show_about())
+    # The status message spans the remaining width of the bar, so it
+    # repaints its whole area (background included) on every change. Sized
+    # to its text, a shorter message left the end of the previous, longer
+    # one visible beside it. Re-packed after the reminder so the reminder
+    # keeps its space.
+    status_label.pack_forget()
+    status_label.pack(side="left", padx=14, fill="both", expand=True)
+
+    # ---------------------------------------------------------------
+    # Background runs (keeps the window responsive)
+    #
+    # Analysis, triage, reports and graphs run on a background thread so
+    # the window keeps handling its events. Without this, Windows marked
+    # the window "Not Responding" during long runs and showed a frozen
+    # snapshot of an earlier document and page while processing went on.
+    #
+    # The run code updates widgets as before. With a threaded Tcl (the
+    # standard Python builds), tkinter hands every widget call made from
+    # another thread to the main thread and waits for it, so this is safe
+    # while the main thread is in mainloop(). With a non-threaded Tcl the
+    # run executes on the main thread as it always did.
+    # ---------------------------------------------------------------
+    import threading as _threading
+    try:
+        _tcl_threaded = bool(root.tk.getboolean(
+            root.tk.call("set", "tcl_platform(threaded)")))
+    except Exception:
+        _tcl_threaded = False
+    _busy = {"job": None, "locked": []}
+
+    # Every interactive control is locked for the duration of a run, so
+    # nothing the run is still reading (the PDF list, the database, the
+    # options) can change under it. Only the log, its scrollbars and the
+    # counters stay live. Each control is restored to the state it had.
+    _LOCKABLE = (ttk.Button, ttk.Checkbutton, ttk.Radiobutton, ttk.Entry,
+                 ttk.Combobox, ttk.Spinbox, tk.Button, tk.Checkbutton,
+                 tk.Radiobutton, tk.Entry, tk.Listbox, tk.Spinbox, tk.Scale)
+
+    def _lock_ui():
+        locked = []
+        stack = list(root.winfo_children())
+        while stack:
+            w = stack.pop()
+            stack.extend(w.winfo_children())
+            if not isinstance(w, _LOCKABLE):
+                continue
+            try:
+                if isinstance(w, ttk.Widget):
+                    if not w.instate(["disabled"]):
+                        w.state(["disabled"])
+                        locked.append(w)
+                elif str(w.cget("state")) != "disabled":
+                    w.configure(state="disabled")
+                    locked.append(w)
+            except Exception:
+                pass
+        _busy["locked"] = locked
+
+    def _unlock_ui():
+        for w in _busy.get("locked") or []:
+            try:
+                if isinstance(w, ttk.Widget):
+                    w.state(["!disabled"])
+                else:
+                    w.configure(state="normal")
+            except Exception:
+                pass
+        _busy["locked"] = []
+
+    def run_in_background(name, fn):
+        """Run fn (a GUI run function) on a background thread; one run at
+        a time. Errors are shown rather than lost."""
+        if _busy["job"]:
+            messagebox.showinfo(
+                "Processing in progress",
+                f"{_busy['job']} is still running. Please wait until it "
+                f"finishes.")
+            return
+        if not _tcl_threaded:
+            fn()
+            return
+        _busy["job"] = name
+        _lock_ui()
+
+        def _target():
+            try:
+                fn()
+            except Exception as e:
+                try:
+                    messagebox.showerror(
+                        "Error", f"{name} stopped because of an error:\n{e}")
+                except Exception:
+                    pass
+            finally:
+                _busy["job"] = None
+                # Restore the controls on the window's own thread.
+                try:
+                    root.after(0, _unlock_ui)
+                except Exception:
+                    pass
+
+        _threading.Thread(target=_target, name=name, daemon=True).start()
+
+    def _on_close():
+        if _busy["job"] and not messagebox.askyesno(
+                "Processing in progress",
+                f"{_busy['job']} is still running. If you close the "
+                f"application now, the document being processed will not "
+                f"be saved (documents already completed are saved).\n\n"
+                f"Close anyway?"):
+            return
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", _on_close)
 
     # ---------------------------------------------------------------
     # Frame switching
@@ -376,6 +490,14 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         root.geometry(f"{w}x{h}+{x}+{y}")
 
     def show_frame(name):
+        # No navigation while a run is in progress (the run's own screen
+        # stays visible and its controls are not re-entered).
+        if _busy.get("job"):
+            messagebox.showinfo(
+                "Processing in progress",
+                f"{_busy['job']} is still running. Please wait until it "
+                f"finishes before leaving this screen.")
+            return
         if app["current_frame"]:
             app["current_frame"].pack_forget()
         frame = frames[name]
@@ -1229,6 +1351,19 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         queue_idx = 0
         progress_reset(len(process_queue))
 
+        # Performance log: flags and counts only (no names or paths).
+        from pdf_forensics import perf as _perf
+        from pdf_forensics.analysis.images import clear_image_cache
+        clear_image_cache()
+        pf = _perf.get(session)
+        pf.run_begin("analysis", len(process_queue), interface="GUI",
+                     store_images=bool(store_images_var.get()),
+                     extract_to_disk=bool(out_dir),
+                     prior_versions=bool(extract_versions_var.get()),
+                     skip_duplicates=bool(skip_duplicates_var.get()),
+                     password_list=app.get("password_manager") is not None)
+        perf_parent = {}   # extracted version path -> parent's log #
+
         while queue_idx < len(process_queue):
             pdf_path = process_queue[queue_idx]
             this_is_version = queue_idx in is_extracted_version
@@ -1251,6 +1386,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             base = os.path.splitext(basename)[0]
             pdf_extract_dir = os.path.join(out_dir, base) \
                 if out_dir else None
+            this_perf_no = pf.file_begin(
+                f"version {this_lineage[1]}" if this_lineage else "submitted",
+                of=perf_parent.get(pdf_path))
+            _pf_status = "ok"
 
             # Progress line: updated in-place per page
             log_text.config(state="normal")
@@ -1263,20 +1402,34 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             progress_set_file(queue_idx - 1, len(process_queue), basename)
             root.update_idletasks()
 
-            def on_page_progress(page_num, total_pages,
-                                 _idx=progress_idx, _name=basename,
-                                 _done=queue_idx - 1,
-                                 _total=len(process_queue)):
+            # Live progress line for this file: page x/y and the images
+            # written so far, so a long run visibly keeps moving.
+            _prog = {"page": 0, "pages": 0, "images": 0}
+
+            def _show_progress(_idx=progress_idx, _name=basename,
+                               _done=queue_idx - 1,
+                               _total=len(process_queue), _p=_prog):
+                imgs = (f" \u00b7 {_p['images']} image(s) written"
+                        if _p["images"] else "")
                 log_text.config(state="normal")
                 log_text.delete(_idx, f"{_idx} lineend + 1 char")
                 log_text.insert(_idx,
                     f"  \u25cb {_name} — "
-                    f"page {page_num}/{total_pages}\n", "dim")
+                    f"page {_p['page']}/{_p['pages']}{imgs}\n", "dim")
                 log_text.see("end")
                 log_text.config(state="disabled")
                 progress_set_file(_done, _total, _name,
-                                  page=page_num, pages=total_pages)
+                                  page=_p["page"], pages=_p["pages"])
                 root.update_idletasks()
+
+            def on_page_progress(page_num, total_pages, _p=_prog,
+                                 _show=_show_progress):
+                _p["page"], _p["pages"] = page_num, total_pages
+                _show()
+
+            def on_images_written(n, _p=_prog, _show=_show_progress):
+                _p["images"] = n
+                _show()
 
             try:
                 # Duplicate check (checkbox-based, no dialog)
@@ -1306,6 +1459,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                                 f"{dup_info['pdf_filename']} (already "
                                 f"analysed {dup_info['analyzed_at']}); not "
                                 f"re-analysed")
+                        if dup_info.get("pdf_md5"):
+                            pf.set("md5", dup_info["pdf_md5"])
+                        pf.file_end("skipped (identical copy)")
                         root.update_idletasks()
                         continue
 
@@ -1318,7 +1474,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     conn, pdf_path, app.get("password_manager"),
                     session=session, quiet=True,
                     is_version=this_is_version)
+                pf.lap("encryption")
                 if enc["skip"]:
+                    pf.file_end("encrypted, not opened")
                     log_text.config(state="normal")
                     log_text.delete(progress_idx,
                                     f"{progress_idx} lineend + 1 char")
@@ -1338,6 +1496,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     conn=conn, session=session,
                     quiet=True,
                     progress_callback=on_page_progress,
+                    image_callback=on_images_written,
                     skip_duplicates=False,
                     force=True,
                     password=enc["password"],
@@ -1382,10 +1541,24 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                                 f"version(s) extracted, queued",
                                 "dim")
                             parent_aid = summary.get("analysis_id")
-                            start_idx = len(process_queue)
-                            process_queue.extend(version_paths)
+                            # Queue the versions right after their parent
+                            # (not at the end of the batch), so they reuse
+                            # the parent's images while still cached. The
+                            # index-keyed maps shift to make room.
+                            start_idx = queue_idx
+                            nv = len(version_paths)
+                            process_queue[start_idx:start_idx] = version_paths
+                            shifted = {i + nv if i >= start_idx else i
+                                       for i in is_extracted_version}
+                            is_extracted_version.clear()
+                            is_extracted_version.update(shifted)
+                            moved = {(k + nv if k >= start_idx else k): v
+                                     for k, v in version_lineage.items()}
+                            version_lineage.clear()
+                            version_lineage.update(moved)
                             for off, vpath in enumerate(version_paths):
                                 vi = start_idx + off
+                                perf_parent[vpath] = this_perf_no
                                 is_extracted_version.add(vi)
                                 m = re.search(r"_version(\d+)\.pdf$",
                                               os.path.basename(vpath))
@@ -1393,6 +1566,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                                 version_lineage[vi] = (parent_aid, vnum)
                 else:
                     failed += 1
+                    _pf_status = "failed (no result)"
                     log_text.insert(progress_idx,
                         f"  \u2717 {basename} — no result\n",
                         "error")
@@ -1406,6 +1580,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
             except Exception as e:
                 failed += 1
+                _pf_status = f"failed ({_perf.error_label(e)})"
                 log_text.config(state="normal")
                 log_text.delete(progress_idx,
                                 f"{progress_idx} lineend + 1 char")
@@ -1418,6 +1593,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 record_submission(conn, pdf_path, "failed", session=session,
                                   reason=e, is_version=this_is_version)
 
+            pf.lap("prior_versions_extract")
+            pf.file_end(_pf_status)
             root.update_idletasks()
             # Processed counts the selected files; prior versions extracted
             # from them are counted on their own.
@@ -1426,6 +1603,12 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             count_failed.set(str(failed))
             count_images.set(str(total_imgs))
 
+        # Planner statistics for the new indexes (database.refresh_statistics).
+        import time as _time
+        from pdf_forensics.database import refresh_statistics
+        _t_stats = _time.perf_counter()
+        refresh_statistics(conn)
+        pf.event("database", "statistics", _time.perf_counter() - _t_stats)
         conn.close()
 
         progress_done(processed, failed)
@@ -1433,6 +1616,7 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         log_to_gui("")
         submitted = len(pdf_files)
         originals_done = processed - versions_done
+        pf.run_end()
         summary_line = (
             f"{submitted} submitted: {originals_done} analysed, "
             f"{skipped_copies} skipped as identical copies of files "
@@ -1798,7 +1982,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             run_btn_a.config(state="normal")
 
     run_btn_a = ttk.Button(action_row_a, text="Run analysis",
-                           style="Accent.TButton", command=run_analysis)
+                           style="Accent.TButton",
+                           command=lambda: run_in_background(
+                               "Processing", run_analysis))
     run_btn_a.pack(fill="x")
 
     # Apply initial triage state (default is triage=True)
@@ -1993,7 +2179,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             # the coincidence is reported at generation time
             # instead of being discovered later by hashing files.
             dataset_seen = {}
+            import time as _time
+            from pdf_forensics import perf as _perf
+            _gpf = _perf.get(session)
             for scope in scopes:
+                _tg0 = _time.perf_counter()
                 session.log(f"Generating graph: scope={scope}")
                 g_log(f"  Loading data for {scope}...")
 
@@ -2026,11 +2216,15 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
 
                 g_log(f"  Generating thumbnails...")
                 root.update_idletasks()
+                _tt0 = _time.perf_counter()
                 thumbnails = {}
                 for md5, (blob, ext, w, h) in image_bytes.items():
                     thumb = make_thumbnail_data_uri(blob, ext, w, h)
                     if thumb:
                         thumbnails[md5] = thumb
+                _gpf.event("graph_thumbnails", scope,
+                           _time.perf_counter() - _tt0,
+                           images=len(image_bytes))
 
                 g_log(f"  Building graph...")
                 root.update_idletasks()
@@ -2057,6 +2251,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 session.register_output("graph", out_path)
                 generated.append((scope, out_path))
                 session.log(f"  Generated: {out_path}")
+                _gpf.event("graph", scope, _time.perf_counter() - _tg0,
+                           placements=len(rows), unique_images=len(md5_set))
                 g_log(f"  \u2713 {scope} — {os.path.basename(out_path)}",
                       "success")
 
@@ -2087,7 +2283,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             run_btn_g.config(state="normal")
 
     run_btn_g = ttk.Button(action_row_g, text="Generate graph(s)",
-                           style="Accent.TButton", command=run_graph)
+                           style="Accent.TButton",
+                           command=lambda: run_in_background(
+                               "Graph generation", run_graph))
     run_btn_g.pack(fill="x")
 
     # ===================================================================
@@ -2246,6 +2444,15 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             messagebox.showerror("No database",
                                  "Please select a valid database file.")
             return
+        # A database from an earlier version gets its indexes and planner
+        # statistics once (init_db creates any missing indexes).
+        try:
+            from pdf_forensics.database import init_db, refresh_statistics
+            _c = init_db(db)
+            refresh_statistics(_c, only_if_missing=True)
+            _c.close()
+        except Exception:
+            pass
         if not app["session"]:
             messagebox.showerror("No case",
                                  "Please set a case number first.")
@@ -2401,7 +2608,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             run_btn_r.config(state="normal")
 
     run_btn_r = ttk.Button(action_row_r, text="Generate reports",
-                           style="Accent.TButton", command=run_reports)
+                           style="Accent.TButton",
+                           command=lambda: run_in_background(
+                               "Report generation", run_reports))
     run_btn_r.pack(fill="x")
 
 

@@ -409,10 +409,22 @@ def run_triage(pdf_paths, output_path, session=None,
     _log_mupdf("before triage")
 
     locked_unopened = []
+    # Performance log: flags and counts only (files by MD5, no names).
+    import time as _time
+    import hashlib as _hashlib
+    from pdf_forensics import perf as _perf
+    pf = _perf.get(session)
+    pf.run_begin("triage", len(pdf_paths),
+                 merge_into_earlier_run=bool(merging),
+                 prior_versions=bool(include_prior_versions),
+                 password_list=password_manager is not None)
+
     for i, pdf_path in enumerate(pdf_paths):
         if progress_callback:
             progress_callback(i + 1, len(pdf_paths),
                               os.path.basename(pdf_path))
+        pf.file_begin("submitted")
+        _pf_status = "ok"
 
         try:
             # Read once; reuse the bytes for the current-version triage,
@@ -432,7 +444,15 @@ def run_triage(pdf_paths, output_path, session=None,
             else:
                 triage = triage_pdf(pdf_path)
             _log_mupdf(f"triage: {os.path.basename(pdf_path)}")
+            if file_data is not None:
+                pf.set("md5", _hashlib.md5(file_data).hexdigest())
+                pf.set("size_mb", round(len(file_data) / 1048576, 2))
+            if triage:
+                pf.set("pages", triage.get("pages"))
+                pf.set("image_placements", triage.get("image_count"))
+            pf.lap("triage_scan")
             if triage and triage.get("encrypted") and not triage.get("enc_opened", True):
+                _pf_status = "encrypted, not opened"
                 locked_unopened.append(os.path.abspath(pdf_path))
                 if session:
                     session.log(f"  Encrypted, not opened: "
@@ -444,6 +464,7 @@ def run_triage(pdf_paths, output_path, session=None,
                 _extract_comments(
                     file_data if file_data is not None else pdf_path,
                     triage)
+                pf.lap("triage_comments")
                 if session:
                     session.log(
                         f"  Triaged: {os.path.basename(pdf_path)} "
@@ -510,21 +531,27 @@ def run_triage(pdf_paths, output_path, session=None,
                                 "warning")
                         if vtriage:
                             results.append(vtriage)
+                            pf.add("revisions")
                             _extract_comments(vbytes, vtriage)
                             if session:
                                 session.log(
                                     f"    \u21b3 Prior version {vnum} "
                                     f"metadata included ({vname})")
+                pf.lap("triage_versions")
             else:
                 skipped += 1
+                _pf_status = "skipped"
                 if session:
                     session.log(f"  Skipped: {pdf_path}", "warning")
         except Exception as e:
             skipped += 1
+            _pf_status = f"failed ({_perf.error_label(e)})"
             if session:
                 session.log(f"  Error triaging {pdf_path}: {e}",
                             "error")
+        pf.file_end(_pf_status)
 
+    pf.run_end()
     if not results:
         # Nothing triaged: write nothing, so a spreadsheet from an earlier
         # call (when merging) is left as it was.
@@ -548,6 +575,7 @@ def run_triage(pdf_paths, output_path, session=None,
             order.setdefault(r["path"], i)
         all_comments.sort(key=lambda c: order.get(c.get("path"), len(order)))
 
+    _t_xlsx = _time.perf_counter()
     # Build Excel workbook
     wb = Workbook()
 
@@ -754,6 +782,8 @@ def run_triage(pdf_paths, output_path, session=None,
     # Save
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     wb.save(output_path)
+    pf.event("spreadsheet", "triage", _time.perf_counter() - _t_xlsx,
+             rows=len(results))
 
     if session:
         if merging:

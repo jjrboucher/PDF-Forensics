@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.1.4-informational)
+![Version](https://img.shields.io/badge/version-1.1.5-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -32,6 +32,7 @@ the command line for scripted and batch work.
 - [Documentation](#documentation)
 - [Forensic handling](#forensic-handling)
 - [A caveat about metadata](#a-caveat-about-metadata)
+- [If processing is slow](#if-processing-is-slow)
 - [Versioning](#versioning)
 - [Disclaimer](#disclaimer)
 - [License](#license)
@@ -308,9 +309,34 @@ was produced and handled, the software its authors use, its content, and the
 other findings. Verify independently anything you rely on; the Technical
 Reference Guide describes counter-verification procedures for each artifact.
 
+## If processing is slow
+
+Each session writes a performance log, `logs/performance_{timestamp}.log`,
+beside the session log. It records system details (operating system, CPU
+count, memory, Python and library versions, and whether the case folder is
+on a local or a network drive), the options of each run, and for each file
+its size, page and image counts and the time spent in each processing
+stage, plus the time taken by each report, spreadsheet and graph.
+
+The performance log contains no case number, file names or paths. Files are
+identified only by their MD5 hash, which you can match against the case
+index or the database to see which file was slow. If processing takes
+longer than expected, the log can be shared with the developer to help find
+where to optimise. Review it before sending, as with anything leaving your
+case.
+
+Two things commonly slow processing regardless of the application: a case
+folder on a network or removable (USB) drive (every image file and
+database write goes to the slower device; process to an internal disk and
+copy the case folder afterwards), and real-time antivirus scanning of each
+new file in the case folder. Storing extracted images in the database also
+adds considerably to the time on a slower drive; it is needed only for image
+thumbnails in the reports and graph, and the images are written to the
+output folder either way.
+
 ## Versioning
 
-This is **version 1.1.4** (build 2026-10-22g), an update to the first feature release
+This is **version 1.1.5** (build 2026-11-02c), an update to the first feature release
 after version 1.0.0, the first frozen release. Changes after 1.0 are released
 as incremental updates (1.0.1, 1.0.2, …) and new features raise the minor
 version (1.1.0); each release has its own build marker.

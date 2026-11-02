@@ -358,6 +358,10 @@ def _b64_png(png_bytes):
     return f"data:image/png;base64,{b64}"
 
 
+from pdf_forensics.perf import timed as _timed
+
+
+@_timed("report", "visual_overlay")
 def generate_visual_report(db_path, output_path, analysis_id=None,
                            session=None):
     """

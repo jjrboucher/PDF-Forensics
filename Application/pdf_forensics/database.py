@@ -74,9 +74,126 @@ FINDING_TYPE_DEFS = {
 }
 
 
+# ---------------------------------------------------------------------
+# Text that SQLite cannot store
+#
+# Malformed PDFs can yield text with unpaired UTF-16 surrogates (half of a
+# character), e.g. in metadata, comments or font names. Python holds such
+# text, but SQLite must store valid UTF-8 and raises UnicodeEncodeError
+# ("surrogates not allowed"), which used to fail the whole analysis at the
+# database save. Every write now goes through a connection that stores
+# each unpaired surrogate as a visible escape (e.g. \udc8f), so the save
+# succeeds and the examiner can still see exactly what the PDF contained.
+# ---------------------------------------------------------------------
+import re as _re
+
+_SURROGATE = _re.compile("[\ud800-\udfff]")
+
+
+def _escape_surrogates(value, counter):
+    if isinstance(value, str) and _SURROGATE.search(value):
+        counter[0] += 1
+        return _SURROGATE.sub(lambda m: "\\u%04x" % ord(m.group()), value)
+    return value
+
+
+def _clean_params(params, counter):
+    if params is None:
+        return params
+    if isinstance(params, dict):
+        return {k: _escape_surrogates(v, counter) for k, v in params.items()}
+    if isinstance(params, (list, tuple)):
+        return type(params)(_escape_surrogates(v, counter) for v in params)
+    return params
+
+
+class _SafeCursor(sqlite3.Cursor):
+    def execute(self, sql, params=()):
+        return super().execute(sql, _clean_params(params,
+                                                  self.connection.escaped))
+
+    def executemany(self, sql, seq):
+        esc = self.connection.escaped
+        return super().executemany(sql, (_clean_params(p, esc) for p in seq))
+
+
+class SafeConnection(sqlite3.Connection):
+    """sqlite3 connection whose writes escape unpaired surrogates.
+    escaped[0] counts the values escaped since the connection opened."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.escaped = [0]
+
+    def cursor(self, factory=_SafeCursor):
+        return super().cursor(factory)
+
+    def execute(self, sql, params=()):
+        return self.cursor().execute(sql, params)
+
+    def executemany(self, sql, seq):
+        return self.cursor().executemany(sql, seq)
+
+
+# Indexes on the columns the reports join and filter on. Without them the
+# reports that correlate findings, pages and analyses scanned whole tables
+# for every row (Concealment Overview took over two minutes on a 700-file
+# case). Created when any database is opened, so existing databases gain
+# them too; they do not change any data.
+_INDEXES = (
+    ("idx_pages_analysis", "pages(analysis_id)"),
+    ("idx_images_page", "images(page_id)"),
+    ("idx_images_image_data", "images(image_data_id)"),
+    ("idx_findings_page", "findings(page_id)"),
+    ("idx_findings_type", "findings(finding_type_id)"),
+    ("idx_finding_images_finding", "finding_images(finding_id)"),
+    ("idx_finding_images_image", "finding_images(image_id)"),
+    ("idx_overlap_front", "overlap_details(front_image_id)"),
+    ("idx_overlap_back", "overlap_details(back_image_id)"),
+    ("idx_image_data_md5", "image_data(md5_hash)"),
+    ("idx_image_metadata_image", "image_metadata(image_data_id)"),
+    ("idx_pdf_metadata_analysis", "pdf_metadata(analysis_id)"),
+    ("idx_pdf_versions_analysis", "pdf_versions(analysis_id)"),
+    ("idx_comments_analysis", "comments(analysis_id)"),
+    ("idx_analyses_md5", "analyses(pdf_md5)"),
+    ("idx_analyses_source", "analyses(source_analysis_id)"),
+    ("idx_submissions_analysis", "submissions(analysis_id)"),
+    ("idx_submissions_path", "submissions(pdf_path)"),
+    ("idx_encryption_path", "encryption(pdf_path)"),
+)
+
+
+def refresh_statistics(conn_or_path, only_if_missing=False):
+    """Gather the query planner's statistics (ANALYZE). With the indexes
+    above, the slowest reports run in a fraction of a second instead of
+    minutes, but only once SQLite has statistics; without them it can
+    choose a slower plan than with no indexes at all. ANALYZE writes a
+    small sqlite_stat1 table, so it runs at the end of an analysis run
+    (when the database is being written anyway), and before report
+    generation only for a database that has no statistics yet
+    (only_if_missing=True), so generating reports does not otherwise
+    change the database."""
+    own = isinstance(conn_or_path, str)
+    conn = sqlite3.connect(conn_or_path) if own else conn_or_path
+    try:
+        if only_if_missing:
+            has = conn.execute("SELECT 1 FROM sqlite_master WHERE "
+                               "name='sqlite_stat1'").fetchone()
+            if has:
+                return False
+        conn.execute("ANALYZE")
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
+    finally:
+        if own:
+            conn.close()
+
+
 def init_db(db_path, session=None):
     """Create database and tables if they don't exist."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, factory=SafeConnection)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     cur = conn.cursor()
@@ -291,6 +408,12 @@ def init_db(db_path, session=None):
             analysis_id   INTEGER REFERENCES analyses(id) ON DELETE SET NULL
         );
     """)
+
+    for name, target in _INDEXES:
+        try:
+            cur.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {target}")
+        except sqlite3.Error:
+            pass
 
     for code, (label, severity) in FINDING_TYPE_DEFS.items():
         cur.execute("""
@@ -535,6 +658,7 @@ def check_pdf_already_analyzed(conn, pdf_path):
             "id": row[0],
             "pdf_filename": row[1],
             "analyzed_at": row[2],
+            "pdf_md5": pdf_md5.hexdigest(),
         }
     return False, None
 
@@ -555,6 +679,25 @@ def save_timeline(conn, analysis_id, rows):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [(analysis_id,) + tuple(r) for r in rows])
     conn.commit()
+
+
+# EXIF / format metadata by image MD5, shared across documents in a run, so
+# a prior version does not re-parse its parent's images. Small entries;
+# bounded by count.
+_IMG_META_CACHE = {}
+_IMG_META_CACHE_MAX = 50000
+
+
+def _image_metadata_cached(md5, image_bytes, ext):
+    from pdf_forensics.analysis.metadata import extract_image_metadata
+    key = (md5, ext)
+    if key in _IMG_META_CACHE:
+        return _IMG_META_CACHE[key]
+    meta = extract_image_metadata(image_bytes, ext)
+    if len(_IMG_META_CACHE) >= _IMG_META_CACHE_MAX:
+        _IMG_META_CACHE.clear()
+    _IMG_META_CACHE[key] = meta
+    return meta
 
 
 def save_to_db(conn, pdf_path, total_pages, page_data,
@@ -645,6 +788,10 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
     for code in FINDING_TYPE_DEFS:
         ft_ids[code] = get_finding_type_id(cur, code)
 
+    # One map per document (not per page): an image placed on many pages
+    # is hashed, looked up and EXIF-parsed once, and its image_metadata
+    # rows are written once rather than once per page.
+    xref_to_image_data_id = {}
     for page_num in sorted(page_data.keys()):
         pd = page_data[page_num]
 
@@ -658,7 +805,6 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
         transparency = pd["transparency"]
 
         # Insert unique image blobs into image_data (one per xref)
-        xref_to_image_data_id = {}
         for label in sorted(label_to_info.keys()):
             info = label_to_info[label]
             xref = info["xref"]
@@ -699,8 +845,8 @@ def save_to_db(conn, pdf_path, total_pages, page_data,
 
                 # Extract and store image metadata (EXIF, format info)
                 if image_data_id is not None:
-                    img_meta = extract_image_metadata(
-                        image_bytes, info["ext"])
+                    img_meta = _image_metadata_cached(
+                        img_md5, image_bytes, info["ext"])
                     for source, mkey, mvalue in img_meta:
                         cur.execute("""
                             INSERT INTO image_metadata

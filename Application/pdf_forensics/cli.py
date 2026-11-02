@@ -354,15 +354,22 @@ def _cli_graph(args, session):
         conn.close()
         return
 
+    import time as _time
+    from pdf_forensics import perf as _perf
+    _gpf = _perf.get(session)
+    _tg0 = _time.perf_counter()
     md5_set = {row[6] for row in rows}
     image_bytes = load_image_bytes(conn, md5_set)
     findings_by_md5 = load_findings_for_md5s(conn, md5_set)
 
+    _tt0 = _time.perf_counter()
     thumbnails = {}
     for md5, (blob, ext, w, h) in image_bytes.items():
         thumb = make_thumbnail_data_uri(blob, ext, w, h)
         if thumb:
             thumbnails[md5] = thumb
+    _gpf.event("graph_thumbnails", args.scope, _time.perf_counter() - _tt0,
+               images=len(image_bytes))
 
     G = build_graph(rows, thumbnails)
     image_meta = build_image_metadata(rows, findings_by_md5)
@@ -380,6 +387,8 @@ def _cli_graph(args, session):
         scope=args.scope, group_versions=group_versions)
 
     session.register_output("graph", out_path)
+    _gpf.event("graph", args.scope, _time.perf_counter() - _tg0,
+               placements=len(rows), unique_images=len(md5_set))
     graph_print_summary(rows, G, len(thumbnails))
     print(f"\nGraph written to: {out_path}")
     from pdf_forensics.reports.case_index import refresh_case_index

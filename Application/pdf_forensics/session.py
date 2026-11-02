@@ -77,6 +77,7 @@ class Session:
         self.outputs = []     # list of (kind, path) tuples
         self.logger = None
         self.log_path = None
+        self.perf = None        # performance log (pdf_forensics.perf)
 
         # Persist last-used case
         cfg = load_config()
@@ -201,6 +202,23 @@ class Session:
         self.logger.info("=" * 70)
 
         self.register_output("log", self.log_path)
+
+        # Performance log beside it: timings and system details only, no
+        # case number, file names or paths, so it can be shared to help
+        # diagnose slow processing (see perf.py).
+        try:
+            from pdf_forensics.perf import PerfLog
+            perf_path = os.path.join(self.logs_dir,
+                                     f"performance_{self.timestamp}.log")
+            if self.perf is not None:
+                self.perf.close()
+            self.perf = PerfLog(perf_path, case_folder=self.db_dir)
+            self.register_output("log", perf_path)
+            self.logger.info("Performance log: "
+                             + os.path.basename(perf_path))
+        except Exception as e:
+            self.perf = None
+            self.logger.info(f"Performance log not started: {e}")
 
     def make_filename(self, kind, ext):
         """Generate: {case}_{kind}_{timestamp}.{ext}"""

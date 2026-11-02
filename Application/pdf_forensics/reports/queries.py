@@ -462,10 +462,12 @@ def _query_timeline(conn):
         {"name": "Filename", "label": "Filename", "col_type": "text"},
         {"name": "#", "label": "#", "col_type": "numeric"},
         {"name": "Status", "label": "Status", "col_type": "text"},
+        # The raw value sits immediately before its decoded UTC value, so
+        # each conversion can be checked at a glance.
+        {"name": "Raw value", "label": "Raw value", "col_type": "text"},
         {"name": "UTC", "label": "UTC (normalised)", "col_type": "text"},
         {"name": "Revision", "label": "Revision", "col_type": "text"},
         {"name": "Timezone", "label": "Timezone in source", "col_type": "text"},
-        {"name": "Raw value", "label": "Raw value", "col_type": "text"},
         {"name": "Category", "label": "Category", "col_type": "text"},
         {"name": "Source", "label": "Source", "col_type": "text"},
         {"name": "Field", "label": "Field", "col_type": "text"},

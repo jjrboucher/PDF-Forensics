@@ -667,6 +667,10 @@ def _banner(case_number):
             f'analyses.</div></div>{info}{logo_html}</div>')
 
 
+from pdf_forensics.perf import timed as _timed
+
+
+@_timed("case_index", "case_index")
 def generate_case_index(case_root, case_number=None, session=None):
     """Build (or rebuild) {case}_index.html at the case root."""
     root = os.path.abspath(case_root)

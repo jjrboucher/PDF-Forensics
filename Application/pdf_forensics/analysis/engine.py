@@ -94,7 +94,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 skip_duplicates=True, force=False,
                 quiet=False, progress_callback=None,
                 source_analysis_id=None, version_number=None,
-                password=None):
+                password=None, image_callback=None):
     """
     Analyze a single PDF.
 
@@ -135,6 +135,13 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     _out(f"  Database: {os.path.abspath(db_path)}")
     _out(f"  Store images in DB: {'yes' if store_images else 'no'}")
 
+    # Performance log (no names or paths: the file is identified by MD5).
+    from pdf_forensics import perf as _perf
+    pf = _perf.get(session)
+    lap = pf.lap
+    pf.lap_reset()
+    _escaped0 = getattr(conn, "escaped", [0])[0] if conn is not None else 0
+
     if session:
         pdf_md5 = hashlib.md5()
         with open(pdf_path, "rb") as fh:
@@ -142,6 +149,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 pdf_md5.update(chunk)
         session.log_pdf_start(pdf_path, pdf_md5.hexdigest(),
                               os.path.getsize(pdf_path))
+        pf.set("md5", pdf_md5.hexdigest())
+        pf.set("size_mb", round(os.path.getsize(pdf_path) / 1048576, 2))
 
     if extract_dir:
         os.makedirs(extract_dir, exist_ok=True)
@@ -202,6 +211,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     # interpreted correctly downstream. If the file head could not be
     # read the state is recorded as 'indeterminate' rather than guessed.
     linearized = detect_linearization(pdf_path)
+    pf.set("pages", len(doc_mu))
+    pf.set("revisions", len(pdf_versions or []))
     pdf_metadata.append(("catalog", "linearized",
                          "indeterminate" if linearized is None
                          else str(linearized)))
@@ -217,6 +228,13 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     doc_font_spans = []   # accumulated across pages for font analysis (ANAL-03)
     doc_cameras = {}      # {label: (make, model)} for mixed-camera check
     doc_exif_dates = []   # photo capture dates for the timeline
+    # One extraction per image per document (an image placed on every page
+    # is extracted, and its EXIF read, once): see analysis/images.py.
+    _img_cb_last = [0.0]  # last image_callback time (throttle)
+    doc_image_cache = {}  # xref -> extraction result
+    exif_done = set()     # xrefs whose camera / capture dates were read
+    img_stats = {}        # cache_hits across documents (prior versions)
+    lap("open")
 
     for page_idx in range(total_pages):
         page_num = page_idx + 1
@@ -239,7 +257,10 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
         placements, label_to_info, xref_to_labels, \
             form_xref_to_labels = \
             build_image_map(page_pk, page_num, page_pad, doc_mu,
-                            content_ops=page_ops)
+                            content_ops=page_ops,
+                            doc_cache=doc_image_cache, stats=img_stats)
+        pf.add("image_placements", len(label_to_info))
+        lap("image_map")
 
         img_count = len(label_to_info)
         _out(f"  Page {page_num}: {img_count} image(s)")
@@ -254,6 +275,23 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 with open(filepath, "wb") as f:
                     f.write(info["image_bytes"])
                 total_extracted += 1
+                # Live count for the GUI (throttled to ~4 updates a second)
+                if image_callback is not None:
+                    _now = __import__("time").monotonic()
+                    if _now - _img_cb_last[0] >= 0.25:
+                        _img_cb_last[0] = _now
+                        try:
+                            image_callback(total_extracted)
+                        except Exception:
+                            pass
+        # Exact count at the end of the page's images (the throttled
+        # updates above can lag by up to a quarter of a second).
+        if image_callback is not None and total_extracted:
+            try:
+                image_callback(total_extracted)
+            except Exception:
+                pass
+        lap("image_files")
 
         # Z-order and graphics state
         gstate_per_do = get_zorder_and_graphics_state(
@@ -261,6 +299,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
         transparency = enrich_image_transparency(
             label_to_info, placements, gstate_per_do, page_pk
         )
+        lap("transparency")
 
         # Print transparency info
         for label, t in sorted(transparency.items()):
@@ -325,10 +364,18 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                             f"text-over-text detection(s) consolidated "
                             f"into a white-box alteration")
         findings.extend(check_unapplied_redactions(page_pk, page_num))
+        lap("page_detectors")
 
         # Collect EXIF capture-device info for the document-level
         # mixed-camera check (cheap: reads only Make/Model tags).
-        for label in label_to_info:
+        # Once per unique image (the first placement's label stands for
+        # it): a photo repeated on many pages is read once, and appears
+        # once in the timeline rather than once per placement.
+        for label in sorted(label_to_info):
+            xref = label_to_info[label].get("xref")
+            if xref in exif_done:
+                continue
+            exif_done.add(xref)
             cam = extract_camera_info(
                 label_to_info[label].get("image_bytes"),
                 label_to_info[label].get("ext"))
@@ -355,6 +402,13 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
 
         if progress_callback:
             progress_callback(page_num, total_pages)
+        lap("page_other")
+
+    pf.set("unique_images", len(doc_image_cache))
+    pf.set("cache_hits", img_stats.get("cache_hits", 0))
+    pf.set("image_mb", round(sum(len(v.get("image") or b"")
+                                 for v in doc_image_cache.values() if v)
+                             / 1048576, 2))
 
     # Document-level DPI anomaly detection (runs after all pages)
     dpi_findings = check_dpi_anomalies(page_data)
@@ -388,6 +442,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                     page_data[pg]["findings"],
                     page_data[pg]["label_to_info"])
 
+    lap("font_dpi")
     # Extract reviewer comments / markup annotations before closing.
     try:
         from pdf_forensics.analysis.comments import extract_comments
@@ -400,13 +455,16 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     # and cross-image capture-device consistency. Run before the
     # documents close (signature/structural checks need doc_pk).
     doc_findings = []
+    lap("comments")
     doc_findings.extend(check_metadata_consistency(pdf_metadata))
     doc_findings.extend(check_signature_coverage(doc_pk, pdf_path))
     # Metadata changed by later revisions, and ExifTool's update marker:
     # submitted files only (a prior version is a subset of that history).
+    lap("doc_checks")
     if version_number is None:
         doc_findings.extend(check_metadata_history(pdf_path,
                                                    password=password))
+    lap("metadata_history")
     doc_findings.extend(check_structural_integrity(doc_pk))
     doc_findings.extend(check_mixed_cameras(doc_cameras))
     # Revision history is examined on the submitted file only; a prior
@@ -417,6 +475,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     # Timeline: every timestamp in every revision, normalised to UTC.
     # Built for submitted files only; a prior version analysed in its own
     # right is already part of its parent's timeline.
+    lap("version_checks")
     timeline = None
     if version_number is None:
         try:
@@ -442,6 +501,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
             for w in df.get("_all_warnings", []):
                 session.log(f"    qpdf: {w}")
 
+    lap("timeline")
     doc_mu.close()
     doc_pk.close()
 
@@ -480,6 +540,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
             _out(f"  Document risk score: {doc_risk} "
                  f"(highest page: {max(page_risk_scores.values(), default=0)})")
 
+    lap("risk")
     analysis_id = save_to_db(conn, pdf_path, total_pages, page_data,
                              pdf_metadata=pdf_metadata,
                              pdf_versions=pdf_versions,
@@ -498,6 +559,14 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     record_submission(conn, pdf_path, "analysed", session=session,
                       analysis_id=analysis_id,
                       is_version=version_number is not None)
+    pf.set("findings", sum(len(v) for v in all_findings.values()))
+    _escaped = getattr(conn, "escaped", [0])[0] - _escaped0
+    if _escaped and session:
+        session.log(f"  {_escaped} text value(s) contained invalid UTF-16 "
+                    f"(unpaired surrogates) and were stored with \\uXXXX "
+                    f"escapes, e.g. \\udc8f, so the analysis could be saved",
+                    "warning")
+    lap("db_save")
     if own_conn:
         conn.close()
 
@@ -535,6 +604,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
         session.log_pdf_complete(
             pdf_path, total_pages, total_extracted,
             total_findings, high_risk_count=len(high_risk))
+    lap("finish")
 
     return {
         "pdf": pdf_path,
@@ -567,6 +637,17 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
     conn = init_db(db_path, session=session)
     summaries = []
     skipped = 0
+    # Performance log for the run (flags and counts only, no names).
+    from pdf_forensics import perf as _perf
+    from pdf_forensics.analysis.images import clear_image_cache
+    clear_image_cache()
+    pf = _perf.get(session)
+    pf.run_begin("analysis", len(pdf_paths), interface="command line",
+                 store_images=bool(store_images),
+                 extract_to_disk=bool(extract_to_disk),
+                 skip_duplicates=bool(skip_duplicates),
+                 password_list=password_manager is not None,
+                 prior_versions="not extracted (command line)")
 
     failed = 0
     not_found = 0
@@ -596,11 +677,14 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
         # permissions-only files open and genuinely locked files are
         # recorded even when no list was supplied; a locked file no
         # password opens is recorded and skipped, not analysed.
+        pf.file_begin("submitted")
         from pdf_forensics import passwords as _pw
         enc = _pw.resolve_file_password(conn, pdf_path, password_manager,
                                         session=session, quiet=quiet)
+        pf.lap("encryption")
         if enc["skip"]:
             encrypted_unopened += 1
+            pf.file_end("encrypted, not opened")
             continue
         file_password = enc["password"]
         try:
@@ -619,8 +703,10 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
             if summary:
                 if summary.get("skipped"):
                     skipped += 1
+                    pf.file_end("skipped (identical copy)")
                 else:
                     summaries.append(summary)
+                    pf.file_end("ok")
                     if password_manager is not None and summary.get("analysis_id"):
                         try:
                             conn.execute(
@@ -640,10 +726,18 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
             record_submission(conn, pdf_path, "failed", session=session,
                               reason=e)
             failed += 1
+            pf.file_end(f"failed ({_perf.error_label(e)})")
         if not quiet:
             print()
 
+    # Planner statistics for the new indexes (see database.refresh_statistics).
+    _t_stats = __import__("time").perf_counter()
+    from pdf_forensics.database import refresh_statistics
+    refresh_statistics(conn)
+    pf.event("database", "statistics",
+             __import__("time").perf_counter() - _t_stats)
     conn.close()
+    pf.run_end()
 
     line = (f"{len(pdf_paths)} submitted: {len(summaries)} analysed, "
             f"{skipped} skipped as identical copies of files already "

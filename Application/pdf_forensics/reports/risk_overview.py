@@ -23,6 +23,10 @@ from pdf_forensics import __version__, __tool_name__, BUILD_DATE
 from pdf_forensics.reports.queries import get_report_by_id
 
 
+from pdf_forensics.perf import timed as _timed
+
+
+@_timed("spreadsheet", "risk_overview")
 def generate_risk_overview_xlsx(db_path, output_path, session=None,
                                 case_number=None):
     """

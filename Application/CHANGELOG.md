@@ -1,6 +1,142 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.1.4 — 2026-10-22 (build 2026-10-22g)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.1.5 — 2026-11-02 (build 2026-11-02c)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.1.5 — Release (2026-11-02, build 2026-11-02c)
+
+Performance. No database schema change; findings are unchanged.
+
+### Build 2026-11-02c
+- During a run every interactive control is now locked (file buttons, the
+  PDF list, the processing choice and options, the database and output
+  fields, Run and Back), and each is restored to its previous state when
+  the run ends; only the log, its scrollbars and the counters stay live.
+  In build 2026-11-02b only Run and navigation were blocked, so the PDF
+  list could be cleared while the run was still reading it. (`gui/app.py`)
+- Timeline Analysis (report and spreadsheet): the Raw value column now sits
+  immediately before UTC (normalised), so each conversion can be checked
+  at a glance. In the spreadsheet, UTC (normalised) is a real Excel
+  date-time (dd-mmm-yyyy HH:mm:ss) rather than text, so it sorts, filters
+  and calculates as a date. (`reports/queries.py`,
+  `reports/timeline_xlsx.py`)
+
+
+### Build 2026-11-02b: the window stays responsive
+- Analysis, triage, reports and graphs ran on the window's own thread,
+  which only redrew between steps and never handled input. After a few
+  seconds Windows marked the window "Not Responding" and showed a frozen
+  snapshot of an earlier document and page, while processing carried on;
+  clicking made it worse, and long report queries froze it entirely. Runs
+  now execute on a background thread, so the window keeps handling its
+  events throughout. The run code updates the window as before: with a
+  threaded Tcl (standard Python builds) tkinter passes those updates to
+  the window's thread; with a non-threaded Tcl, runs execute as before.
+- While a run is in progress, a second run cannot be started and the
+  screen cannot be left; closing the window asks for confirmation, since
+  the document being processed would not be saved (completed documents
+  are). An error during a run is shown instead of being lost.
+- The progress line shows the images written for the current document
+  ("page 12/412 · 3,180 image(s) written"), updated about four times a
+  second, so a long document visibly keeps moving. (`gui/app.py`,
+  `analysis/engine.py` `image_callback`)
+- Getting Started guide: the progress line and the run-time behaviour.
+
+### Build 2026-11-02
+- Status bar: a shorter status message left the end of the previous,
+  longer one visible beside it. The message now spans the width of the
+  bar and repaints its whole area on every change. (`gui/app.py`)
+- README, "If processing is slow": storing images in the database is a
+  significant cost on a slower drive, and is needed only for thumbnails
+  in the reports and graph.
+
+
+### Build 2026-10-29b: from the first performance log (325 files)
+
+#### Reports up to a hundred times faster: database indexes
+- The database had no indexes on the columns the reports join on, so
+  reports that correlate findings, pages and analyses scanned whole tables
+  for every row (Concealment Overview took 133 s, Document Comparison
+  35 s, Document Risk Summary 27 s on a 693-analysis case). Twenty indexes
+  are now created whenever a database is opened, so existing databases
+  gain them too; they change no data.
+- Indexes alone can make SQLite choose a slower plan (Document Risk
+  Summary became four times slower in testing), so planner statistics
+  (ANALYZE) are gathered at the end of each analysis run, while the
+  database is being written anyway, and once before reports for a database
+  that has none. On a synthetic case of the same size the five slowest
+  reports went from 77 s to under 4 s in total, with identical results.
+  (`database.py` `_INDEXES`, `refresh_statistics()`)
+
+#### Malformed text no longer fails an analysis
+- Two files failed with UnicodeEncodeError, one after five minutes of
+  work. Malformed PDFs can contain text with unpaired UTF-16 surrogates
+  (half a character); SQLite cannot store it and refused the whole save.
+  Every database write now stores such characters as visible escapes
+  (e.g. \udc8f), so the save succeeds and the examiner can still see
+  what the PDF contained; the session log notes how many values were
+  escaped. (`database.py` `SafeConnection`)
+
+#### Performance log fixes
+- Files skipped as identical copies of files already analysed were
+  logged as "interrupted" with no MD5; they are now logged as "skipped
+  (identical copy)" with the MD5.
+- Case index regeneration was not logged (its session was passed by
+  position); it now is.
+- Memory read as "None" on Windows without psutil: the Windows memory
+  call was made without its 64-bit handle types and failed silently.
+- A failure now records where it occurred (module, function, line),
+  still without the error message, which can contain file names.
+- README: a removable (USB) drive is listed with network drives as a
+  common cause of slow processing.
+
+### Earlier in 1.1.5 (build 2026-10-29)
+
+### Images extracted once per document
+- The extraction cache and the database's image map were reset for every
+  page, so an image placed on many pages (a logo, a letterhead, a page
+  background) was extracted from the PDF, hashed, opened to read its EXIF
+  and recorded once per page, and a copy of its bytes was held in memory
+  for every page until the document was saved. Each image is now
+  extracted, hashed and read once per document, and every placement shares
+  one copy of its bytes. Each placement still gets its own file in the
+  output folder and its own row in the database.
+  (`analysis/images.py`, `analysis/engine.py`, `database.py`)
+- Its EXIF metadata rows were also inserted once per page: duplicate rows
+  in image_metadata. They are now written once per image.
+- Camera and capture-date extraction runs once per image, so a photograph
+  repeated across pages appears once in the timeline instead of once per
+  placement.
+
+### Prior versions reuse their parent's images
+- A prior version usually contains most of its parent's images. Images
+  are now cached across documents by content (the MD5 of the image's raw
+  stream and its dictionary), so a prior version reuses identical images
+  already extracted from its parent, and their EXIF metadata, instead of
+  extracting and parsing them again. The cache holds up to 512 MB, least
+  recently used first out, and is emptied at the start of each run.
+- Prior versions are now processed immediately after their parent rather
+  than at the end of the batch, so the parent's images are still cached
+  (and the log reads in a natural order). (`gui/app.py`)
+
+### New: performance log
+- Each session writes `logs/performance_{timestamp}.log` beside the
+  session log: system details (operating system, CPU count, memory,
+  Python and library versions, whether the case folder is on a local or a
+  network drive), the options of each run, one row per file with its
+  size, pages, images, unique images, cache reuse, findings, revisions,
+  memory and the seconds spent in each processing stage, and one line per
+  report, spreadsheet, graph and case index generated. Triage runs are
+  logged the same way.
+- It contains no case number, file names or paths, so it can be shared to
+  diagnose slow processing; files are identified by MD5, which matches the
+  database and the case index. It is listed with the logs in the case
+  index. (`perf.py`, `session.py`, and the timing points in the engine,
+  triage, GUI, command line and report generators)
+
+### Documentation
+- Application README: "If processing is slow" (what the performance log
+  holds and how to share it).
+- All guides' covers state version 1.1.5, build 2026-10-29.
 
 ## Version 1.1.4 — Release (2026-10-22, build 2026-10-22g)
 

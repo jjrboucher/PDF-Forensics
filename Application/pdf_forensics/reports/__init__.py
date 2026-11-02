@@ -31,6 +31,15 @@ def generate_reports(db_path, report_ids, output_dir, session=None,
 
     os.makedirs(output_dir, exist_ok=True)
     results = []
+    # A database from an earlier version gets its indexes and planner
+    # statistics once (see database.refresh_statistics).
+    try:
+        from pdf_forensics.database import init_db, refresh_statistics
+        _c = init_db(db_path)
+        refresh_statistics(_c, only_if_missing=True)
+        _c.close()
+    except Exception:
+        pass
 
     for rid in report_ids:
         report_def = get_report_by_id(rid)

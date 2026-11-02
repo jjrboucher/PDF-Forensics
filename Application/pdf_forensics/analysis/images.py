@@ -196,8 +196,71 @@ def _compute_effective_dpi(pixel_w, pixel_h, ctm):
     return dpi_x, dpi_y, round(display_w, 2), round(display_h, 2)
 
 
+# ---------------------------------------------------------------------
+# Extraction caches (performance; results are identical)
+#
+# * Per document (doc_cache, keyed by xref): an image placed on many pages
+#   (a logo, a letterhead) is extracted once per document, not once per
+#   page, and every placement shares one copy of its bytes in memory.
+# * Across documents (keyed by content): a prior version that contains the
+#   same image as its parent reuses the parent's extraction. The key is
+#   the MD5 of the image's raw stream bytes plus its dictionary, both
+#   cheap to read without decoding; identical keys mean identical images.
+#   Bounded by a byte budget, least recently used first out.
+# ---------------------------------------------------------------------
+import hashlib
+from collections import OrderedDict
+
+CONTENT_CACHE_BUDGET = 512 * 1024 * 1024
+_content_cache = OrderedDict()
+_content_bytes = 0
+
+
+def clear_image_cache():
+    """Empty the cross-document cache (called at the start of a run)."""
+    global _content_bytes
+    _content_cache.clear()
+    _content_bytes = 0
+
+
+def _content_key(doc_mu, xref):
+    try:
+        raw = doc_mu.xref_stream_raw(xref) or b""
+        obj = doc_mu.xref_object(xref, compressed=True) or ""
+        if not raw:
+            return None
+        h = hashlib.md5(raw)
+        h.update(b"\0")
+        h.update(obj.encode("utf-8", "replace"))
+        return h.hexdigest()
+    except Exception:
+        return None
+
+
+def _extract_cached(doc_mu, xref, stats=None):
+    """doc_mu.extract_image(xref), reusing an identical image already
+    extracted from another document in this run."""
+    global _content_bytes
+    key = _content_key(doc_mu, xref)
+    if key is not None and key in _content_cache:
+        _content_cache.move_to_end(key)
+        if stats is not None:
+            stats["cache_hits"] = stats.get("cache_hits", 0) + 1
+        return _content_cache[key]
+    extracted = doc_mu.extract_image(xref)
+    if key is not None and extracted and extracted.get("image"):
+        size = len(extracted["image"])
+        if size <= CONTENT_CACHE_BUDGET // 4:
+            _content_cache[key] = extracted
+            _content_bytes += size
+            while _content_bytes > CONTENT_CACHE_BUDGET and _content_cache:
+                _, old = _content_cache.popitem(last=False)
+                _content_bytes -= len(old.get("image") or b"")
+    return extracted
+
+
 def build_image_map(page_pk, page_num, page_pad, doc_mu,
-                    content_ops=None):
+                    content_ops=None, doc_cache=None, stats=None):
     """
     Build image naming map by parsing the content stream, matching
     the enumeration order used by extract_pdf_images.py.
@@ -215,7 +278,9 @@ def build_image_map(page_pk, page_num, page_pad, doc_mu,
     label_to_info = {}
     xref_to_labels = {}
     form_xref_to_labels = {}
-    xref_extract_cache = {}
+    # One cache per document when the caller supplies it (doc_cache);
+    # otherwise per page, as before.
+    xref_extract_cache = doc_cache if doc_cache is not None else {}
 
     img_count = 0
     for p in placements:
@@ -228,7 +293,7 @@ def build_image_map(page_pk, page_num, page_pad, doc_mu,
 
         if xref not in xref_extract_cache:
             try:
-                extracted = doc_mu.extract_image(xref)
+                extracted = _extract_cached(doc_mu, xref, stats)
                 xref_extract_cache[xref] = extracted
             except Exception:
                 xref_extract_cache[xref] = None

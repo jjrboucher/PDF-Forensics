@@ -20,6 +20,10 @@ import os
 import sqlite3
 from datetime import datetime
 
+# The UTC column is written as a real Excel date-time (not text), so it
+# sorts, filters and calculates as a date; shown as e.g. 02-Nov-2026 14:07:59.
+UTC_FORMAT = "dd-mmm-yyyy HH:mm:ss"
+
 from pdf_forensics import __version__, __tool_name__, BUILD_DATE
 from pdf_forensics.reports.queries import _query_timeline
 
@@ -29,6 +33,10 @@ UTC_NOTE = ("All timestamps are normalised to UTC for comparison. Values "
             "may reflect an unknown local offset of up to 14 hours.")
 
 
+from pdf_forensics.perf import timed as _timed
+
+
+@_timed("spreadsheet", "timeline")
 def generate_timeline_xlsx(db_path, output_path, session=None,
                            case_number=None):
     """Write the workbook. Returns the number of documents listed."""
@@ -82,7 +90,7 @@ def generate_timeline_xlsx(db_path, output_path, session=None,
     ws.title = "timeline"
     names = [c["name"] for c in columns]
     labels = [c["label"] for c in columns]
-    widths = {"Filename": 42, "#": 6, "Status": 15, "UTC": 20,
+    widths = {"Filename": 42, "#": 6, "Status": 15, "UTC": 21,
               "Revision": 34, "Timezone": 20, "Raw value": 28,
               "Category": 13, "Source": 34, "Field": 22, "Issue": 70,
               "Object": 14, "PDF MD5": 34}
@@ -95,7 +103,14 @@ def generate_timeline_xlsx(db_path, output_path, session=None,
             v = rec.get(n, "")
             if n == "#" and is_summary:
                 v = None
+            if n == "UTC":
+                try:
+                    v = datetime.strptime(v, "%Y-%m-%d %H:%M:%S") if v else None
+                except (TypeError, ValueError):
+                    pass   # leave anything unexpected as it was
             c = ws.cell(row=r, column=col, value=v)
+            if n == "UTC" and isinstance(v, datetime):
+                c.number_format = UTC_FORMAT
             c.font = bold if is_summary else cell_font
             c.border = border
             c.alignment = wrap if n in ("Issue", "Source", "Revision",
