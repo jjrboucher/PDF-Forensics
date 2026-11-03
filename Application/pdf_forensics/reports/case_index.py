@@ -339,7 +339,8 @@ def _submitted_html(st):
 
 def _scan_case(root):
     cache = _HashCache(root)
-    data = {"dbs": {}, "reports": [], "visual": [], "graphs": [],
+    data = {"dbs": {}, "reports": [], "visual": [], "visual_docs": [],
+            "graphs": [],
             "triage": [], "risk_overview": [], "timeline_xlsx": [],
             "logs": [], "other": [],
             "images": [], "versions": []}
@@ -380,8 +381,19 @@ def _scan_case(root):
         elif ("visual-overlays" in low or "visual_overlays" in low) \
                 and low.endswith(".html"):
             db, build = _html_db_and_build(p)
-            data["visual"].append(_file_rec(p, root, cache, "visual",
-                                            db=db, build=build))
+            rec = _file_rec(p, root, cache, "visual", db=db, build=build)
+            # Per-document reports (1.1.6) sit in a folder beside the
+            # index: listed in the manifest, not as cards of their own.
+            docs_dir = os.path.splitext(p)[0] + "_files"
+            n_docs = 0
+            if os.path.isdir(docs_dir):
+                for dp in sorted(glob.glob(os.path.join(
+                        glob.escape(docs_dir), "*.html"))):
+                    data["visual_docs"].append(_file_rec(
+                        dp, root, cache, "visual_doc", db=db, build=build))
+                    n_docs += 1
+            rec["n_docs"] = n_docs
+            data["visual"].append(rec)
         elif "risk-overview" in low and low.endswith(".xlsx"):
             db, build = _xlsx_db_and_build(p)
             data["risk_overview"].append(_file_rec(
@@ -446,8 +458,8 @@ def _scan_case(root):
     # Link outputs to databases; fall back to a matching timestamp.
     known = set(data["dbs"])
     by_ts = {d["ts"]: n for n, d in data["dbs"].items() if d["ts"]}
-    for key in ("reports", "visual", "graphs", "risk_overview",
-                "timeline_xlsx"):
+    for key in ("reports", "visual", "visual_docs", "graphs",
+                "risk_overview", "timeline_xlsx"):
         for rec in data[key]:
             db = rec.get("db")
             if db not in known:
@@ -670,6 +682,17 @@ def _banner(case_number):
 from pdf_forensics.perf import timed as _timed
 
 
+def _visual_desc(rec):
+    """Card text for a visual overlay report: the 1.1.6 index page lists
+    per-document reports; earlier builds wrote one combined report."""
+    n = rec.get("n_docs") or 0
+    if n:
+        return (f"Index of {n} per-document report(s): each opens in a new "
+                f"tab and shows the flagged pages with their overlays as "
+                f"toggleable layers.")
+    return "Flagged pages with overlays as toggleable layers."
+
+
 @_timed("case_index", "case_index")
 def generate_case_index(case_root, case_number=None, session=None):
     """Build (or rebuild) {case}_index.html at the case root."""
@@ -766,9 +789,8 @@ def generate_case_index(case_root, case_number=None, session=None):
                          f'</span></div></div>')
         vis = _newest(outs("visual", k))
         if vis:
-            quick.append(_file_card(vis[0], "Visual Overlay Report",
-                                    "Each flagged page with its overlays "
-                                    "as toggleable layers.",
+            quick.append(_file_card(vis[0], "Visual Overlay Reports",
+                                    _visual_desc(vis[0]),
                                     ("Visual", "vis")))
         rov = _newest(outs("risk_overview", k))
         if rov:
@@ -810,9 +832,8 @@ def generate_case_index(case_root, case_number=None, session=None):
     # Visual & graphs
     vg = []
     for k in db_keys:
-        cards = [_file_card(r, "Visual Overlay Report",
-                            "Flagged pages with overlays as toggleable "
-                            "layers.", ("Visual", "vis"))
+        cards = [_file_card(r, "Visual Overlay Reports",
+                            _visual_desc(r), ("Visual", "vis"))
                  for r in _newest(outs("visual", k))]
         cards += [_file_card(r, f"Relationship Graph \u2014 "
                              f"{r['scope'] or 'graph'}",
@@ -904,7 +925,9 @@ def generate_case_index(case_root, case_number=None, session=None):
         lp.append(_empty("No session logs found."))
     manifest = []
     for kind_key, label in (("dbs", "Database"), ("reports", "Report"),
-                            ("visual", "Visual report"), ("graphs", "Graph"),
+                            ("visual", "Visual report"),
+                            ("visual_docs", "Visual report (document)"),
+                            ("graphs", "Graph"),
                             ("risk_overview", "Spreadsheet"),
                             ("timeline_xlsx", "Spreadsheet"),
                             ("triage", "Spreadsheet"), ("logs", "Log"),

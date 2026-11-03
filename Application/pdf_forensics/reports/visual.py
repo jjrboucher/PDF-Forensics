@@ -361,9 +361,8 @@ def _b64_png(png_bytes):
 from pdf_forensics.perf import timed as _timed
 
 
-@_timed("report", "visual_overlay")
-def generate_visual_report(db_path, output_path, analysis_id=None,
-                           session=None):
+def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
+                                 session=None):
     """
     Generate a visual overlay report.
 
@@ -1358,5 +1357,234 @@ def _assemble_html(doc_sections, db_path, total_findings, session=None):
 }})();
 </script>
 
+</body>
+</html>"""
+
+
+
+# ---------------------------------------------------------------------
+# Per-document reports with an index page (1.1.6)
+#
+# With dozens or hundreds of documents, one combined report is impractical.
+# generate_visual_reports() writes one report per document that has overlay
+# findings into a folder beside the index ({index}_files/), and an index
+# page listing them (sortable, filterable), each opening in a new tab.
+# ---------------------------------------------------------------------
+
+# The single-document / combined entry point, kept for compatibility.
+generate_visual_report = _timed("report", "visual_overlay_combined")(
+    _generate_visual_report_impl)
+
+
+def _overlay_counts(conn, analysis_id):
+    by_page = _load_overlay_findings(conn, analysis_id)
+    kinds = {}
+    for items in by_page.values():
+        for f in items:
+            kinds[f["kind"]] = kinds.get(f["kind"], 0) + 1
+    return len(by_page), sum(kinds.values()), kinds
+
+
+@_timed("report", "visual_overlay")
+def generate_visual_reports(db_path, index_path, session=None,
+                            progress=None):
+    """One visual overlay report per document with overlay findings, plus
+    an index page at index_path. progress(i, n) is called per document.
+    Returns (documents_with_reports, findings_visualized)."""
+    import urllib.parse
+    from pdf_forensics.pathutil import safe_name
+    conn = sqlite3.connect(db_path)
+    try:
+        targets = _list_analyses_with_overlays(conn)
+        if not targets:
+            if session:
+                session.log("No overlay findings with coordinates found.",
+                            "warning")
+            return 0, 0
+        stem = os.path.splitext(os.path.basename(index_path))[0]
+        folder_name = f"{stem}_files"
+        folder = os.path.join(os.path.dirname(os.path.abspath(index_path)),
+                              folder_name)
+        os.makedirs(folder, exist_ok=True)
+        meta = {r[0]: r[1:] for r in conn.execute(
+            "SELECT id, pdf_filename, pdf_md5, version_number, "
+            "source_analysis_id, doc_risk_score FROM analyses")}
+        rows, total = [], 0
+        for i, (aid, fname) in enumerate(targets, 1):
+            if progress:
+                try:
+                    progress(i, len(targets))
+                except Exception:
+                    pass
+            pdf_filename, md5, vnum, parent, risk = meta.get(
+                aid, (fname, "", None, None, None))
+            pages, n_over, kinds = _overlay_counts(conn, aid)
+            doc_stem = os.path.splitext(
+                pdf_filename or f"document_{aid}")[0].strip(" .")
+            # Short, Windows-safe names; the MD5 prefix keeps them unique.
+            name = safe_name(f"{i:03d}_{doc_stem}_{(md5 or '')[:8]}",
+                             folder, max_path=250, reserve=5) + ".html"
+            path = os.path.join(folder, name)
+            try:
+                n = _generate_visual_report_impl(db_path, path,
+                                                 analysis_id=aid,
+                                                 session=session)
+            except Exception as e:
+                n = 0
+                if session:
+                    session.log(f"Visual report failed for "
+                                f"{pdf_filename}: {e}", "error")
+            made = os.path.isfile(path)
+            total += n if made else 0
+            kind = "Submitted"
+            if vnum is not None:
+                pname = meta.get(parent, ("?",))[0] if parent else "?"
+                kind = f"Prior version {vnum} of {pname}"
+            rows.append({"n": i, "file": pdf_filename, "kind": kind,
+                         "pages": pages, "overlays": n_over,
+                         "tot": kinds.get("text_over_text", 0),
+                         "wb": kinds.get("white_box", 0),
+                         "ann": kinds.get("annotation", 0),
+                         "other": sum(v for k, v in kinds.items() if k not in
+                                      ("text_over_text", "white_box",
+                                       "annotation")),
+                         "risk": risk, "md5": md5 or "",
+                         "href": (f"{urllib.parse.quote(folder_name)}/"
+                                  f"{urllib.parse.quote(name)}")
+                                 if made else None})
+        with open(index_path, "w", encoding="utf-8") as fh:
+            fh.write(_index_html(rows, db_path, session))
+        if session:
+            session.register_output("visual", index_path)
+        return sum(1 for r in rows if r["href"]), total
+    finally:
+        conn.close()
+
+
+def _index_html(rows, db_path, session=None):
+    from pdf_forensics import branding as _branding
+    from pdf_forensics.database import compute_file_md5
+    cfg = _branding.load_branding()
+    case_number = session.case_number if session else ""
+    classification = _branding.classification_text(cfg)
+    foot_text = _branding.footer_text(case_number, cfg)
+    db_md5 = compute_file_md5(db_path) if db_path else ""
+    app_logo = ""
+    try:
+        from pdf_forensics.assets import get_logo_base64
+        app_logo = get_logo_base64() or ""
+    except Exception:
+        pass
+    agency_logo = _branding.get_agency_logo_data_uri(cfg)
+    info_pairs = _branding.case_info_pairs(case_number, cfg)
+    info_block = ""
+    if info_pairs:
+        info_block = '<div class="case-info">' + "".join(
+            f'<div class="bi-row"><span class="bi-label">{_esc(l)}</span>'
+            f'<span class="bi-val">{_esc(v)}</span></div>'
+            for l, v in info_pairs) + "</div>"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    n_docs = sum(1 for r in rows if r["href"])
+    n_over = sum(r["overlays"] for r in rows)
+
+    def cell(v, cls=""):
+        return f'<td class="{cls}">{_esc("" if v is None else v)}</td>'
+
+    body = []
+    for r in rows:
+        link = (f'<a href="{r["href"]}" target="_blank" rel="noopener">'
+                f'Open report</a>' if r["href"] else
+                '<span class="missing">not generated</span>')
+        body.append(
+            "<tr>" + cell(r["n"], "num") + cell(r["file"], "fn")
+            + cell(r["kind"]) + cell(r["overlays"], "num")
+            + cell(r["pages"], "num") + cell(r["tot"], "num")
+            + cell(r["wb"], "num") + cell(r["ann"], "num")
+            + cell(r["other"], "num") + cell(r["risk"], "num")
+            + f'<td class="link">{link}</td>' + cell(r["md5"], "md5")
+            + "</tr>")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visual Overlay Reports — {__tool_name__}</title>
+<style>
+  :root {{ --bg:#1B1B1B; --panel:#242424; --line:#3A3A3A; --text:#E6E6E6;
+          --dim:#A8A8A8; --accent:#ED1C24; --link:#6CB4FF; }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin:0; background:var(--bg); color:var(--text);
+         font: 14px/1.45 "Segoe UI", Arial, sans-serif; }}
+  #classification {{ background:var(--accent); color:#fff; text-align:center;
+         font-weight:700; padding:4px; letter-spacing:.05em; }}
+  #header {{ display:flex; align-items:center; gap:18px; padding:18px 24px;
+         border-bottom:2px solid var(--accent); }}
+  #header .app-logo {{ height:56px; }} #header .agency-logo {{ height:56px; margin-left:auto; }}
+  #header h1 {{ margin:0; font-size:22px; }}
+  .subtitle {{ color:var(--dim); font-size:12px; margin-top:4px; }}
+  .case-info .bi-row {{ font-size:12px; }} .bi-label {{ color:var(--dim); margin-right:6px; }}
+  .intro {{ padding:14px 24px 0; color:var(--dim); max-width:1100px; }}
+  .bar {{ display:flex; gap:12px; align-items:center; padding:12px 24px; }}
+  .bar input {{ background:var(--panel); color:var(--text); border:1px solid var(--line);
+         padding:6px 10px; min-width:320px; border-radius:4px; }}
+  .bar .count {{ color:var(--dim); font-size:13px; }}
+  .wrap {{ padding:0 24px 24px; overflow-x:auto; }}
+  table {{ border-collapse:collapse; width:100%; }}
+  th, td {{ border:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:top; }}
+  th {{ background:var(--panel); position:sticky; top:0; cursor:pointer; user-select:none;
+        font-size:12px; text-transform:uppercase; color:var(--dim); white-space:nowrap; }}
+  th[data-dir="asc"]::after {{ content:" \\25B2"; }} th[data-dir="desc"]::after {{ content:" \\25BC"; }}
+  td.num {{ text-align:right; white-space:nowrap; }} td.md5 {{ font-family:Consolas,monospace; font-size:12px; color:var(--dim); }}
+  td.link a {{ color:var(--link); font-weight:600; white-space:nowrap; }}
+  .missing {{ color:var(--dim); font-style:italic; }}
+  tr:hover td {{ background:#2B2B2B; }}
+  #print-footer {{ padding:10px 24px; color:var(--dim); font-size:12px; display:flex; justify-content:space-between; }}
+  @media print {{ body {{ background:#fff; color:#000; }} th {{ background:#eee; color:#000; position:static; }}
+         .bar {{ display:none; }} td.link a {{ color:#000; }} }}
+</style>
+</head>
+<body>
+{f'<div id="classification">{_esc(classification)}</div>' if classification else ''}
+<div id="header">
+  {f'<img class="app-logo" src="{app_logo}" alt="PDF Forensics Suite">' if app_logo else ''}
+  <div class="header-text">
+    <h1>Visual Overlay Reports</h1>
+    <div class="subtitle">{__tool_name__} v{__version__} &middot; build {BUILD_DATE} &mdash;
+      Generated {now} &mdash;
+      Database: {_esc(os.path.basename(db_path))}</div>
+  </div>
+  {info_block}
+  {f'<img class="agency-logo" src="{agency_logo}" alt="Agency logo">' if agency_logo else ''}
+</div>
+<div class="intro">One report per document with overlay findings ({n_docs} document(s), {n_over} overlay finding(s)), including prior versions recovered from incremental updates. Click a column heading to sort (for example by overlays or risk score), type in the box to filter, and click <b>Open report</b> to open a document's report in a new tab. Each report shows the flagged pages with their overlays as toggleable layers.</div>
+<div class="bar"><input id="flt" type="search" placeholder="Filter by file name, kind or MD5…" aria-label="Filter">
+<span class="count" id="cnt"></span></div>
+<div class="wrap"><table id="t">
+<thead><tr><th data-t="n">#</th><th>Document</th><th>Kind</th><th data-t="n">Overlays</th>
+<th data-t="n">Pages</th><th data-t="n">Text over text</th><th data-t="n">White box</th>
+<th data-t="n">Annotation</th><th data-t="n">Other</th><th data-t="n">Risk score</th>
+<th>Report</th><th>PDF MD5</th></tr></thead>
+<tbody>
+{chr(10).join(body)}
+</tbody></table></div>
+<div id="print-footer"><span>{_esc(foot_text)}</span><span>{('DB MD5: ' + _esc(db_md5)) if db_md5 else ''}</span></div>
+<script>
+(function(){{
+  var t=document.getElementById('t'), tb=t.tBodies[0], flt=document.getElementById('flt'),
+      cnt=document.getElementById('cnt'), rows=[].slice.call(tb.rows);
+  function count(){{ var v=rows.filter(function(r){{return r.style.display!=='none';}}).length;
+    cnt.textContent=v+' of '+rows.length+' document(s)'; }}
+  flt.addEventListener('input',function(){{ var q=flt.value.toLowerCase();
+    rows.forEach(function(r){{ r.style.display=r.textContent.toLowerCase().indexOf(q)>=0?'':'none'; }}); count(); }});
+  [].forEach.call(t.tHead.rows[0].cells,function(th,ci){{ th.addEventListener('click',function(){{
+    var dir=th.getAttribute('data-dir')==='asc'?'desc':'asc', num=th.getAttribute('data-t')==='n';
+    [].forEach.call(t.tHead.rows[0].cells,function(h){{h.removeAttribute('data-dir');}}); th.setAttribute('data-dir',dir);
+    rows.sort(function(a,b){{ var x=a.cells[ci].textContent.trim(), y=b.cells[ci].textContent.trim();
+      if(num){{ x=parseFloat(x)||0; y=parseFloat(y)||0; return dir==='asc'?x-y:y-x; }}
+      return dir==='asc'?x.localeCompare(y):y.localeCompare(x); }});
+    rows.forEach(function(r){{tb.appendChild(r);}}); }}); }});
+  count();
+}})();
+</script>
 </body>
 </html>"""

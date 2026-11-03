@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.1.5-informational)
+![Version](https://img.shields.io/badge/version-1.1.6-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -44,7 +44,8 @@ the command line for scripted and batch work.
 - Text overlay detection: annotations placed over page text (including a
   covering box stacked with a replacement-text annotation), white boxes drawn
   over content with new text painted on them, and text drawn over other text.
-- Visual Overlay Report: each affected page shown as layers you can switch on
+- Visual Overlay reports, one per document with an index page: each affected
+  page shown as layers you can switch on
   and off, from the page as received to the original content underneath, with
   white-box alterations shown step by step. A self-check verifies that the
   layers reproduce the page as received; if they do not, the page is shown as
@@ -173,7 +174,7 @@ Key options:
 | `--no-store-images` | analyze | Do not store image data in the database |
 | `--no-prior-versions` | triage | Do not add rows for prior versions |
 | `-r`, `--reports` | report | Report IDs to generate (default: all) |
-| `--visual` | report | Also generate the Visual Overlay Report |
+| `--visual` | report | Also generate the Visual Overlay reports (one per document, with an index) |
 | `-s`, `--scope` | graph | `all_placements`, `cross_page` or `cross_document` |
 | `--separate-versions` | graph | Treat prior versions as separate documents |
 
@@ -186,7 +187,8 @@ Key options:
 | Image Analysis | High-Risk Images · Off-Page Images · Stamp / Signature Reuse Candidates |
 | Cross-Document & Review | Duplicate Submissions · Cross-Document Image Reuse · Document Comparison Matrix · Document Comments |
 
-Also produced: the **Visual Overlay Report**, the **Document Risk Overview**
+Also produced: the **Visual Overlay reports** (an index page linking one
+report per document), the **Document Risk Overview**
 spreadsheet, the **triage** spreadsheet, relationship **graphs**, and the
 **case index**. Each report states the version and build that produced it and
 the database it was built from.
@@ -336,7 +338,7 @@ output folder either way.
 
 ## Versioning
 
-This is **version 1.1.5** (build 2026-11-02c), an update to the first feature release
+This is **version 1.1.6** (build 2026-11-02d), an update to the first feature release
 after version 1.0.0, the first frozen release. Changes after 1.0 are released
 as incremental updates (1.0.1, 1.0.2, …) and new features raise the minor
 version (1.1.0); each release has its own build marker.

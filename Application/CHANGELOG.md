@@ -1,6 +1,47 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.1.5 — 2026-11-02 (build 2026-11-02c)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.1.6 — 2026-11-02 (build 2026-11-02d)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.1.6 — Release (2026-11-02, build 2026-11-02d)
+
+No database schema change.
+
+### Visual Overlay reports: one per document, with an index
+- The Visual Overlay Report put every document's overlays into one HTML
+  file, impractical with dozens or hundreds of documents. It is now one
+  report per document that has overlay findings, in a folder beside an
+  index page: {case}_visual-overlays_{timestamp}.html is the index, and
+  {case}_visual-overlays_{timestamp}_files/ holds the reports, named
+  NNN_{document name}_{first 8 characters of its MD5}.html (shortened and
+  made Windows-safe when needed). Each report is the same page-by-page,
+  layer-by-layer report as before.
+- The index lists each document with its kind (submitted, or prior version
+  N of its parent), overlays in total and by kind (text over text, white
+  box, annotation), pages affected, document risk score and MD5, with
+  sortable columns and a filter; Open report opens the document's report
+  in a new tab. A document whose report could not be generated is shown as
+  such. It carries the same classification banner, logos, case details,
+  version, build, database name and database MD5 as the other reports.
+- Case index: the Visual Overlay card opens the index and says how many
+  documents it covers; every per-document report is listed with its MD5
+  in the output manifest. The GUI shows which document is being rendered.
+  (`reports/visual.py` `generate_visual_reports()`,
+  `reports/case_index.py`, `gui/app.py`, `cli.py`)
+
+### Image folders that Windows could not create
+- A document's extracted images go into a folder named after it. A name
+  ending in a space or a full stop (which Windows drops silently, so the
+  folder got a different name from the one the application then wrote
+  into), a character Windows forbids, a reserved device name (CON, NUL,
+  COM1 ...) or a path beyond the Windows limit made the analysis fail
+  with FileNotFoundError. Folder names are now made Windows-safe, and
+  shortened with a hash of the original when the path would be too long;
+  names that were already safe are unchanged. (`pathutil.py`
+  `safe_name()`, `gui/app.py`, `analysis/engine.py`)
+
+### Documentation
+- Technical Reference Guide 7.4, HTML Reports guides (3.1), READMEs. All
+  guides state version 1.1.6, build 2026-11-02d.
 
 ## Version 1.1.5 — Release (2026-11-02, build 2026-11-02c)
 

@@ -1,5 +1,40 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.1.6
+
+**Released:** 2026-11-02 · **Build:** 2026-11-02d · **Database schema:** revision 10 (unchanged)
+
+### What changed
+
+- **Visual Overlay reports, one per document.** The Visual Overlay card in
+  the case index now opens an index page listing every document with
+  overlay findings (sortable by overlays, pages or risk score, and
+  filterable); each document's report opens in a new tab.
+- **Image folders that Windows could not create** (names ending in a space
+  or full stop, forbidden characters, reserved names, or paths beyond the
+  Windows limit) no longer make an analysis fail.
+
+### Upgrading
+
+Replace the application folder with the 1.1.6 package. No database
+migration is needed; regenerate the visual overlay reports to get the new
+per-document layout.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.1.6.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.1.6.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.1.6 (build 2026-11-02d)`.
+
+---
+
 ## Version 1.1.5
 
 **Released:** 2026-11-02 · **Build:** 2026-11-02c · **Database schema:** revision 10 (unchanged)

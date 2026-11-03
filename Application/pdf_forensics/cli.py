@@ -437,15 +437,16 @@ def _cli_report(args, session):
 
     # Visual overlay report (optional)
     if args.visual:
-        from pdf_forensics.reports.visual import generate_visual_report
+        from pdf_forensics.reports.visual import generate_visual_reports
         visual_path = os.path.join(
             out_dir, session.make_filename("visual-overlays", "html"))
-        print(f"\nGenerating visual overlay report...")
-        n = generate_visual_report(
-            args.database, visual_path, session=session)
+        print(f"\nGenerating visual overlay reports...")
+        ndocs, n = generate_visual_reports(
+            args.database, visual_path, session=session,
+            progress=lambda i, t: print(f"  document {i} of {t}", end="\r"))
         if n > 0:
-            print(f"  Visual report: {n} finding(s) -> "
-                  f"{os.path.basename(visual_path)}")
+            print(f"  Visual reports: {ndocs} document(s), {n} finding(s); "
+                  f"index -> {os.path.basename(visual_path)}")
         else:
             print("  No overlay findings to visualize.")
 

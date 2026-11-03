@@ -52,3 +52,47 @@ class NormalisingDialogs:
 
     def __getattr__(self, name):
         return getattr(self._fd, name)
+
+
+# ---------------------------------------------------------------------
+# Folder and file names made from document names
+# ---------------------------------------------------------------------
+import hashlib as _hashlib
+import re as _re
+
+_BAD_CHARS = _re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_RESERVED = {"CON", "PRN", "AUX", "NUL",
+             *(f"COM{i}" for i in range(1, 10)),
+             *(f"LPT{i}" for i in range(1, 10))}
+# Windows' classic path limit is 260 characters; leave room for the files
+# written inside the folder (e.g. 123_45.jpeg).
+MAX_FOLDER_PATH = 220
+
+
+def safe_name(name, parent=None, max_path=MAX_FOLDER_PATH, reserve=0):
+    """A file or folder name derived from a document name that Windows
+    can create as given:
+      * characters Windows forbids are replaced with _;
+      * trailing spaces and full stops are removed (Windows drops them
+        silently, so the folder would get a different name than the one
+        the application then writes into);
+      * reserved device names (CON, NUL, COM1, ...) get a trailing _;
+      * if parent + name (+ reserve characters for what goes inside) would
+        exceed max_path, the name is shortened and a short hash of the
+        original added, so different long names cannot collide.
+    Names that are already safe are returned unchanged."""
+    original = str(name)
+    out = _BAD_CHARS.sub("_", original).rstrip(" .")
+    if not out:
+        out = "_"
+    stem, dot, ext = out.partition(".")
+    if stem.upper() in _RESERVED:      # NUL.txt is reserved as well as NUL
+        out = stem + "_" + dot + ext
+    if parent is not None:
+        room = max_path - len(os.path.abspath(parent)) - 1 - reserve
+        if len(out) > room:
+            tag = "~" + _hashlib.md5(
+                original.encode("utf-8", "replace")).hexdigest()[:6]
+            keep = max(8, room - len(tag))
+            out = out[:keep].rstrip(" .") + tag
+    return out

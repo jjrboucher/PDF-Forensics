@@ -665,10 +665,13 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
 
         if extract_to_disk:
             base = os.path.splitext(os.path.basename(pdf_path))[0]
+            # A name Windows can create as given (see pathutil.safe_name)
+            from pdf_forensics.pathutil import safe_name
             if output_dir:
-                pdf_extract_dir = os.path.join(output_dir, base)
+                pdf_extract_dir = os.path.join(output_dir,
+                                               safe_name(base, output_dir))
             else:
-                pdf_extract_dir = base + "_images"
+                pdf_extract_dir = safe_name(base + "_images", ".")
         else:
             pdf_extract_dir = None
 

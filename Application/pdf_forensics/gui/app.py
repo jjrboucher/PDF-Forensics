@@ -44,7 +44,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     """Launch the unified PDF Forensics Suite GUI."""
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox, simpledialog
-    from pdf_forensics.pathutil import norm_path, NormalisingDialogs
+    from pdf_forensics.pathutil import (norm_path, NormalisingDialogs,
+                                        safe_name)
     # Every dialog returns paths with native separators (see pathutil).
     filedialog = NormalisingDialogs(filedialog)
     initial_db = norm_path(initial_db)
@@ -1384,8 +1385,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 continue
 
             base = os.path.splitext(basename)[0]
-            pdf_extract_dir = os.path.join(out_dir, base) \
-                if out_dir else None
+            # A name Windows can create as given (see pathutil.safe_name)
+            pdf_extract_dir = os.path.join(
+                out_dir, safe_name(base, out_dir)) if out_dir else None
             this_perf_no = pf.file_begin(
                 f"version {this_lineage[1]}" if this_lineage else "submitted",
                 of=perf_parent.get(pdf_path))
@@ -1699,7 +1701,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                            f"— still not opened", "skip")
                 continue
             base = os.path.splitext(os.path.basename(pdf_path))[0]
-            pdf_extract_dir = (os.path.join(out_dir, base)
+            pdf_extract_dir = (os.path.join(out_dir,
+                                            safe_name(base, out_dir))
                                if out_dir else None)
             try:
                 summary = analyze_pdf(
@@ -2536,19 +2539,26 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             # Visual overlay report (optional)
             if visual_report_var.get():
                 r_log("")
-                r_log("Generating visual overlay report...")
+                r_log("Generating visual overlay reports...")
                 root.update_idletasks()
                 try:
                     from pdf_forensics.reports.visual import (
-                        generate_visual_report)
+                        generate_visual_reports)
                     vfname = session.make_filename(
                         "visual-overlays", "html")
                     vpath = os.path.join(out_dir, vfname)
-                    n = generate_visual_report(
-                        db, vpath, session=session)
+
+                    def _vis_progress(i, total):
+                        status_var.set(f"Visual overlay report {i} of "
+                                       f"{total}...")
+                        status_label.config(fg=ACCENT)
+
+                    ndocs, n = generate_visual_reports(
+                        db, vpath, session=session, progress=_vis_progress)
                     if n > 0:
-                        r_log(f"  \u2713 Visual overlay report — "
-                              f"{n} finding(s)", "success")
+                        r_log(f"  \u2713 Visual overlay reports — "
+                              f"{ndocs} document(s), {n} finding(s); "
+                              f"index {vfname}", "success")
                         if not results:
                             status_var.set(
                                 "Done. Visual overlay report "
