@@ -1,0 +1,2 @@
+aa2fcf9b90f3fae9b185b53c902d8c4eaf39c8add1480ba778e469b78b3c5822  pdf-structure-explorer.html
+a0ee6bc99a087480a79ecf72947ae0bdc85fea1a64e0004eb223d227938ffec1  Inside-a-PDF-guide.pdf
