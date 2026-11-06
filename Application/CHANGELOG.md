@@ -1,6 +1,134 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.1.6 — 2026-11-02 (build 2026-11-02d)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.2.0 — 2026-11-06 (build 2026-11-06)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.2.0 — Release (2026-11-06, build 2026-11-06)
+
+Performance. No database schema change; findings are unchanged.
+
+### Build 2026-11-06: from the build 2026-11-05 performance logs
+
+Verification of build 2026-11-05 on a 325-file case: 11,254 reused pages
+and 14,754 reused form analyses, no mismatches; all 54,690 image
+placements present (the reuse fix holds).
+
+#### Visual Overlay reports: renders reused across prior versions
+- A prior version's page that is unchanged from an earlier document's page
+  (same fingerprint) and has the same findings shows the same images, so
+  its renders (the page as received, the revealed base, each layer) are
+  reused; the version's own numbering and labels are built afresh. Each
+  prior version used to redraw every page of its parent's report.
+
+#### Visual Overlay reports: each layer rendered around its overlay only
+- Each layer used to need a full-page render; a page with hundreds of
+  findings took over a second per finding. A layer differs from its
+  background only where its overlay is, so the variant is now rendered
+  only around the overlay (with a 24-point margin) and pasted onto the
+  background at its exact pixel position. If any changed pixel touches an
+  interior edge of that area, the overlay may extend beyond it and the
+  layer is redone on the full page. Rotated pages, and pages whose
+  coordinates do not start at the origin, always use full renders. The
+  existing check that base plus layers reproduces the page as received
+  still applies to every page. PDF_FORENSICS_VISUAL_CLIP=0 renders every
+  layer in full.
+- In verification mode (PDF_FORENSICS_VERIFY_REUSE=1) every reused render
+  and every clipped layer is compared with a fresh full render; the
+  performance log line of each document's visual report counts renders
+  reused, layers clipped, clip fallbacks, verified and mismatches.
+
+#### Form XObjects with no images: fast path
+- On the slowest documents the form analysis cost came from individual
+  forms, not repetition: each page has its own forms. Every finding of the
+  form analysis except an unreadable stream concerns an image placed in
+  the form, so a form with no images is now checked only for readability
+  (its whole stream is still tokenised; no object is built per operator):
+  about 9 times faster on a large vector form, same findings. Verification
+  mode compares it with the full analysis (forms_fast_verified,
+  forms_fast_mismatch).
+
+#### Content-stream overlay detector: grid index
+- For every text-drawing operation the detector compared the position with
+  every white rectangle on the page. A grid index now limits the
+  comparison to nearby rectangles, in their original order: same findings
+  in the same order (40 random pages, 4,883 findings, identical); about 3
+  times faster on a dense page. Verification mode compares it with the
+  original detector (cs_overlay_verified, cs_overlay_mismatch).
+  (`analysis/detectors.py`, `analysis/engine.py`, `reports/visual.py`,
+  `reports/reveal.py`, `perf.py`)
+
+### Build 2026-11-05
+
+### Build 2026-11-05: from the performance logs of 1.1.6 and 1.2.0
+
+#### Fix: images dropped from changed pages of prior versions
+- In build 2026-11-03, a reused page registered its images in the
+  document's image cache with their bytes only, without their format or
+  size. A later, changed page of the same prior version that used one of
+  those images (a logo, a letterhead) then failed to read it, and that
+  page's images were dropped, with the findings that depend on them. On a
+  325-file case this removed 2,186 image placements from 62 prior
+  versions. Reused pages no longer write into that cache. Verification
+  mode could not catch this, since it analyses every page in full; prior
+  versions analysed with build 2026-11-03 without verification should be
+  re-analysed. (`analysis/engine.py`)
+
+#### Form XObjects analysed once per document
+- The record of forms already analysed was reset on every page, so a form
+  drawn on every page (a letterhead, a page template) was analysed again on
+  each one: up to 2.9 s per page on some documents. Each form is now
+  analysed once per document; later pages reuse its findings with their
+  own image labels, the only page-specific part of them. Verification mode
+  analyses each form every time and compares (forms_verified,
+  forms_mismatch in the performance log). (`analysis/engine.py`)
+
+#### Visual Overlay reports much faster
+- Generating the per-document visual reports took nearly five hours on a
+  325-file case: every layer variant opened the whole source PDF, edited
+  one page and saved the whole document, which the renderer reopened. The
+  source is now read from disk once per document, and a variant is written
+  as a one-page PDF holding the edited page, with what its appearance can
+  depend on elsewhere in the document (inherited page attributes, layer
+  visibility, form-appearance settings). The one-page form is used for a
+  page only after checking that the unedited one-page copy renders
+  pixel-identically to the original page; otherwise that page uses the
+  whole document as before. Layer images are saved with ordinary PNG
+  compression rather than exhaustive optimisation (identical pixels).
+  (`reports/reveal.py`, `reports/visual.py`)
+- Each document's visual report is now timed in the performance log,
+  identified by MD5, with its pages and how many used the fast path.
+
+### Build 2026-11-03
+
+### Prior versions: unchanged pages reused
+- Prior versions took 58% of analysis time on a 325-file case, although
+  most of their pages are identical to their parent's: an incremental
+  update rewrites only the objects that change. Each page is now
+  fingerprinted (a hash of the page object and every object it reaches:
+  content streams, resources, fonts, images, annotations, form XObjects,
+  and the attributes it inherits from the page tree). A prior version's
+  page with the same fingerprint, page number and label numbering as a
+  page already analysed in the same lineage reuses that page's results
+  (images, transparency, findings, risk scores, fonts); its images are
+  still written to the version's own folder. Any change in anything the
+  page uses gives a different fingerprint, and the page is analysed in
+  full. Results are snapshotted as soon as a page is finished and copied
+  again when reused. (`analysis/page_reuse.py`, `analysis/engine.py`)
+- Switches (environment variables): PDF_FORENSICS_PAGE_REUSE=0 analyses
+  every page in full; PDF_FORENSICS_VERIFY_REUSE=1 also analyses each
+  reused page in full and compares, counting matches and mismatches in
+  the performance log and noting any mismatch in the session log.
+
+### Performance log: one column per page detector
+- The page detectors were timed together (half of all analysis time);
+  each now has its own column (forms, image overlap, soft masks and
+  off-page images, text overlays, content-stream overlays, text over
+  text, redactions), plus page fingerprinting and reused pages, and
+  counters for pages reused, verified and mismatched. Each analysis run
+  records whether reuse and verification were on. (`perf.py`)
+
+### Documentation
+- Technical Reference Guide 5.2; README, "If processing is slow". All
+  guides state version 1.2.0, build 2026-11-03.
 
 ## Version 1.1.6 — Release (2026-11-02, build 2026-11-02d)
 

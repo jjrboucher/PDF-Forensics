@@ -163,7 +163,7 @@ def _rect_hidden_fraction(inner, outer, tol):
 
 
 def analyze_form_xobject(form_xobj, xobj_name, page_num, findings,
-                         image_labels):
+                         image_labels, fast=True):
     """
     Analyze a Form XObject for image cropping and clipping.
 
@@ -197,6 +197,45 @@ def analyze_form_xobject(form_xobj, xobj_name, page_num, findings,
     bbox_x0, bbox_y0 = min(bbox[0], bbox[2]), min(bbox[1], bbox[3])
     bbox_x1, bbox_y1 = max(bbox[0], bbox[2]), max(bbox[1], bbox[3])
     bbox_rect = (bbox_x0, bbox_y0, bbox_x1, bbox_y1)
+
+    # Fast path (1.2.0): every finding below except PARSE_ERROR concerns
+    # an image placed in the form (a Do of an image, or of a name that
+    # cannot be resolved); with no image placements the walk returns before
+    # its soft-mask check. A form with neither (e.g. vector artwork or
+    # text) can therefore produce only PARSE_ERROR, so its content need not
+    # be walked operator by operator: a parse restricted to Do operators
+    # still tokenises the whole stream (the same errors are raised) without
+    # building an object per operator. Same findings, same order; fast=False
+    # runs the full walk (verification mode compares the two).
+    if fast:
+        _has_image = False
+        try:
+            _res = form_xobj.get("/Resources")
+            _xo = _res.get("/XObject") if _res is not None else None
+            if _xo is not None:
+                for _name, _ref in _xo.items():
+                    try:
+                        if str(_ref.get("/Subtype")) == "/Image":
+                            _has_image = True
+                            break
+                    except Exception:
+                        _has_image = True     # unresolved: possibly an image
+                        break
+        except Exception:
+            _has_image = True                 # cannot tell: full walk
+        if not _has_image:
+            try:
+                pikepdf.parse_content_stream(form_xobj, "Do")
+            except Exception as e:
+                findings.append({
+                    "image": label_str,
+                    "type": "PARSE_ERROR",
+                    "detail": f"Could not parse Form XObject stream: {e}",
+                })
+                return
+            # The full walk returns here too (no image placements), before
+            # its soft-mask check, so no SOFT_MASK for image-less forms.
+            return
 
     # The Form's optional /Matrix maps form space onto the parent
     # coordinate system; /BBox is expressed in form space, and so must
@@ -1263,6 +1302,313 @@ def check_text_overlays(page_pk, page_mu, page_num, findings,
 
 
 def check_content_stream_text_overlay(page_pk, page_mu, page_num,
+                                      findings, content_ops=None):
+    """
+    Detect text overlays implemented directly in the content stream:
+    white (or near-white) filled rectangles followed by text drawn
+    in the same region.
+
+    This is Method 2 of text-based document alteration — the altering
+    application paints a white box over existing text using the re/f
+    operators, then draws new text on top. No annotation is created,
+    so check_text_overlays() will not catch it.
+
+    The detection logic:
+      1. Parse the content stream tracking the CTM and fill colour.
+      2. Record every white-filled rectangle (re + f/F with fill colour
+         close to white: R,G,B all ≥ 0.9).
+      3. Track BT/ET blocks with their text matrix (Tm/Td/TD) to
+         compute each text glyph's position in page space.
+      4. Flag any text glyph position that falls within a white
+         rectangle that was drawn earlier in the same content stream.
+
+    Returns the number of findings added.
+    """
+    import math
+
+    WHITE_THRESHOLD = 0.9       # per-channel min to be "white"
+    NEAR_RECT_TOLERANCE = 15.0  # points tolerance for position match
+
+    added = 0
+
+    cs_locator = _page_content_locator(page_pk)
+    cs_objnum, cs_objgen = _page_content_objgen(page_pk)
+
+    try:
+        ops = (content_ops if content_ops is not None
+               else list(pikepdf.parse_content_stream(page_pk)))
+        operators = [(str(op), operands) for operands, op in ops]
+    except Exception:
+        return 0
+
+    # ── Pass 1: collect white filled rectangles ──────────────────────
+    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    ctm_stack = []
+    fill_color = (0.0, 0.0, 0.0)   # default black
+    white_rects = []                # list of (x0,y0,x1,y1) in page space
+
+    def transform_point(ctm, x, y):
+        a,b,c,d,e,f = ctm
+        return a*x + c*y + e, b*x + d*y + f
+
+    def rect_to_page(ctm, rx, ry, rw, rh):
+        corners = [(rx,ry),(rx+rw,ry),(rx,ry+rh),(rx+rw,ry+rh)]
+        xs = [transform_point(ctm,cx,cy)[0] for cx,cy in corners]
+        ys = [transform_point(ctm,cx,cy)[1] for cx,cy in corners]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def multiply_ctm(m1, m2):
+        a1,b1,c1,d1,e1,f1 = m1
+        a2,b2,c2,d2,e2,f2 = m2
+        return (a1*a2+b1*c2, a1*b2+b1*d2,
+                c1*a2+d1*c2, c1*b2+d1*d2,
+                e1*a2+f1*c2+e2, e1*b2+f1*d2+f2)
+
+    for i, (op, operands) in enumerate(operators):
+        if op == 'q':
+            # Fill colour is part of the graphics state and must be
+            # saved/restored with it, or a white fill set inside a
+            # q...Q block would incorrectly persist afterwards.
+            ctm_stack.append((ctm, fill_color))
+        elif op == 'Q':
+            if ctm_stack:
+                ctm, fill_color = ctm_stack.pop()
+        elif op == 'cm':
+            try:
+                vals = tuple(float(str(x)) for x in operands)
+                ctm = multiply_ctm(vals, ctm)
+            except Exception:
+                pass
+        elif op in ('rg', 'g'):
+            try:
+                if op == 'g':
+                    v = float(str(operands[0]))
+                    fill_color = (v, v, v)
+                else:
+                    fill_color = tuple(
+                        float(str(x)) for x in operands[:3])
+            except Exception:
+                pass
+        elif op == 'k':
+            # CMYK non-stroking colour. White = 0 0 0 0 k. Convert to
+            # RGB so the single white test below applies.
+            try:
+                cc, mm, yy, kk = (float(str(x)) for x in operands[:4])
+                fill_color = ((1 - cc) * (1 - kk),
+                              (1 - mm) * (1 - kk),
+                              (1 - yy) * (1 - kk))
+            except Exception:
+                pass
+        elif op == 'cs':
+            # Setting the non-stroking colour space resets the
+            # non-stroking colour to the space's initial value
+            # (black in device spaces). Named/ICC spaces cannot be
+            # resolved here, so conservatively treat the colour as
+            # non-white until explicitly set.
+            fill_color = (0.0, 0.0, 0.0)
+        elif op in ('RG', 'G', 'K', 'CS', 'SC', 'SCN'):
+            pass  # stroking-colour operators — do not affect fill
+        elif op in ('sc', 'scn'):
+            # Non-stroking colour in the current colour space:
+            # 1 component = grey, 3 = RGB, 4 = CMYK. A trailing
+            # pattern name (scn) or unknown component count cannot be
+            # evaluated; conservatively treat as non-white rather than
+            # risk a false white-box finding.
+            try:
+                vals = [float(str(x)) for x in operands]
+            except Exception:
+                fill_color = (0.0, 0.0, 0.0)
+                vals = None
+            if vals is not None:
+                if len(vals) == 1:
+                    fill_color = (vals[0],) * 3
+                elif len(vals) == 3:
+                    fill_color = tuple(vals)
+                elif len(vals) == 4:
+                    cc, mm, yy, kk = vals
+                    fill_color = ((1 - cc) * (1 - kk),
+                                  (1 - mm) * (1 - kk),
+                                  (1 - yy) * (1 - kk))
+                else:
+                    fill_color = (0.0, 0.0, 0.0)
+        elif op == 're':
+            if i + 1 < len(operators):
+                next_op = operators[i + 1][0]
+                if next_op in ('f', 'F', 'B', 'B*', 'b', 'b*'):
+                    # Check fill colour is white
+                    if (fill_color and
+                            len(fill_color) >= 3 and
+                            all(v >= WHITE_THRESHOLD
+                                for v in fill_color[:3])):
+                        try:
+                            rx,ry,rw,rh = tuple(
+                                float(str(x)) for x in operands[:4])
+                            area = abs(rw * rh)
+                            if area >= TEXT_OVERLAY_MIN_AREA_SQPTS:
+                                x0,y0,x1,y1 = rect_to_page(
+                                    ctm, rx, ry, rw, rh)
+                                white_rects.append(
+                                    (x0, y0, x1, y1, i))
+                        except Exception:
+                            pass
+
+    if not white_rects:
+        return 0
+
+    # Grid index of the white rectangles, each entered in every cell its
+    # tolerance-expanded extent touches. Comparing every text position with
+    # every rectangle cost (text shows x rectangles) per page; the grid
+    # returns, for a position, the rectangles whose expanded extent could
+    # contain it. Rectangles whose coordinates are not finite, or that span
+    # an enormous area, are checked for every position, as before.
+    _CELL = 100.0
+    _grid = {}
+    _everywhere = []
+    for _ri, (_x0, _y0, _x1, _y1, _) in enumerate(white_rects):
+        _t = NEAR_RECT_TOLERANCE
+        try:
+            _cx0 = math.floor((_x0 - _t) / _CELL)
+            _cx1 = math.floor((_x1 + _t) / _CELL)
+            _cy0 = math.floor((_y0 - _t) / _CELL)
+            _cy1 = math.floor((_y1 + _t) / _CELL)
+            if (_cx1 - _cx0 + 1) * (_cy1 - _cy0 + 1) > 4000:
+                raise OverflowError("very large rectangle")
+        except (ValueError, OverflowError):
+            _everywhere.append(_ri)
+            continue
+        for _cx in range(_cx0, _cx1 + 1):
+            for _cy in range(_cy0, _cy1 + 1):
+                _grid.setdefault((_cx, _cy), []).append(_ri)
+
+    def _rects_near(px, py):
+        try:
+            cell = _grid.get((math.floor(px / _CELL),
+                              math.floor(py / _CELL)), ())
+        except (ValueError, OverflowError):
+            cell = ()
+        if not _everywhere:
+            return cell            # already in rectangle order
+        return sorted(set(cell) | set(_everywhere))
+
+    # ── Pass 2: find text drawn at positions within white rects ──────
+    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    ctm_stack = []
+    Tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    Tlm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    in_bt = False
+    flagged_rects = set()  # avoid duplicate findings for same rect
+
+    for i, (op, operands) in enumerate(operators):
+        if op == 'q':
+            ctm_stack.append(ctm)
+        elif op == 'Q':
+            if ctm_stack:
+                ctm = ctm_stack.pop()
+        elif op == 'cm':
+            try:
+                vals = tuple(float(str(x)) for x in operands)
+                ctm = multiply_ctm(vals, ctm)
+            except Exception:
+                pass
+        elif op == 'BT':
+            in_bt = True
+            Tm  = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+            Tlm = list(Tm)
+        elif op == 'ET':
+            in_bt = False
+        elif in_bt:
+            if op == 'Tm':
+                try:
+                    vals = [float(str(x)) for x in operands]
+                    Tm  = vals
+                    Tlm = list(vals)
+                except Exception:
+                    pass
+            elif op in ('Td', 'TD'):
+                try:
+                    tx = float(str(operands[0]))
+                    ty = float(str(operands[1]))
+                    Tlm[4] += tx * Tlm[0] + ty * Tlm[2]
+                    Tlm[5] += tx * Tlm[1] + ty * Tlm[3]
+                    Tm = list(Tlm)
+                except Exception:
+                    pass
+            elif op == 'T*':
+                Tlm[5] -= 0   # simplified (would need Tl state)
+                Tm = list(Tlm)
+            elif op in ('Tj', 'TJ', '"', "'"):
+                # Compute text position in page space
+                tm_x, tm_y = Tm[4], Tm[5]
+                a, b, c, d, e, f = ctm
+                px = a * tm_x + c * tm_y + e
+                py = b * tm_x + d * tm_y + f
+
+                # Check against each white rect drawn BEFORE this op
+                # Only the rectangles near this text position (grid index,
+                # 1.2.0), in their original order: same tests, same
+                # findings, same order as testing every rectangle.
+                for ri in _rects_near(px, py):
+                    rx0, ry0, rx1, ry1, rect_op_idx = white_rects[ri]
+                    # Only flag if this text op comes AFTER the rect
+                    if i <= rect_op_idx:
+                        continue
+                    if ri in flagged_rects:
+                        continue
+
+                    # Check if text position is within rect
+                    # (with tolerance because text baseline may be
+                    # slightly outside the rect's visual bounds)
+                    tol = NEAR_RECT_TOLERANCE
+                    if (rx0 - tol <= px <= rx1 + tol and
+                            ry0 - tol <= py <= ry1 + tol):
+                        # Get surrounding page text for context
+                        try:
+                            page_h = float(page_mu.rect.height)
+                            # Convert rect to PyMuPDF coords (top-left origin)
+                            mu_x0 = rx0
+                            mu_y0 = page_h - ry1
+                            mu_x1 = rx1
+                            mu_y1 = page_h - ry0
+                            clip = pymupdf.Rect(mu_x0-5, mu_y0-5,
+                                                mu_x1+5, mu_y1+5)
+                            # Don't extract text from under the white rect
+                            # — it's already covered. But the surrounding
+                            # page text gives context.
+                            area_sqpts = abs(
+                                (rx1-rx0) * (ry1-ry0))
+                            detail = (
+                                f"White-filled rectangle at "
+                                f"({rx0:.1f},{ry0:.1f}) to "
+                                f"({rx1:.1f},{ry1:.1f}) "
+                                f"(area {area_sqpts:.0f} sq pts) "
+                                f"covers existing page content; "
+                                f"new text painted on top at "
+                                f"({px:.1f},{py:.1f}). "
+                                f"This pattern is characteristic of "
+                                f"in-place text alteration without "
+                                f"using an annotation."
+                            )
+                            # Store rect in PyMuPDF top-left coords
+                            findings.append({
+                                "type":   "TEXT_OVERLAY",
+                                "detail": detail,
+                                "image":  None,
+                                "bbox":   (mu_x0, mu_y0, mu_x1, mu_y1),
+                                "overlay_kind": "white_box",
+                                "obj_num": cs_objnum,
+                                "obj_gen": cs_objgen,
+                                "obj_locator": cs_locator,
+                            })
+                            flagged_rects.add(ri)
+                            added += 1
+                        except Exception:
+                            flagged_rects.add(ri)
+                            added += 1
+
+    return added
+
+
+def _check_content_stream_text_overlay_reference(page_pk, page_mu, page_num,
                                       findings, content_ops=None):
     """
     Detect text overlays implemented directly in the content stream:

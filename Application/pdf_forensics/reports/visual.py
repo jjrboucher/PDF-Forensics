@@ -48,6 +48,145 @@ from pdf_forensics.reports import reveal as _reveal
 
 # Render resolution for full pages and crops (DPI)
 PAGE_RENDER_DPI = 144
+# Per-document counters reported in the performance log (reset per
+# document): pages using the one-page fast path or the whole document;
+# renders reused from a prior version; layers rendered clipped, or clipped
+# then redone in full; verification comparisons.
+_VISUAL_STATS = {"fast": 0, "fallback": 0, "reused": 0, "clipped": 0,
+                 "clip_fallback": 0, "verified": 0, "mismatch": 0}
+
+# ---------------------------------------------------------------------
+# Render cache (1.2.0): a prior version's page that is unchanged from an
+# earlier document's page (same fingerprint, analysis/page_reuse.py) and
+# has the same findings shows the same images, so its renders are reused;
+# the version's own numbering and labels are still built afresh. Keyed by
+# (fingerprint, resolution, findings, part); least recently used first out.
+# ---------------------------------------------------------------------
+from collections import OrderedDict as _OrderedDict
+
+_RENDER_CACHE = _OrderedDict()
+_RENDER_BYTES = [0]
+_RENDER_BUDGET = 1536 * 1024 * 1024
+_CLIP_PAD_PTS = 24.0
+
+
+def _render_size(v):
+    if isinstance(v, (bytes, bytearray)):
+        return len(v)
+    if isinstance(v, (tuple, list)):
+        return sum(_render_size(x) for x in v)
+    return 64
+
+
+def _rc_get(key):
+    v = _RENDER_CACHE.get(key)
+    if v is not None:
+        _RENDER_CACHE.move_to_end(key)
+    return v
+
+
+def _rc_put(key, value):
+    if value is None or key in _RENDER_CACHE:
+        return
+    size = _render_size(value)
+    _RENDER_CACHE[key] = value
+    _RENDER_BYTES[0] += size
+    while _RENDER_BYTES[0] > _RENDER_BUDGET and _RENDER_CACHE:
+        _, old = _RENDER_CACHE.popitem(last=False)
+        _RENDER_BYTES[0] -= _render_size(old)
+
+
+def clear_render_cache():
+    _RENDER_CACHE.clear()
+    _RENDER_BYTES[0] = 0
+
+
+def _verify_on():
+    try:
+        from pdf_forensics.analysis import page_reuse as _pr
+        return _pr.verify_mode()
+    except Exception:
+        return False
+
+
+def _clip_enabled():
+    return os.environ.get("PDF_FORENSICS_VISUAL_CLIP", "1") != "0"
+
+
+def _render_clip_onto(onto_png, pdf_bytes, page_index, bbox, zoom):
+    """Render only the area around bbox (PyMuPDF top-left points, plus a
+    margin) and paste it onto onto_png at its exact pixel position.
+    Returns (png_bytes, (x0, y0, x1, y1) pasted box in pixels) or
+    (None, None)."""
+    import pymupdf
+    from PIL import Image
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        page = doc[page_index]
+        p = _CLIP_PAD_PTS
+        clip = pymupdf.Rect(bbox[0] - p, bbox[1] - p,
+                            bbox[2] + p, bbox[3] + p) & page.rect
+        if clip.is_empty:
+            return None, None
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip,
+                              alpha=False)
+        if pix.n != 3:
+            return None, None
+        piece = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        bg = Image.open(io.BytesIO(onto_png)).convert("RGB")
+        bg.paste(piece, (pix.x, pix.y))
+        out = io.BytesIO()
+        bg.save(out, format="PNG", compress_level=6)
+        return out.getvalue(), (pix.x, pix.y, pix.x + pix.width,
+                                pix.y + pix.height)
+    finally:
+        doc.close()
+
+
+def _layer_touches_edge(layer_png, box):
+    """True if the layer has any visible pixel on an interior edge of the
+    pasted box: the overlay may then extend beyond the clipped area. Edges
+    on the page boundary are not interior and are not checked."""
+    from PIL import Image
+    a = Image.open(io.BytesIO(layer_png)).getchannel("A")
+    w, h = a.size
+    x0, y0, x1, y1 = max(0, box[0]), max(0, box[1]), min(w, box[2]), \
+        min(h, box[3])
+    if x1 - x0 < 3 or y1 - y0 < 3:
+        return True
+    edges = []
+    if y0 > 0:
+        edges.append(a.crop((x0, y0, x1, y0 + 1)))
+    if y1 < h:
+        edges.append(a.crop((x0, y1 - 1, x1, y1)))
+    if x0 > 0:
+        edges.append(a.crop((x0, y0, x0 + 1, y1)))
+    if x1 < w:
+        edges.append(a.crop((x1 - 1, y0, x1, y1)))
+    return any(e.getbbox() is not None for e in edges)
+
+
+def _same_pixels(a_png, b_png):
+    """True if two PNGs decode to identical pixels."""
+    if a_png == b_png:
+        return True
+    try:
+        from PIL import Image, ImageChops
+        a = Image.open(io.BytesIO(a_png)).convert("RGBA")
+        b = Image.open(io.BytesIO(b_png)).convert("RGBA")
+        return a.size == b.size and ImageChops.difference(a, b).getbbox() \
+            is None
+    except Exception:
+        return False
+
+
+def _same_render(a, b):
+    if isinstance(a, (bytes, bytearray)) and isinstance(b, (bytes, bytearray)):
+        return _same_pixels(a, b)
+    if isinstance(a, (tuple, list)) and isinstance(b, (tuple, list)):
+        return len(a) == len(b) and all(_same_render(x, y)
+                                        for x, y in zip(a, b))
+    return a == b
 CROP_RENDER_DPI = 300
 CROP_PADDING_PTS = 12   # padding around a finding region in the crop
 
@@ -198,7 +337,7 @@ def _draw_box_on_pixmap_png(png_bytes, boxes, zoom):
                   fill=(255, 255, 255, 255), font=font)
 
     out = io.BytesIO()
-    img.save(out, format="PNG", optimize=True)
+    img.save(out, format="PNG", compress_level=6)
     return out.getvalue()
 
 
@@ -284,7 +423,7 @@ def _isolate_layer_png(base_png, with_overlay_png, tolerance=10):
     layer = over.convert("RGBA")
     layer.putalpha(mask)
     out = io.BytesIO()
-    layer.save(out, format="PNG", optimize=True)
+    layer.save(out, format="PNG", compress_level=6)
     return out.getvalue()
 
 
@@ -458,56 +597,154 @@ def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
                 fnd["_number"] = finding_counter
 
             # The page exactly as received (what a PDF viewer shows).
-            asis_png, zoom = _render_page_png(page, PAGE_RENDER_DPI)
+            # Render cache (1.2.0): an unchanged page of a prior version
+            # with the same findings reuses an earlier document's renders.
+            _fp = _reveal.page_fingerprint(fpath, page_index)
+            _fsig = tuple(
+                (f.get("kind"),
+                 tuple(round(float(v), 2) for v in (f.get("bbox") or ())),
+                 f.get("obj_num"), f.get("obj_gen")) for f in findings)
+            _ck = (_fp, PAGE_RENDER_DPI, _fsig) if _fp else None
+            _verify = _verify_on()
+
+            def _cached(part, compute):
+                """compute(), unless this page was rendered before with
+                the same findings; in verification mode always compute and
+                compare with the stored result."""
+                key = (_ck, part) if _ck is not None else None
+                hit = _rc_get(key) if key is not None else None
+                if hit is not None and not _verify:
+                    _VISUAL_STATS["reused"] += 1
+                    return hit
+                val = compute()
+                if hit is not None:
+                    if _same_render(val, hit):
+                        _VISUAL_STATS["verified"] += 1
+                    else:
+                        _VISUAL_STATS["mismatch"] += 1
+                        if session:
+                            session.log(f"Visual report p{page_num}: reused "
+                                        f"render {part!r} differs from a "
+                                        f"fresh render (fresh render used)",
+                                        "warning")
+                elif key is not None:
+                    _rc_put(key, val)
+                return val
+
+            asis_png, zoom = _cached(
+                "asis", lambda: _render_page_png(page, PAGE_RENDER_DPI))
             asis_uri = _b64_png(asis_png)
 
-            # Base layer: the page with ALL overlays removed.
-            try:
-                rb, rinfo = _reveal.build_revealed_pdf_bytes(
-                    fpath, page_index, findings, page_height)
-                if rb and rinfo.get("recovered", 0) >= 1:
-                    base_png = _render_revealed_page_png(
-                        rb, page_index, PAGE_RENDER_DPI)
-                    base_all_removed = (rinfo.get("skipped", 0) == 0)
-                else:
-                    base_png = asis_png
-                    base_all_removed = False
-            except Exception:
-                base_png = asis_png
-                base_all_removed = False
+            # Fast path: build this page's variants as one-page PDFs, but
+            # only if the unedited one-page copy renders identically to the
+            # page as received; otherwise use the whole document.
+            def _single_ok():
+                try:
+                    _sp = _reveal.single_page_pdf_bytes(fpath, page_index)
+                    return bool(_sp) and _render_revealed_page_png(
+                        _sp, 0, PAGE_RENDER_DPI) == asis_png
+                except Exception:
+                    return False
+            _single = _cached("single", _single_ok)
+            _VISUAL_STATS["fast" if _single else "fallback"] += 1
+            _ri = 0 if _single else page_index
+
+            def _base():
+                try:
+                    rb, rinfo = _reveal.build_revealed_pdf_bytes(
+                        fpath, page_index, findings, page_height,
+                        single_page=_single)
+                    if rb and rinfo.get("recovered", 0) >= 1:
+                        return (_render_revealed_page_png(
+                                    rb, _ri, PAGE_RENDER_DPI),
+                                rinfo.get("skipped", 0) == 0)
+                    return asis_png, False
+                except Exception:
+                    return asis_png, False
+            base_png, base_all_removed = _cached("base", _base)
 
             def _render_variant(remove, keep=None):
                 """Page with `remove` findings suppressed (except the
                 `keep` operations). Unchanged page -> the as-received
                 render."""
-                rb2, _ri = _reveal.build_revealed_pdf_bytes(
-                    fpath, page_index, remove, page_height, keep_ops=keep)
+                rb2, _info2 = _reveal.build_revealed_pdf_bytes(
+                    fpath, page_index, remove, page_height, keep_ops=keep,
+                    single_page=_single)
                 if rb2 is None:
                     return asis_png
                 return _render_revealed_page_png(
-                    rb2, page_index, PAGE_RENDER_DPI)
+                    rb2, _ri, PAGE_RENDER_DPI)
 
-            # Display items. An ordinary finding is one item ("only this
-            # overlay present" minus the base). A white-box alteration that
-            # can be decomposed is shown as its component edits: the box
-            # (measured against the original) and each line of text painted
-            # on it (measured against the box, so the full glyphs are
-            # captured). Counting and risk still treat it as ONE alteration.
+            # Clipped renders (1.2.0): a layer differs from its background
+            # only where its overlay is, so the variant is rendered only
+            # around the overlay (with a margin) and pasted onto the
+            # background. If any changed pixel touches an interior edge of
+            # the pasted area, the overlay may extend beyond it and the
+            # layer is redone on the full page. Rotated pages, and pages
+            # whose coordinates do not start at the origin, always use full
+            # renders. Verification mode compares clipped with full.
+            try:
+                _can_clip = (_clip_enabled() and not page.rotation
+                             and page.rect.x0 == 0 and page.rect.y0 == 0)
+            except Exception:
+                _can_clip = False
+
+            def _layer(onto_png, remove, keep, bbox):
+                """(layer_png, variant_png) for one overlay: the page with
+                `remove` suppressed except `keep`, isolated against
+                onto_png."""
+                if _can_clip and bbox:
+                    rb2, _info2 = _reveal.build_revealed_pdf_bytes(
+                        fpath, page_index, remove, page_height,
+                        keep_ops=keep, single_page=_single)
+                    if rb2 is None:
+                        return _isolate_layer_png(onto_png, asis_png), asis_png
+                    variant, box = _render_clip_onto(onto_png, rb2, _ri,
+                                                     bbox, zoom)
+                    if variant is not None:
+                        layer = _isolate_layer_png(onto_png, variant)
+                        if not _layer_touches_edge(layer, box):
+                            if _verify:
+                                full = _render_variant(remove, keep)
+                                full_layer = _isolate_layer_png(onto_png, full)
+                                if _same_pixels(layer, full_layer):
+                                    _VISUAL_STATS["verified"] += 1
+                                else:
+                                    _VISUAL_STATS["mismatch"] += 1
+                                    if session:
+                                        session.log(
+                                            f"Visual report p{page_num}: a "
+                                            f"clipped layer differs from the "
+                                            f"full render (full render "
+                                            f"used)", "warning")
+                                    return full_layer, full
+                            _VISUAL_STATS["clipped"] += 1
+                            return layer, variant
+                    _VISUAL_STATS["clip_fallback"] += 1
+                full = _render_variant(remove, keep)
+                return _isolate_layer_png(onto_png, full), full
+
             items = []
-            for fnd in findings:
+            for _j, fnd in enumerate(findings):
                 n = fnd["_number"]
                 comp = None
                 if fnd["kind"] == "white_box":
-                    try:
-                        comp = _reveal.white_box_components(
-                            fpath, page_index, fnd, page_height)
-                    except Exception:
-                        comp = None
-                    if comp and not comp["lines"]:
-                        comp = None
+                    def _wb(_f=fnd):
+                        try:
+                            c = _reveal.white_box_components(
+                                fpath, page_index, _f, page_height)
+                        except Exception:
+                            c = None
+                        if c and not c["lines"]:
+                            c = None
+                        return c if c is not None else False
+                    comp = _cached(("wb", _j), _wb) or None
                 try:
                     if comp:
-                        fill_png = _render_variant(findings, comp["fill"])
+                        fill_layer, fill_png = _cached(
+                            ("fill", _j),
+                            lambda: _layer(base_png, findings, comp["fill"],
+                                           fnd["bbox"]))
                         items.append({
                             "number": f"{n}a", "group": n, "part": "box",
                             "kind": "white_box", "title": "White box",
@@ -517,13 +754,15 @@ def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
                                        "text listed after it was then "
                                        "painted on the box."),
                             "bbox": fnd["bbox"],
-                            "layer_png": _isolate_layer_png(base_png,
-                                                            fill_png)})
+                            "layer_png": fill_layer})
                         for j, ln in enumerate(comp["lines"]):
                             lbl = (f"{n}{chr(ord('b') + j)}" if j < 25
                                    else f"{n}.{j + 2}")
-                            only = _render_variant(
-                                findings, comp["fill"] + ln["ops"])
+                            line_layer, _only = _cached(
+                                ("line", _j, j),
+                                lambda: _layer(fill_png, findings,
+                                               comp["fill"] + ln["ops"],
+                                               ln["bbox"]))
                             if ln["text"]:
                                 title = "Painted text"
                                 det = ("Text painted on the white box: "
@@ -539,19 +778,27 @@ def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
                                 "kind": "text_over_text", "title": title,
                                 "line_text": ln["text"],
                                 "detail": det, "bbox": ln["bbox"],
-                                "layer_png": _isolate_layer_png(fill_png,
-                                                                only)})
+                                "layer_png": line_layer})
                         items[-1 - len(comp["lines"])]["group_detail"] = \
                             fnd["detail"]
                     else:
                         others = [o for o in findings if o is not fnd]
-                        only = (_render_variant(others) if others
-                                else asis_png)
+                        if others:
+                            one_layer, _v = _cached(
+                                ("one", _j),
+                                lambda: _layer(base_png, others, None,
+                                               fnd["bbox"]))
+                        else:
+                            one_layer = _cached(
+                                ("one", _j),
+                                lambda: (_isolate_layer_png(base_png,
+                                                            asis_png),
+                                         asis_png))[0]
                         items.append({
                             "number": str(n), "group": n, "part": None,
                             "kind": fnd["kind"], "title": None,
                             "detail": fnd["detail"], "bbox": fnd["bbox"],
-                            "layer_png": _isolate_layer_png(base_png, only)})
+                            "layer_png": one_layer})
                 except Exception as e:
                     if session:
                         session.log(f"Overlay layer {n} (p{page_num}) "
@@ -561,7 +808,6 @@ def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
                         "kind": fnd["kind"], "title": None,
                         "detail": fnd["detail"], "bbox": fnd["bbox"],
                         "layer_png": None})
-
             overlays = []
             layer_pngs = []
             for z, it in enumerate(items, 1):
@@ -608,6 +854,7 @@ def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
             total_findings += len(findings)
 
         doc.close()
+        _reveal.clear_source_cache()
         doc_sections.append(_render_doc_section(
             fname, fmd5, page_blocks))
 
@@ -1394,6 +1641,7 @@ def generate_visual_reports(db_path, index_path, session=None,
     import urllib.parse
     from pdf_forensics.pathutil import safe_name
     conn = sqlite3.connect(db_path)
+    clear_render_cache()        # renders are reused within one run only
     try:
         targets = _list_analyses_with_overlays(conn)
         if not targets:
@@ -1425,10 +1673,25 @@ def generate_visual_reports(db_path, index_path, session=None,
             name = safe_name(f"{i:03d}_{doc_stem}_{(md5 or '')[:8]}",
                              folder, max_path=250, reserve=5) + ".html"
             path = os.path.join(folder, name)
+            import time as _time
+            from pdf_forensics import perf as _perf
+            for _k in _VISUAL_STATS:
+                _VISUAL_STATS[_k] = 0
+            _t0 = _time.perf_counter()
             try:
                 n = _generate_visual_report_impl(db_path, path,
                                                  analysis_id=aid,
                                                  session=session)
+                _perf.get(session).event(
+                    "visual_overlay_document", (md5 or "")[:32],
+                    _time.perf_counter() - _t0, pages=pages,
+                    findings=n_over, fast_pages=_VISUAL_STATS["fast"],
+                    fallback_pages=_VISUAL_STATS["fallback"],
+                    renders_reused=_VISUAL_STATS["reused"],
+                    layers_clipped=_VISUAL_STATS["clipped"],
+                    clip_fallbacks=_VISUAL_STATS["clip_fallback"],
+                    verified=_VISUAL_STATS["verified"],
+                    mismatches=_VISUAL_STATS["mismatch"])
             except Exception as e:
                 n = 0
                 if session:

@@ -1,5 +1,47 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.2.0
+
+**Released:** 2026-11-06 · **Build:** 2026-11-06 · **Database schema:** revision 10 (unchanged)
+
+### What changed
+
+- **Faster prior versions.** Pages of a prior version that are unchanged
+  from the submitted file reuse its results instead of being analysed
+  again; changed pages are analysed in full. Findings are unchanged.
+- **Faster form handling.** A form drawn on many pages (a letterhead, a
+  page template) is analysed once per document.
+- **Much faster Visual Overlay reports.** Layer variants are built from
+  the edited page alone where that renders identically, each layer is
+  rendered around its overlay only, and prior versions reuse their
+  parent's renders for unchanged pages.
+- **Faster detectors.** Forms without images and the content-stream
+  overlay detector do the same checks with far less work.
+- **Finer timing.** The performance log times each page detector, and
+  each document's visual report, separately.
+
+### Upgrading
+
+Replace the application folder with the 1.2.0 package. No database
+migration is needed. To confirm on your own files that reused pages match
+a full analysis, run once with the environment variable
+PDF_FORENSICS_VERIFY_REUSE=1 (see the README).
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.2.0.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.2.0.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.2.0 (build 2026-11-06)`.
+
+---
+
 ## Version 1.1.6
 
 **Released:** 2026-11-02 · **Build:** 2026-11-02d · **Database schema:** revision 10 (unchanged)

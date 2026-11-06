@@ -3,6 +3,7 @@ Main analysis orchestrator — analyze_pdf and process_pdfs.
 """
 
 import os
+import copy
 import hashlib
 from datetime import datetime, timezone
 
@@ -232,14 +233,104 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     # is extracted, and its EXIF read, once): see analysis/images.py.
     _img_cb_last = [0.0]  # last image_callback time (throttle)
     doc_image_cache = {}  # xref -> extraction result
+    _reused_images = {}   # xref -> bytes, images seen only on reused pages
+    _form_results = {}    # form XObject objgen -> its findings (template)
     exif_done = set()     # xrefs whose camera / capture dates were read
     img_stats = {}        # cache_hits across documents (prior versions)
     lap("open")
+
+    # Reuse of unchanged pages in prior versions (analysis/page_reuse.py).
+    from pdf_forensics.analysis import page_reuse as _pr
+    if version_number is None:
+        _pr.clear()                      # a new lineage starts
+    _reuse_on = _pr.enabled()
+    _verify = _pr.verify_mode()
+    _fp_memo = {}
+
+    def _write_page_images(label_to_info):
+        """Write a page's images to the document's folder (both paths)."""
+        nonlocal total_extracted
+        for label in sorted(label_to_info.keys()):
+            info = label_to_info[label]
+            _out(f"    {label}.{info['ext']}")
+            if extract_dir and info.get("image_bytes"):
+                filename = f"{label}.{info['ext']}"
+                filepath = os.path.join(extract_dir, filename)
+                with open(filepath, "wb") as f:
+                    f.write(info["image_bytes"])
+                total_extracted += 1
+                # Live count for the GUI (throttled to ~4 updates a second)
+                if image_callback is not None:
+                    _now = __import__("time").monotonic()
+                    if _now - _img_cb_last[0] >= 0.25:
+                        _img_cb_last[0] = _now
+                        try:
+                            image_callback(total_extracted)
+                        except Exception:
+                            pass
+        # Exact count at the end of the page's images.
+        if image_callback is not None and total_extracted:
+            try:
+                image_callback(total_extracted)
+            except Exception:
+                pass
+
+    def _camera_and_dates(label_to_info):
+        """Camera and capture dates, once per unique image."""
+        for label in sorted(label_to_info):
+            xref = label_to_info[label].get("xref")
+            if xref in exif_done:
+                continue
+            exif_done.add(xref)
+            cam = extract_camera_info(
+                label_to_info[label].get("image_bytes"),
+                label_to_info[label].get("ext"))
+            if cam:
+                doc_cameras[label] = cam
+            doc_exif_dates.extend(exif_dates(
+                label, label_to_info[label].get("image_bytes"),
+                label_to_info[label].get("ext")))
 
     for page_idx in range(total_pages):
         page_num = page_idx + 1
         page_mu = doc_mu[page_idx]
         page_pk = doc_pk.pages[page_idx]
+
+        # Unchanged page of a prior version: reuse its results.
+        _key = None
+        _hit = None
+        if _reuse_on:
+            _fp = _pr.fingerprint(page_pk, _fp_memo)
+            _key = (page_num, page_pad, _fp) if _fp else None
+            if version_number is not None and _key is not None:
+                _hit = _pr.get(_key)
+            lap("page_fingerprint")
+        if _hit is not None and not _verify:
+            (label_to_info, transparency, findings, risk_scores,
+             page_fonts) = _hit
+            pf.add("pages_reused")
+            pf.add("image_placements", len(label_to_info))
+            # Statistics only. The reused page must NOT write into
+            # doc_image_cache: a stripped entry there (bytes without format
+            # or size) made a later, changed page that uses the same image
+            # drop it (1.2.0, fixed in build 2026-11-05).
+            for _info in label_to_info.values():
+                _reused_images.setdefault(
+                    _info.get("xref"), len(_info.get("image_bytes") or b""))
+            _write_page_images(label_to_info)
+            _camera_and_dates(label_to_info)
+            doc_font_spans.extend(page_fonts)
+            all_findings[page_num] = findings
+            page_data[page_num] = {
+                "label_to_info": label_to_info,
+                "transparency": transparency,
+                "findings": findings,
+                "risk_scores": risk_scores,
+            }
+            if progress_callback:
+                progress_callback(page_num, total_pages)
+            lap("page_reused")
+            continue
 
         # Parse the page content stream ONCE and extract page text
         # ONCE; both are shared by every consumer below instead of
@@ -263,34 +354,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
         lap("image_map")
 
         img_count = len(label_to_info)
-        _out(f"  Page {page_num}: {img_count} image(s)")
-        for label in sorted(label_to_info.keys()):
-            info = label_to_info[label]
-            _out(f"    {label}.{info['ext']}")
-
-            # Write image to extraction directory (if requested)
-            if extract_dir and info.get("image_bytes"):
-                filename = f"{label}.{info['ext']}"
-                filepath = os.path.join(extract_dir, filename)
-                with open(filepath, "wb") as f:
-                    f.write(info["image_bytes"])
-                total_extracted += 1
-                # Live count for the GUI (throttled to ~4 updates a second)
-                if image_callback is not None:
-                    _now = __import__("time").monotonic()
-                    if _now - _img_cb_last[0] >= 0.25:
-                        _img_cb_last[0] = _now
-                        try:
-                            image_callback(total_extracted)
-                        except Exception:
-                            pass
-        # Exact count at the end of the page's images (the throttled
-        # updates above can lag by up to a quarter of a second).
-        if image_callback is not None and total_extracted:
-            try:
-                image_callback(total_extracted)
-            except Exception:
-                pass
+        _write_page_images(label_to_info)
         lap("image_files")
 
         # Z-order and graphics state
@@ -338,20 +402,100 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
             analyzed_forms.add(form_objnum)
 
             image_labels = form_xref_to_labels.get(form_objnum, [])
-            analyze_form_xobject(resolved, xobj_name, page_num,
-                                 findings, image_labels)
+            # A form used on many pages (a letterhead, a page template) is
+            # analysed once per document. Its findings depend only on the
+            # form's content and on the page's image labels, which appear
+            # only in the "image" field; later pages reuse the findings
+            # with their own labels (as analyze_form_xobject would set
+            # them). In verification mode it is analysed every time and
+            # compared.
+            _label_str = (", ".join(image_labels) if image_labels
+                          else str(xobj_name))
+            _fkey = getattr(xobj_ref, "objgen", None)
+            _tmpl = _form_results.get(_fkey) if _fkey else None
+            if _tmpl is not None and not _verify:
+                for _f in _tmpl:
+                    _g = copy.deepcopy(_f)
+                    _g["image"] = _label_str
+                    findings.append(_g)
+                pf.add("forms_reused")
+            else:
+                _fresh = []
+                analyze_form_xobject(resolved, xobj_name, page_num,
+                                     _fresh, image_labels)
+                if _verify:
+                    # The fast path for image-less forms against the full
+                    # walk (analysis/detectors.py analyze_form_xobject).
+                    _full = []
+                    analyze_form_xobject(resolved, xobj_name, page_num,
+                                         _full, image_labels, fast=False)
+                    if _pr.same_findings(_full, _fresh):
+                        pf.add("forms_fast_verified")
+                    else:
+                        pf.add("forms_fast_mismatch")
+                        if session:
+                            session.log(f"  Form fast-path check: form "
+                                        f"{xobj_name} on page {page_num} "
+                                        f"differs from the full analysis "
+                                        f"(full results used)", "warning")
+                        _fresh = _full
+                if _tmpl is not None:
+                    _cmp = []
+                    for _f in _tmpl:
+                        _g = copy.deepcopy(_f)
+                        _g["image"] = _label_str
+                        _cmp.append(_g)
+                    if _pr.same_findings(_cmp, _fresh):
+                        pf.add("forms_verified")
+                    else:
+                        pf.add("forms_mismatch")
+                        if session:
+                            session.log(f"  Form reuse check: form "
+                                        f"{xobj_name} on page {page_num} "
+                                        f"differs from its reused "
+                                        f"findings (full results used)",
+                                        "warning")
+                elif _fkey:
+                    try:
+                        _form_results[_fkey] = copy.deepcopy(_fresh)
+                    except Exception:
+                        pass
+                findings.extend(_fresh)
+        lap("det_forms")
 
         check_overlapping_images(page_mu, page_num, findings,
                                  label_to_info, transparency)
+        lap("det_overlap")
         check_image_smasks(page_pk, page_num, findings, label_to_info)
         check_offpage_images(page_mu, page_num, findings, label_to_info)
+        lap("det_smask_offpage")
         check_text_overlays(page_pk, page_mu, page_num, findings,
                             text_page=page_text)
+        lap("det_text_overlay")
+        _n_before = len(findings)
         check_content_stream_text_overlay(
             page_pk, page_mu, page_num, findings,
             content_ops=page_ops)
+        if _verify:
+            # The grid-indexed detector against the original.
+            from pdf_forensics.analysis.detectors import (
+                _check_content_stream_text_overlay_reference as _cs_ref)
+            _ref = []
+            _cs_ref(page_pk, page_mu, page_num, _ref, content_ops=page_ops)
+            if _pr.same_findings(_ref, findings[_n_before:]):
+                pf.add("cs_overlay_verified")
+            else:
+                pf.add("cs_overlay_mismatch")
+                if session:
+                    session.log(f"  Overlay detector check: page {page_num} "
+                                f"differs from the original detector "
+                                f"(original results used)", "warning")
+                del findings[_n_before:]
+                findings.extend(_ref)
+        lap("det_cs_overlay")
         check_text_over_text(page_mu, page_num, findings,
                              page_pk=page_pk, text_page=page_text)
+        lap("det_text_over_text")
         # One white box with text painted on it is ONE alteration; the
         # text-over-text detector also fires on that text (the hidden
         # original glyphs are still extractable). Fold those into the
@@ -364,30 +508,14 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                             f"text-over-text detection(s) consolidated "
                             f"into a white-box alteration")
         findings.extend(check_unapplied_redactions(page_pk, page_num))
-        lap("page_detectors")
+        lap("det_redactions")
 
         # Collect EXIF capture-device info for the document-level
         # mixed-camera check (cheap: reads only Make/Model tags).
-        # Once per unique image (the first placement's label stands for
-        # it): a photo repeated on many pages is read once, and appears
-        # once in the timeline rather than once per placement.
-        for label in sorted(label_to_info):
-            xref = label_to_info[label].get("xref")
-            if xref in exif_done:
-                continue
-            exif_done.add(xref)
-            cam = extract_camera_info(
-                label_to_info[label].get("image_bytes"),
-                label_to_info[label].get("ext"))
-            if cam:
-                doc_cameras[label] = cam
-            doc_exif_dates.extend(exif_dates(
-                label, label_to_info[label].get("image_bytes"),
-                label_to_info[label].get("ext")))
-
-        # Collect font usage for document-level font consistency analysis
-        doc_font_spans.extend(collect_page_fonts(
-            page_mu, page_num, text_page=page_text))
+        _camera_and_dates(label_to_info)
+        page_fonts = collect_page_fonts(
+            page_mu, page_num, text_page=page_text)
+        doc_font_spans.extend(page_fonts)
 
         # Compute per-image risk scores from the findings on this page
         risk_scores = compute_risk_scores(findings, label_to_info)
@@ -400,15 +528,34 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
             "risk_scores": risk_scores,
         }
 
+        # Snapshot for reuse by later prior versions; in verification mode,
+        # compare with the reused results this page would have had.
+        if _key is not None:
+            _now_results = (label_to_info, transparency, findings,
+                            risk_scores, page_fonts)
+            if _hit is not None:
+                if _pr.same(_hit, _now_results):
+                    pf.add("reuse_verified")
+                else:
+                    pf.add("reuse_mismatch")
+                    if session:
+                        session.log(f"  Page reuse check: page {page_num} "
+                                    f"of this prior version differs from "
+                                    f"the reused results (full results "
+                                    f"used)", "warning")
+            _pr.put(_key, _now_results)
+
         if progress_callback:
             progress_callback(page_num, total_pages)
         lap("page_other")
 
-    pf.set("unique_images", len(doc_image_cache))
+    _all_imgs = {x: len(v.get("image") or b"")
+                 for x, v in doc_image_cache.items() if v}
+    for _x, _n in _reused_images.items():
+        _all_imgs.setdefault(_x, _n)
+    pf.set("unique_images", len(_all_imgs))
     pf.set("cache_hits", img_stats.get("cache_hits", 0))
-    pf.set("image_mb", round(sum(len(v.get("image") or b"")
-                                 for v in doc_image_cache.values() if v)
-                             / 1048576, 2))
+    pf.set("image_mb", round(sum(_all_imgs.values()) / 1048576, 2))
 
     # Document-level DPI anomaly detection (runs after all pages)
     dpi_findings = check_dpi_anomalies(page_data)

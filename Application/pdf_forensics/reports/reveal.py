@@ -682,8 +682,130 @@ def _suppress_annotations(page, target_rects_pdf, objrefs=None):
 # --------------------------------------------------------------------------
 # Public API
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Speed (1.2.0): source read once; one-page documents for variants
+#
+# Each layer variant used to open the whole source PDF, edit one page and
+# save the WHOLE document, which the renderer then reopened: dozens of full
+# saves per flagged page on a long document (the visual reports took hours
+# on a 325-file case). The source is now read from disk once per document
+# and opened from memory, and a variant can be written as a one-page PDF
+# holding just the edited page. The one-page copy carries what the page's
+# appearance can depend on outside the page itself: the attributes it
+# inherits from the page tree, the document's optional-content (layer)
+# settings and its form-appearance settings. The caller uses it only after
+# checking that the unedited one-page copy renders pixel-identically to the
+# original page; otherwise it falls back to the whole document.
+# --------------------------------------------------------------------------
+_SRC_CACHE = {}
+_INHERITABLE = ("/Resources", "/MediaBox", "/CropBox", "/Rotate")
+
+
+_FP_DOC = {"path": None, "pdf": None, "memo": {}}
+
+
+def clear_source_cache():
+    _SRC_CACHE.clear()
+    try:
+        if _FP_DOC["pdf"] is not None:
+            _FP_DOC["pdf"].close()
+    except Exception:
+        pass
+    _FP_DOC.update(path=None, pdf=None, memo={})
+
+
+def page_fingerprint(src_path, page_index):
+    """The page's fingerprint (analysis/page_reuse.py), from the in-memory
+    source; None if it cannot be computed."""
+    try:
+        from pdf_forensics.analysis import page_reuse as _pr
+        if _FP_DOC["path"] != src_path:
+            if _FP_DOC["pdf"] is not None:
+                _FP_DOC["pdf"].close()
+            _FP_DOC.update(path=src_path, pdf=_open_source(src_path), memo={})
+        pdf = _FP_DOC["pdf"]
+        if page_index < 0 or page_index >= len(pdf.pages):
+            return None
+        return _pr.fingerprint(pdf.pages[page_index], _FP_DOC["memo"])
+    except Exception:
+        return None
+
+
+def _open_source(src_path):
+    data = _SRC_CACHE.get(src_path)
+    if data is None:
+        with open(src_path, "rb") as fh:
+            data = fh.read()
+        _SRC_CACHE.clear()          # one document at a time
+        _SRC_CACHE[src_path] = data
+    return pikepdf.open(io.BytesIO(data))
+
+
+def _inherited(page_obj, key):
+    node, seen = page_obj.get("/Parent"), set()
+    while node is not None:
+        og = getattr(node, "objgen", None)
+        if og in seen:
+            return None
+        seen.add(og)
+        if key in node:
+            return node.get(key)
+        node = node.get("/Parent")
+    return None
+
+
+def _single_page_bytes_from(pdf, page_index):
+    """A one-page PDF holding page_index of pdf (as it now stands)."""
+    page = pdf.pages[page_index]
+    for key in _INHERITABLE:
+        if key not in page.obj:
+            v = _inherited(page.obj, key)
+            if v is not None:
+                page.obj[key] = v
+    out = pikepdf.new()
+    out.pages.append(page)
+    root = pdf.Root
+    if "/OCProperties" in root:
+        out.Root.OCProperties = out.copy_foreign(
+            pdf.make_indirect(root.OCProperties))
+    af = root.get("/AcroForm")
+    if af is not None:
+        d = pikepdf.Dictionary()
+        for k in ("/NeedAppearances", "/DR", "/DA", "/Q"):
+            if k in af:
+                v = af.get(k)
+                if isinstance(v, (pikepdf.Dictionary, pikepdf.Array,
+                                  pikepdf.Stream)):
+                    v = out.copy_foreign(pdf.make_indirect(v))
+                d[k] = v
+        out.Root.AcroForm = d
+    buf = io.BytesIO()
+    out.save(buf)
+    return buf.getvalue()
+
+
+def single_page_pdf_bytes(src_path, page_index):
+    """The unedited page as a one-page PDF (for the caller's render check),
+    or None."""
+    try:
+        pdf = _open_source(src_path)
+    except Exception:
+        return None
+    try:
+        if page_index < 0 or page_index >= len(pdf.pages):
+            return None
+        return _single_page_bytes_from(pdf, page_index)
+    except Exception:
+        return None
+    finally:
+        try:
+            pdf.close()
+        except Exception:
+            pass
+
+
 def build_revealed_pdf_bytes(src_path, page_index, findings, page_height,
-                             keep_ops=None):
+                             keep_ops=None, single_page=False):
     """
     Produce a copy of the PDF at src_path with the given overlay findings
     suppressed on page `page_index` (0-based). `findings` is a list of dicts
@@ -723,7 +845,7 @@ def build_revealed_pdf_bytes(src_path, page_index, findings, page_height,
                 annot_rects.append(rect)
 
     try:
-        pdf = pikepdf.open(src_path)
+        pdf = _open_source(src_path)
     except Exception:
         info["skipped"] = len(findings)
         return None, info
@@ -838,6 +960,10 @@ def build_revealed_pdf_bytes(src_path, page_index, findings, page_height,
             pdf.close()
             return None, info
 
+        if single_page:
+            data = _single_page_bytes_from(pdf, page_index)
+            pdf.close()
+            return data, info
         buf = io.BytesIO()
         pdf.save(buf)
         pdf.close()
@@ -907,7 +1033,7 @@ def white_box_components(src_path, page_index, finding, page_height):
                  }, ...]}           # top-to-bottom
     """
     try:
-        pdf = pikepdf.open(src_path)
+        pdf = _open_source(src_path)
     except Exception:
         return None
     try:

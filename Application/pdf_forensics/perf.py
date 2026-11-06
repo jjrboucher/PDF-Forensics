@@ -32,13 +32,22 @@ from pdf_forensics import __version__, __tool_name__, BUILD_DATE, SCHEMA_REVISIO
 
 # Stages of a full analysis, in order (columns of the FILES table).
 ANALYSIS_STAGES = (
-    "open", "image_map", "image_files", "transparency", "page_detectors",
+    "open", "page_fingerprint", "page_reused", "image_map", "image_files",
+    "transparency",
+    # the page detectors, one column each (1.2.0)
+    "det_forms", "det_overlap", "det_smask_offpage", "det_text_overlay",
+    "det_cs_overlay", "det_text_over_text", "det_redactions",
     "page_other", "font_dpi", "comments", "doc_checks", "metadata_history",
     "version_checks", "timeline", "risk", "db_save", "finish",
     "encryption", "prior_versions_extract",
 )
 TRIAGE_STAGES = ("triage_scan", "triage_versions", "triage_comments")
-COUNTERS = ("size_mb", "pages", "image_placements", "unique_images",
+COUNTERS = ("size_mb", "pages", "pages_reused", "reuse_verified",
+            "reuse_mismatch", "forms_reused", "forms_verified",
+            "forms_mismatch", "forms_fast_verified", "forms_fast_mismatch",
+            "cs_overlay_verified", "cs_overlay_mismatch",
+            "visual_reused", "visual_verified", "visual_mismatch",
+            "image_placements", "unique_images",
             "cache_hits", "image_mb", "findings", "revisions")
 
 
@@ -242,6 +251,13 @@ class PerfLog:
         self._w("-" * 72)
         self._w(f"RUN {mode} started {datetime.now():%H:%M:%S}: "
                 f"{n_files} file(s) selected")
+        if mode == "analysis":
+            try:
+                from pdf_forensics.analysis import page_reuse as _pr
+                options = dict(options, page_reuse=_pr.enabled(),
+                               verify_reuse=_pr.verify_mode())
+            except Exception:
+                pass
         if options:
             self._w("Options: " + ", ".join(f"{k}={v}" for k, v in
                                            sorted(options.items())))

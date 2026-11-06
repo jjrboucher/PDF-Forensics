@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.1.6-informational)
+![Version](https://img.shields.io/badge/version-1.2.0-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -336,9 +336,25 @@ adds considerably to the time on a slower drive; it is needed only for image
 thumbnails in the reports and graph, and the images are written to the
 output folder either way.
 
+Prior versions recovered from incremental updates reuse the results of
+pages that are unchanged from the submitted file, which saves most of the
+time they used to take. Two environment variables control this, set before
+starting the application (for example `set PDF_FORENSICS_VERIFY_REUSE=1` in
+a Windows command prompt): `PDF_FORENSICS_PAGE_REUSE=0` analyses every page
+in full, and `PDF_FORENSICS_VERIFY_REUSE=1` analyses reused pages in full
+as well and compares the two. The performance log counts the pages reused,
+verified and mismatched; a verification run on your own files confirms
+that reuse gives the same results as a full analysis. Verification also
+covers form XObjects, which are analysed once per document and reused on
+later pages (forms reused, verified and mismatched), the faster paths of
+two detectors, and the Visual Overlay reports, which reuse prior versions'
+renders and render each layer around its overlay only.
+`PDF_FORENSICS_VISUAL_CLIP=0` renders every visual-report layer on the full
+page.
+
 ## Versioning
 
-This is **version 1.1.6** (build 2026-11-02d), an update to the first feature release
+This is **version 1.2.0** (build 2026-11-06), an update to the first feature release
 after version 1.0.0, the first frozen release. Changes after 1.0 are released
 as incremental updates (1.0.1, 1.0.2, …) and new features raise the minor
 version (1.1.0); each release has its own build marker.
