@@ -278,7 +278,7 @@ tbody td{padding:10px 16px;border-bottom:1px solid var(--border);vertical-align:
 .compare-content{font-family:var(--font-mono);font-size:0.82rem;line-height:1.8}
 
 /* Struct diagram */
-.struct-diagram{font-family:var(--font-mono);font-size:0.85rem;background:var(--code-bg);color:var(--code-text);border-radius:var(--radius);padding:20px 24px;line-height:2;border:1px solid #30363d;overflow-x:auto;margin:16px 0}
+.struct-diagram{white-space:pre;font-family:var(--font-mono);font-size:0.85rem;background:var(--code-bg);color:var(--code-text);border-radius:var(--radius);padding:20px 24px;line-height:2;border:1px solid #30363d;overflow-x:auto;margin:16px 0}
 .struct-offset{color:#8b949e;display:inline-block;width:80px;user-select:none}
 .struct-keyword{color:#ff7b72}
 .struct-value{color:#79c0ff}

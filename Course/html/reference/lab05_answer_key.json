@@ -2,7 +2,7 @@
   "lab": "05",
   "title": "Text Overlay Detection",
   "file": "lab05_textoverlay.pdf",
-  "md5": "d28ca040172c8abb1499a59bb265d229",
+  "md5": "de28baa596b588c9eb646192bd12c364",
   "pages": 3,
   "findings": [
     {
@@ -14,14 +14,14 @@
       "risk_weight": 35,
       "page": 1,
       "annotation_subtype": "/FreeText",
-      "annotation_object": "7",
+      "annotation_object": "19",
       "annotation_rect": "[68, 648, 320, 668]",
       "annotation_contents": "Date: Wednesday, 19 March 2025",
       "covered_text": "Date: Saturday, 15 March 2025",
       "background": "/MK /BG [1 1 1]  (opaque white)",
       "created": "D:20250320091500+00'00'",
-      "verification_peepdf": "pdf> object 7  \u2192 inspect /Rect, /Contents, /MK",
-      "verification_qpdf": "qpdf --show-object=7 lab05_textoverlay.pdf"
+      "verification_peepdf": "pdf> object 19  \u2192 inspect /Rect, /Contents, /MK",
+      "verification_qpdf": "qpdf --show-object=19 lab05_textoverlay.pdf"
     },
     {
       "id": "OVL-02",
@@ -31,11 +31,11 @@
       "severity": "HIGH",
       "risk_weight": 35,
       "page": 2,
-      "description": "White rectangle (1 1 1 rg  68 630 120 16 re  f) covers 'Total: $8,200'. Replacement text 'Total: $12,450' drawn at y=636.",
-      "original_value": "$8,200",
-      "replacement_value": "$12,450",
+      "description": "White rectangle (1 1 1 rg  68 626 120 16 re  f) covers 'Total: $8,500'. Replacement text 'Total: $48,500' drawn at y=636.",
+      "original_value": "$8,500",
+      "replacement_value": "$48,500",
       "white_rect": "[68, 630, 188, 646] (x, y, x+w, y+h)",
-      "operator_sequence": "1 1 1 rg \u2192 68 630 120 16 re \u2192 f \u2192 BT...Total: $12,450...ET",
+      "operator_sequence": "1 1 1 rg \u2192 68 626 120 16 re \u2192 f \u2192 BT...Total: $48,500...ET",
       "content_stream_obj": "see /Contents on page 2",
       "verification": "Decode page 2 content stream and search for '1 1 1 rg' followed by 're' and 'f'"
     },
@@ -68,7 +68,7 @@
     },
     {
       "q": "On page 2, write the operator sequence that creates the white-box overlay.",
-      "a": "1 1 1 rg  (set fill colour white)  \u2192  68 630 120 16 re  (define rectangle)  \u2192  f  (fill)"
+      "a": "1 1 1 rg  (set fill colour white)  \u2192  68 626 120 16 re  (define rectangle)  \u2192  f  (fill)"
     },
     {
       "q": "On page 3, how would you confirm the text-over-text manipulation using qpdf?",

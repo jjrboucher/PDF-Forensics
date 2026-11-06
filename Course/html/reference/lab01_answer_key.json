@@ -2,7 +2,7 @@
   "lab": "01",
   "title": "PDF Structure",
   "file": "lab01_structure.pdf",
-  "md5": "5440841e16b52738b7bdc352fda1bb1e",
+  "md5": "ff59024e74ad4e5f43f355fd534bd5b4",
   "pages": 2,
   "pdf_version": "1.7",
   "expected_findings": [],
@@ -15,7 +15,7 @@
       "width": 200,
       "height": 150,
       "format": "JPEG",
-      "md5": "a61237da1ef601b7019bc2218871cbb5"
+      "md5": "bb5b439d0f8bd1a9d9fa5a79885bb3cc"
     }
   },
   "exercises": [
@@ -33,7 +33,7 @@
     },
     {
       "q": "What is the MD5 of the embedded image?",
-      "a": "a61237da1ef601b7019bc2218871cbb5"
+      "a": "bb5b439d0f8bd1a9d9fa5a79885bb3cc"
     },
     {
       "q": "How many pages does the /Pages object's /Count entry declare?",

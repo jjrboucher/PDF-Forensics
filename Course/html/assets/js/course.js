@@ -76,8 +76,13 @@ const Progress = {
     return total ? Math.round((done/total)*100) : 0;
   },
   saveQuizScore(modId, score, total) {
-    this.data.quizScores[modId] = {score, total, pct:Math.round(score/total*100)};
-    this.save();
+    const pct = Math.round(score/total*100);
+    const prev = this.data.quizScores[modId];
+    // Keep the best attempt: a later, lower retake must never erase an earlier pass.
+    if (!prev || pct >= prev.pct) {
+      this.data.quizScores[modId] = {score, total, pct};
+      this.save();
+    }
   },
   reset() { this.data = this._blank(); this.save(); this.updateUI(); },
   updateUI() {
@@ -238,6 +243,7 @@ const Quiz = {
     if (nxt) {
       nxt.classList.remove('hidden');
       if (this.current === this.questions.length - 1) { nxt.textContent = '📊 View Results'; nxt.dataset.final = 'true'; }
+      else { nxt.textContent = 'Next →'; delete nxt.dataset.final; }
     }
   },
   nextQuestion() {
@@ -257,7 +263,7 @@ const Quiz = {
     if (res) {
       res.classList.add('show');
       const c = res.querySelector('.score-circle');
-      if (c) { c.textContent = pct + '%'; c.classList.add(pass ? 'score-pass' : 'score-fail'); }
+      if (c) { c.textContent = pct + '%'; c.classList.remove('score-pass', 'score-fail'); c.classList.add(pass ? 'score-pass' : 'score-fail'); }
       const msg = res.querySelector('.score-msg');
       if (msg) msg.textContent = pass ? `Well done — ${correct} of ${total} correct. Module complete.` : `${correct} of ${total} correct. Review the material and try again.`;
     }
@@ -276,7 +282,10 @@ const Quiz = {
       if (fb) fb.classList.remove('show','feedback-correct','feedback-incorrect');
     });
     const res = this.container.querySelector('.quiz-results'); if (res) res.classList.remove('show');
+    const sc = this.container.querySelector('.score-circle'); if (sc) sc.classList.remove('score-pass', 'score-fail');
     const ctrl = this.container.querySelector('.quiz-controls'); if (ctrl) ctrl.classList.remove('hidden');
+    const nxt = this.container.querySelector('.btn-next');
+    if (nxt) { nxt.textContent = 'Next →'; delete nxt.dataset.final; nxt.classList.add('hidden'); }
     this.showQuestion(0);
   },
   updateProgressBar() {
@@ -383,6 +392,27 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.querySelector('.btn-reset-progress')?.addEventListener('click', () => {
     if (confirm('Reset all course progress?')) { Progress.reset(); location.reload(); }
+  });
+  // Force lab-file links to download rather than open inline in the browser.
+  document.querySelectorAll('a.lab-download').forEach(a => {
+    a.addEventListener('click', async (e) => {
+      const url = a.getAttribute('href');
+      if (!url) return;
+      e.preventDefault();
+      const name = url.split('/').pop() || 'lab.pdf';
+      try {
+        const resp = await fetch(url);
+        const blob = await resp.blob();
+        const objUrl = URL.createObjectURL(blob);
+        const tmp = document.createElement('a');
+        tmp.href = objUrl; tmp.download = name;
+        document.body.appendChild(tmp); tmp.click(); tmp.remove();
+        setTimeout(() => URL.revokeObjectURL(objUrl), 1500);
+      } catch (err) {
+        // Fallback: let the browser handle the (download-attributed) link.
+        window.location.href = url;
+      }
+    });
   });
 });
 window.CourseProgress = Progress;

@@ -2,7 +2,7 @@
   "lab": "06",
   "title": "EXIF, GPS and Document Comments",
   "file": "lab06_exif_comments.pdf",
-  "md5": "4430ead9f72e5d2fbfe1d80b6b3b1aa9",
+  "md5": "736cdd19548ef485919148a3565c1aeb",
   "pages": 3,
   "images": [
     {
@@ -11,9 +11,9 @@
       "make": "Canon",
       "model": "imageRUNNER 2630",
       "software": "Canon Scanner Driver 3.2",
-      "datetime_original": "2025:11:10 14:22:35",
+      "datetime_original": "2025:04:12 14:22:35",
       "gps": null,
-      "md5": "cb285bc9dbafd65c463f773eb494a499",
+      "md5": "b997bace438cfead9e785ae84de76866",
       "forensic_note": "Consistent with office scanner. No GPS."
     },
     {
@@ -22,15 +22,15 @@
       "make": "SAMSUNG",
       "model": "SM-G991B",
       "software": "Samsung Camera App",
-      "datetime_original": "2025:11:12 09:14:07",
+      "datetime_original": "2025:04:08 09:14:07",
       "gps": {
-        "lat": 48.8566,
-        "lon": 2.3522,
+        "lat": 36.1699,
+        "lon": -115.1398,
         "alt": 35.0,
-        "location": "Paris, France"
+        "location": "Las Vegas, Nevada"
       },
-      "md5": "46261af6ba2c35c5f61a2e70e3a5384e",
-      "forensic_note": "ANOMALY: Smartphone (not scanner). GPS coordinates in Paris, document claims London origin."
+      "md5": "a4a11f211e5678ed549e3129341e79c9",
+      "forensic_note": "ANOMALY: Smartphone (not scanner). GPS coordinates in Las Vegas, document claims Portland origin."
     },
     {
       "page": 3,
@@ -38,9 +38,9 @@
       "make": "FUJIFILM",
       "model": "X-T5",
       "software": "Fujifilm RAW Studio",
-      "datetime_original": "2025:11:15 16:45:22",
+      "datetime_original": "2025:04:14 16:45:22",
       "gps": null,
-      "md5": "8d79a53a65df97b1866ab1d276b05399",
+      "md5": "a397481eaf6fecd8ccd409ecffab2bb8",
       "forensic_note": "ANOMALY: Mirrorless camera. Inconsistent with Canon scanner on page 1."
     }
   ],
@@ -49,28 +49,28 @@
       "page": 1,
       "subtype": "/Text",
       "author": "D. Chen",
-      "created": "D:20251112093000+00'00'",
+      "created": "D:20250417093000+00'00'",
       "contents": "This scan looks authentic \u2014 Canon scanner EXIF matches office equipment log."
     },
     {
       "page": 2,
       "subtype": "/Highlight",
       "author": "M. Patel (QA)",
-      "created": "D:20251115104500+00'00'",
-      "contents": "CHECK: Samsung smartphone GPS shows Paris -- document claims London origin"
+      "created": "D:20250417104500+00'00'",
+      "contents": "CHECK: Samsung smartphone GPS shows Las Vegas -- document claims Portland origin"
     },
     {
       "page": 3,
       "subtype": "/FreeText",
       "author": "M. Patel (QA)",
-      "created": "D:20251115110000+00'00'",
+      "created": "D:20250417110000+00'00'",
       "contents": "INCONSISTENT: Fujifilm camera EXIF on a supposedly scanned document. Requires explanation."
     }
   ],
   "exercises": [
     {
       "q": "Extract Image 2 (page 2) and identify the GPS coordinates.",
-      "a": "GPS: 48.8566\u00b0N, 2.3522\u00b0E \u2014 Paris, France. Use: mutool extract lab06.pdf  then  exiftool <image_file>"
+      "a": "GPS: 36.1699\u00b0N, 115.1398\u00b0W \u2014 Las Vegas, Nevada. Use: mutool extract lab06.pdf  then  exiftool <image_file>"
     },
     {
       "q": "What does the EXIF Make/Model on page 2 reveal?",
@@ -86,7 +86,7 @@
     },
     {
       "q": "What is the timestamp of the M. Patel (QA) highlight annotation on page 2?",
-      "a": "D:20251115104500+00'00'  (2025-11-15 10:45:00 UTC)"
+      "a": "D:20250417104500+00'00'  (2025-11-15 10:45:00 UTC)"
     }
   ]
 }

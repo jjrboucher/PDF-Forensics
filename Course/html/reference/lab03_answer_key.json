@@ -2,45 +2,45 @@
   "lab": "03",
   "title": "Incremental Updates and Prior Versions",
   "file": "lab03_incremental.pdf",
-  "md5": "57fe4a57a80043fa8654cf7be9ea8603",
+  "md5": "470d598a77710b788cfcf31e94965193",
   "pages": 1,
   "eof_count": 3,
   "eof_offsets": [
-    1143,
-    1911,
-    2690
+    2698,
+    5582,
+    8759
   ],
   "incremental_updates": 2,
   "version_history": [
     {
       "version": 1,
-      "eof_offset": 1143,
-      "producer": "Microsoft Word 2019",
-      "creation_date": "D:20250303090000+00'00'",
-      "mod_date": "D:20250303090000+00'00'",
-      "content": "Original contract. Salary: $85,000. Start Date: 3 March 2025.",
-      "md5_at_this_version": "056b9bd1b4368afd95cf01dd83ceccde",
-      "note_on_annot_obj": "Salary annotation object: 8"
+      "eof_offset": 2698,
+      "producer": "LibreOffice 7.3",
+      "creation_date": "D:20250314102241-07'00'",
+      "mod_date": "D:20250314102241-07'00'",
+      "content": "Original invoice. Total Due: $8,500.00. Due date: 13 April 2025.",
+      "md5_at_this_version": "038d8cd64cd74b4ced27f475fba5e108",
+      "note_on_annot_obj": "No annotations in V1"
     },
     {
       "version": 2,
-      "eof_offset": 1911,
-      "producer": "Adobe Acrobat Reader DC 23.0",
-      "mod_date": "D:20250310143000+00'00'",
-      "change": "FreeText annotation added over Salary line \u2014 changes '$85,000' to '$95,000'",
-      "annotation_rect": "[140, 618, 280, 636]",
-      "annotation_contents": "$95,000 per annum",
-      "md5_at_this_version": "6c4a40a67ab413ae373ba17d53b0eba7",
-      "note_on_annot_obj": "Start date annotation object: 9"
+      "eof_offset": 5582,
+      "producer": "PDF-XChange Editor 10.0",
+      "mod_date": "D:20250618154703-07'00'",
+      "change": "FreeText annotation (object 17) added over the Total line \u2014 overlays '$48,500.00' over '$8,500.00'",
+      "annotation_rect": "[448, 464, 540, 482]",
+      "annotation_contents": "$48,500.00",
+      "md5_at_this_version": "8f6dc57e6ea875b9d7418ecb0e49b155"
     },
     {
       "version": 3,
-      "eof_offset": 2690,
-      "producer": "Adobe Acrobat Reader DC 23.0",
-      "mod_date": "D:20250318092000+00'00'",
-      "change": "Second FreeText annotation added over Start Date \u2014 changes '3 March 2025' to '7 April 2025'",
-      "annotation_rect": "[140, 658, 310, 676]",
-      "annotation_contents": "Monday, 7 April 2025"
+      "eof_offset": 8759,
+      "producer": "PDF-XChange Editor 10.0",
+      "mod_date": "D:20250702101500-07'00'",
+      "change": "Second FreeText annotation (object 20) added over the due date \u2014 overlays 'Due: 18 July 2025' over 'Due: 13 April 2025'",
+      "annotation_rect": "[428, 670, 540, 686]",
+      "annotation_contents": "Due: 18 July 2025",
+      "md5_at_this_version": "470d598a77710b788cfcf31e94965193"
     }
   ],
   "detection_commands": {
@@ -54,23 +54,27 @@
   "exercises": [
     {
       "q": "How many %%EOF markers does the file contain?",
-      "a": "1 (indicating 0 incremental updates)"
+      "a": "3 (indicating 2 incremental updates: original creation plus two saves)"
     },
     {
-      "q": "What was the original salary value in Version 1?",
-      "a": "$85,000 per annum (visible in extracted Version 1)"
+      "q": "What was the original Total Due in Version 1?",
+      "a": "$8,500.00 (visible in the extracted Version 1, before any incremental update)"
     },
     {
       "q": "What Producer wrote the incremental updates?",
-      "a": "Adobe Acrobat Reader DC 23.0 (Version 1 was Microsoft Word 2019)"
+      "a": "PDF-XChange Editor 10.0 (Version 1 was authored in LibreOffice 7.3)"
     },
     {
       "q": "What content does the Version 2 FreeText annotation cover?",
-      "a": "The salary line \u2014 overlays '$95,000 per annum' over the original '$85,000'"
+      "a": "The invoice total \u2014 a FreeText annotation overlays '$48,500.00' over the original '$8,500.00'"
+    },
+    {
+      "q": "What does the Version 3 incremental update change?",
+      "a": "It adds a second FreeText annotation altering the due date from 13 April 2025 to 18 July 2025"
     },
     {
       "q": "Extract Version 1 to a separate file and verify its MD5.",
-      "a": "Expected MD5: 963f3e0081a05a61dd4ba4f013bf4bab"
+      "a": "Using d.find(b'%%EOF')+5 the extracted Version 1 is 2703 bytes, MD5 038d8cd64cd74b4ced27f475fba5e108"
     }
   ]
 }
