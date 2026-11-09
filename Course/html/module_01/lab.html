@@ -50,15 +50,17 @@ pdf> info
 # Look for: PDF version, number of objects, encryption status
 # Record: the version string and object count
 
-# Command 2: list all objects
+# Command 2: list the object numbers in the file
 pdf> objects
-# Look for: each object number and its type (/Catalog, /Pages, /Page, /XObject, etc.)
-# Record: the object numbers for the Catalog, the Pages tree, and any Image objects
+# Output: Version 0: Objects (N): [1, 2, 3, ...]  -- an array of object numbers only
+# Record: how many objects the file has and their numbers
+#         (object TYPES are not shown here -- you identify those in Command 3)
 
-# Command 3: show the document hierarchy
+# Command 3: show the document hierarchy with each object's type
 pdf> tree
-# Look for: the chain Catalog -> Pages -> Page -> Contents/Resources
-# Record: which object numbers appear at each level
+# Look for: each object's type and number (/Catalog, /Pages, /Page, /XObject, etc.)
+#           along the chain Catalog -> Pages -> Page -> Contents/Resources
+# Record: the object numbers for the Catalog, the Pages tree, and any Image objects
 
 # Command 4: display all metadata
 pdf> metadata
@@ -72,12 +74,12 @@ pdf> info
 # Look for: PDF version, number of objects, encryption status
 # Record: the version string and object count
 
-# Command 2: list all objects
+# Command 2: list the object numbers in the file
 pdf> objects
-# Look for: each object number and its type
-# Record: object numbers for Catalog, Pages tree, and any Image objects
+# Output: Version 0: Objects (N): [1, 2, 3, ...]  -- numbers only, no types
+# Record: the object numbers present
 
-# Command 3: document hierarchy
+# Command 3: document hierarchy with each object's type
 pdf> tree
 # Look for: Catalog -> Pages -> Page -> Contents/Resources chain
 

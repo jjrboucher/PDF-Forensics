@@ -58,6 +58,15 @@ a complete version.
 Note: version left at 0.9 (pre-release) pending owner sign-off, per the
 versioning policy above.
 
+### Module 01 peepdf command fix (pending sign-off)
+
+- Corrected the Module 01 peepdf walkthrough. The `pdf> objects` command lists
+  object NUMBERS only (output: "Version 0: Objects (N): [1, 2, 3, ...]"), but the
+  lab, lesson, and reference incorrectly said it also shows each object's TYPE.
+  Object types come from `pdf> tree`. Reworded so `objects` is described as a
+  number listing and `tree` as the command that shows types, in the lab sequence
+  (info / objects / tree / metadata), the lesson, and the reference card.
+
 ### Legibility rebuild + module fixes (pending sign-off)
 
 - **Rebuilt all seven lab PDFs for legibility.** The previous rebuild embedded

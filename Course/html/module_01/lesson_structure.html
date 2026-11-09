@@ -170,14 +170,14 @@
 <li><code>/Annot</code> &mdash; an annotation (sticky note, FreeText overlay, highlight)</li>
 <li><code>/Font</code> &mdash; an embedded font resource</li>
 </ul>
-<p>When peepdf&rsquo;s <code>pdf&gt; objects</code> command lists all objects, the type column is derived from this <code>/Type</code> key.</p>
+<p>When peepdf&rsquo;s <code>pdf&gt; tree</code> command lists the document&rsquo;s objects, the type shown for each is derived from this <code>/Type</code> key.</p>
 </div></div>
 
 <h3 class="subsection-title">What an indirect object looks like at hex level</h3>
 <p>In a hex editor, jump to the byte offset stored in the xref table for object 2. You will see the ASCII text <code>32 20 30 20 6F 62 6A</code> &mdash; that is <code>2 0 obj</code>. The dictionary content follows immediately, then <code>65 6E 64 6F 62 6A</code> (<code>endobj</code>) marks the end. Everything between those two markers is the object's data.</p>
 
 <div class="callout callout-forensic"><div class="callout-icon">&#x1F50D;</div><div class="callout-body"><div class="callout-title">Viewing Indirect Objects with Course Tools</div>
-<p><strong>peepdf:</strong> <code>pdf&gt; objects</code> lists every object number and its type. <code>pdf&gt; object 2</code> prints the raw content of object 2 exactly as it appears in the file &mdash; no decompression, no interpretation.<br><br>
+<p><strong>peepdf:</strong> <code>pdf&gt; objects</code> lists the file&rsquo;s object numbers (e.g. <code>Version 0: Objects (11): [1, 2, 3, &hellip;]</code>), and <code>pdf&gt; tree</code> shows each object&rsquo;s type alongside its number. <code>pdf&gt; object 2</code> prints the raw content of object 2 exactly as it appears in the file &mdash; no decompression, no interpretation.<br><br>
 <strong>qpdf:</strong> <code>qpdf --show-object=2 lab01_structure.pdf</code> prints the same thing. This is the primary command for independently verifying any finding the forensics application reports &mdash; the <code>obj_locator</code> field in every report gives you the object number to use here.</p>
 </div></div>
 
