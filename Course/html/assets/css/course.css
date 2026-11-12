@@ -318,3 +318,36 @@ tbody td{padding:10px 16px;border-bottom:1px solid var(--border);vertical-align:
   .hero h1{font-size:1.8rem}
   .compare-grid{grid-template-columns:1fr}
 }
+
+/* ---- "Expected output" terminal screenshot blocks (beginner guidance) ---- */
+.term-shot{margin:14px 0 18px;border-radius:var(--radius-lg);overflow:hidden;border:1px solid #30363d;box-shadow:0 4px 14px rgba(16,24,40,.18)}
+.term-bar{display:flex;align-items:center;gap:8px;background:#2b3240;padding:9px 14px}
+.term-dot{width:11px;height:11px;border-radius:50%;display:inline-block}
+.term-dot.r{background:#ff5f56}.term-dot.y{background:#ffbd2e}.term-dot.g{background:#27c93f}
+.term-title{margin-left:10px;color:#c6ccd6;font-size:0.76rem;font-family:var(--font-mono)}
+.term-body{background:#0d1117;color:#d6deeb;font-family:var(--font-mono);font-size:0.82rem;line-height:1.55;padding:14px 16px;white-space:pre;overflow-x:auto}
+.term-body .tprompt{color:#7ee787;font-weight:700}      /* pdf> prompt */
+.term-body .tcmd{color:#79c0ff}                          /* typed command */
+.term-body .tkey{color:#ffa657}                          /* highlighted value */
+.term-body .tdim{color:#8b949e}                          /* comments/dim */
+.term-caption{font-size:0.82rem;color:var(--text-muted);margin:-8px 0 16px;padding-left:4px}
+.step-list{counter-reset:stp;list-style:none;padding-left:0;margin:12px 0}
+.step-list>li{position:relative;padding:10px 0 10px 44px;border-bottom:1px solid var(--border)}
+.step-list>li:last-child{border-bottom:none}
+.step-list>li::before{counter-increment:stp;content:counter(stp);position:absolute;left:0;top:8px;width:28px;height:28px;border-radius:50%;background:var(--blue);color:#fff;font-weight:700;font-size:0.85rem;display:flex;align-items:center;justify-content:center}
+
+/* Data / comparison tables */
+.data-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:0.86rem;table-layout:fixed}
+.data-table th{background:var(--navy);color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+.data-table td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:top;overflow-wrap:anywhere;word-break:break-word}
+.data-table tr:nth-child(even) td{background:var(--steel)}
+
+
+/* overflow guard: keep all lab content within the column (prevents horizontal scroll) */
+.page-content{overflow-x:hidden}
+.page-content table{max-width:100%}
+.page-content pre{max-width:100%;overflow-x:auto}
+.term-body{max-width:100%}
+.callout-body{min-width:0;overflow-wrap:anywhere}
+.callout{max-width:100%}
+.step-content{min-width:0}

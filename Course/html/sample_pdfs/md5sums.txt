@@ -6,10 +6,10 @@ Verify each downloaded lab file against the value below before use.
   Windows      : Get-FileHash -Algorithm MD5 <file>
   Linux/macOS  : md5sum <file>
 
-lab01_structure.pdf              ff59024e74ad4e5f43f355fd534bd5b4
-lab02_metadata.pdf               943b8faee1e228518136dc17b561e12d
-lab03_incremental.pdf            470d598a77710b788cfcf31e94965193
-lab04_images.pdf                 cabc5d64d0b5c362bacbf388398c1d4a
-lab05_textoverlay.pdf            de28baa596b588c9eb646192bd12c364
-lab06_exif_comments.pdf          736cdd19548ef485919148a3565c1aeb
-lab07_capstone.pdf               8f5825be6d70c2f829831e1ad6d904a0
+lab01_structure.pdf             0cea405a0738c7ba102edfb92ce40a2e
+lab02_metadata.pdf              943b8faee1e228518136dc17b561e12d
+lab03_incremental.pdf           470d598a77710b788cfcf31e94965193
+lab04_images.pdf                cabc5d64d0b5c362bacbf388398c1d4a
+lab05_textoverlay.pdf           de28baa596b588c9eb646192bd12c364
+lab06_exif_comments.pdf         736cdd19548ef485919148a3565c1aeb
+lab07_capstone.pdf              8f5825be6d70c2f829831e1ad6d904a0

@@ -2,20 +2,34 @@
   "lab": "01",
   "title": "PDF Structure",
   "file": "lab01_structure.pdf",
-  "md5": "ff59024e74ad4e5f43f355fd534bd5b4",
+  "md5": "0cea405a0738c7ba102edfb92ce40a2e",
   "pages": 2,
   "pdf_version": "1.7",
   "expected_findings": [],
   "object_map": {
-    "description": "Object numbers assigned by pikepdf \u2014 run: python3 -c \"import pikepdf; p=pikepdf.open('lab01_structure.pdf'); [print(i, p.get_object(i,0)) for i in range(1,15)]\"",
-    "notes": "Catalog is /Root. Pages object is /Root[/Pages]. Image is the object with /Subtype /Image."
+    "description": "Sequential object numbering 1-12.",
+    "objects": {
+      "1": "Catalog",
+      "2": "Info (document information dictionary)",
+      "3": "Pages (page-tree root, /Count 2)",
+      "4": "Page 1",
+      "5": "Page 1 content stream",
+      "6": "Page 2",
+      "7": "Page 2 content stream",
+      "8": "Font (Helvetica)",
+      "9": "Font (Helvetica-Bold)",
+      "10": "Image XObject (JPEG / DCTDecode)",
+      "11": "Form XObject",
+      "12": "Metadata (XMP)"
+    }
   },
   "image_info": {
     "image_0": {
       "width": 200,
       "height": 150,
       "format": "JPEG",
-      "md5": "bb5b439d0f8bd1a9d9fa5a79885bb3cc"
+      "md5": "bb5b439d0f8bd1a9d9fa5a79885bb3cc",
+      "object": 10
     }
   },
   "exercises": [
