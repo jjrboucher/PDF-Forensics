@@ -50,10 +50,12 @@ from pdf_forensics.reports import reveal as _reveal
 PAGE_RENDER_DPI = 144
 # Per-document counters reported in the performance log (reset per
 # document): pages using the one-page fast path or the whole document;
-# renders reused from a prior version; layers rendered clipped, or clipped
-# then redone in full; verification comparisons.
-_VISUAL_STATS = {"fast": 0, "fallback": 0, "reused": 0, "clipped": 0,
-                 "clip_fallback": 0, "verified": 0, "mismatch": 0}
+# renders reused from a prior version; verification comparisons; and the
+# seconds spent in each part of the work (t_*).
+_VISUAL_STATS = {"fast": 0, "fallback": 0, "reused": 0, "verified": 0,
+                 "mismatch": 0, "t_build": 0.0, "t_render": 0.0,
+                 "t_isolate": 0.0, "t_whitebox": 0.0, "t_single": 0.0,
+                 "t_check": 0.0, "t_encode": 0.0}
 
 # ---------------------------------------------------------------------
 # Render cache (1.2.0): a prior version's page that is unchanged from an
@@ -67,7 +69,6 @@ from collections import OrderedDict as _OrderedDict
 _RENDER_CACHE = _OrderedDict()
 _RENDER_BYTES = [0]
 _RENDER_BUDGET = 1536 * 1024 * 1024
-_CLIP_PAD_PTS = 24.0
 
 
 def _render_size(v):
@@ -96,6 +97,40 @@ def _rc_put(key, value):
         _RENDER_BYTES[0] -= _render_size(old)
 
 
+def _mupdf_reset():
+    """Stop MuPDF printing its diagnostics to the terminal and discard any
+    pending ones; they are collected per document instead."""
+    try:
+        import pymupdf
+        pymupdf.TOOLS.mupdf_display_errors(False)
+        pymupdf.TOOLS.mupdf_warnings(reset=True)
+    except Exception:
+        pass
+
+
+def _mupdf_collect(session, doc_name):
+    """MuPDF's diagnostics since the last reset (e.g. 'invalid ICC
+    colorspace' for a malformed colour profile, which MuPDF replaces with a
+    standard colour space): written to the session log with the document
+    they came from. Returns the number of message lines."""
+    try:
+        import pymupdf
+        text = pymupdf.TOOLS.mupdf_warnings(reset=True) or ""
+    except Exception:
+        return 0
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if lines and session:
+        counts = {}
+        for ln in lines:
+            counts[ln] = counts.get(ln, 0) + 1
+        summary = "; ".join(f"{m} (x{n})" if n > 1 else m
+                            for m, n in list(counts.items())[:12])
+        session.log(f"Visual report, {doc_name}: MuPDF reported "
+                    f"{len(lines)} message(s) while rendering: {summary}",
+                    "warning")
+    return len(lines)
+
+
 def clear_render_cache():
     _RENDER_CACHE.clear()
     _RENDER_BYTES[0] = 0
@@ -107,63 +142,6 @@ def _verify_on():
         return _pr.verify_mode()
     except Exception:
         return False
-
-
-def _clip_enabled():
-    return os.environ.get("PDF_FORENSICS_VISUAL_CLIP", "1") != "0"
-
-
-def _render_clip_onto(onto_png, pdf_bytes, page_index, bbox, zoom):
-    """Render only the area around bbox (PyMuPDF top-left points, plus a
-    margin) and paste it onto onto_png at its exact pixel position.
-    Returns (png_bytes, (x0, y0, x1, y1) pasted box in pixels) or
-    (None, None)."""
-    import pymupdf
-    from PIL import Image
-    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-    try:
-        page = doc[page_index]
-        p = _CLIP_PAD_PTS
-        clip = pymupdf.Rect(bbox[0] - p, bbox[1] - p,
-                            bbox[2] + p, bbox[3] + p) & page.rect
-        if clip.is_empty:
-            return None, None
-        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip,
-                              alpha=False)
-        if pix.n != 3:
-            return None, None
-        piece = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-        bg = Image.open(io.BytesIO(onto_png)).convert("RGB")
-        bg.paste(piece, (pix.x, pix.y))
-        out = io.BytesIO()
-        bg.save(out, format="PNG", compress_level=6)
-        return out.getvalue(), (pix.x, pix.y, pix.x + pix.width,
-                                pix.y + pix.height)
-    finally:
-        doc.close()
-
-
-def _layer_touches_edge(layer_png, box):
-    """True if the layer has any visible pixel on an interior edge of the
-    pasted box: the overlay may then extend beyond the clipped area. Edges
-    on the page boundary are not interior and are not checked."""
-    from PIL import Image
-    a = Image.open(io.BytesIO(layer_png)).getchannel("A")
-    w, h = a.size
-    x0, y0, x1, y1 = max(0, box[0]), max(0, box[1]), min(w, box[2]), \
-        min(h, box[3])
-    if x1 - x0 < 3 or y1 - y0 < 3:
-        return True
-    edges = []
-    if y0 > 0:
-        edges.append(a.crop((x0, y0, x1, y0 + 1)))
-    if y1 < h:
-        edges.append(a.crop((x0, y1 - 1, x1, y1)))
-    if x0 > 0:
-        edges.append(a.crop((x0, y0, x0 + 1, y1)))
-    if x1 < w:
-        edges.append(a.crop((x1 - 1, y0, x1, y1)))
-    return any(e.getbbox() is not None for e in edges)
 
 
 def _same_pixels(a_png, b_png):
@@ -500,6 +478,59 @@ def _b64_png(png_bytes):
 from pdf_forensics.perf import timed as _timed
 
 
+
+# ---------------------------------------------------------------------
+# Where each document's visual report spends its time (1.2.0): seconds per
+# kind of work, accumulated in _VISUAL_STATS and reported per document in
+# the performance log. The functions are wrapped once here; the rendering
+# code itself is unchanged.
+# ---------------------------------------------------------------------
+def _stat_timer(key, fn):
+    import functools
+    import time as _time
+
+    @functools.wraps(fn)
+    def wrapper(*a, **k):
+        t0 = _time.perf_counter()
+        try:
+            return fn(*a, **k)
+        finally:
+            _VISUAL_STATS[key] += _time.perf_counter() - t0
+    return wrapper
+
+
+_render_page_png = _stat_timer("t_render", _render_page_png)
+_render_revealed_page_png = _stat_timer("t_render", _render_revealed_page_png)
+_isolate_layer_png = _stat_timer("t_isolate", _isolate_layer_png)
+_composite_matches = _stat_timer("t_check", _composite_matches)
+_b64_png = _stat_timer("t_encode", _b64_png)
+def _build_variant_checked(*a, **k):
+    """Build a variant from the shared page state; in verification mode
+    also build it from scratch and compare the two (the from-scratch
+    variant is used if they differ)."""
+    out = _reveal.build_revealed_pdf_bytes(*a, **k)
+    if _verify_on():
+        ref = _reveal._build_revealed_pdf_bytes_reference(*a, **k)
+        ok = (out[0] is None) == (ref[0] is None) and out[1] == ref[1]
+        if ok and out[0] is not None:
+            try:
+                idx = 0 if k.get("single_page") else a[1]
+                ok = (_reveal.variant_digest(out[0], idx)
+                      == _reveal.variant_digest(ref[0], idx))
+            except Exception:
+                ok = False
+        _VISUAL_STATS["verified" if ok else "mismatch"] += 1
+        if not ok:
+            return ref
+    return out
+
+
+_build_variant = _stat_timer("t_build", _build_variant_checked)
+_white_box = _stat_timer(
+    "t_whitebox", lambda *a, **k: _reveal.white_box_components(*a, **k))
+_single_page = _stat_timer(
+    "t_single", lambda *a, **k: _reveal.single_page_pdf_bytes(*a, **k))
+
 def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
                                  session=None):
     """
@@ -640,7 +671,7 @@ def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
             # page as received; otherwise use the whole document.
             def _single_ok():
                 try:
-                    _sp = _reveal.single_page_pdf_bytes(fpath, page_index)
+                    _sp = _single_page(fpath, page_index)
                     return bool(_sp) and _render_revealed_page_png(
                         _sp, 0, PAGE_RENDER_DPI) == asis_png
                 except Exception:
@@ -651,7 +682,7 @@ def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
 
             def _base():
                 try:
-                    rb, rinfo = _reveal.build_revealed_pdf_bytes(
+                    rb, rinfo = _build_variant(
                         fpath, page_index, findings, page_height,
                         single_page=_single)
                     if rb and rinfo.get("recovered", 0) >= 1:
@@ -667,7 +698,7 @@ def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
                 """Page with `remove` findings suppressed (except the
                 `keep` operations). Unchanged page -> the as-received
                 render."""
-                rb2, _info2 = _reveal.build_revealed_pdf_bytes(
+                rb2, _info2 = _build_variant(
                     fpath, page_index, remove, page_height, keep_ops=keep,
                     single_page=_single)
                 if rb2 is None:
@@ -675,52 +706,10 @@ def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
                 return _render_revealed_page_png(
                     rb2, _ri, PAGE_RENDER_DPI)
 
-            # Clipped renders (1.2.0): a layer differs from its background
-            # only where its overlay is, so the variant is rendered only
-            # around the overlay (with a margin) and pasted onto the
-            # background. If any changed pixel touches an interior edge of
-            # the pasted area, the overlay may extend beyond it and the
-            # layer is redone on the full page. Rotated pages, and pages
-            # whose coordinates do not start at the origin, always use full
-            # renders. Verification mode compares clipped with full.
-            try:
-                _can_clip = (_clip_enabled() and not page.rotation
-                             and page.rect.x0 == 0 and page.rect.y0 == 0)
-            except Exception:
-                _can_clip = False
-
             def _layer(onto_png, remove, keep, bbox):
                 """(layer_png, variant_png) for one overlay: the page with
-                `remove` suppressed except `keep`, isolated against
-                onto_png."""
-                if _can_clip and bbox:
-                    rb2, _info2 = _reveal.build_revealed_pdf_bytes(
-                        fpath, page_index, remove, page_height,
-                        keep_ops=keep, single_page=_single)
-                    if rb2 is None:
-                        return _isolate_layer_png(onto_png, asis_png), asis_png
-                    variant, box = _render_clip_onto(onto_png, rb2, _ri,
-                                                     bbox, zoom)
-                    if variant is not None:
-                        layer = _isolate_layer_png(onto_png, variant)
-                        if not _layer_touches_edge(layer, box):
-                            if _verify:
-                                full = _render_variant(remove, keep)
-                                full_layer = _isolate_layer_png(onto_png, full)
-                                if _same_pixels(layer, full_layer):
-                                    _VISUAL_STATS["verified"] += 1
-                                else:
-                                    _VISUAL_STATS["mismatch"] += 1
-                                    if session:
-                                        session.log(
-                                            f"Visual report p{page_num}: a "
-                                            f"clipped layer differs from the "
-                                            f"full render (full render "
-                                            f"used)", "warning")
-                                    return full_layer, full
-                            _VISUAL_STATS["clipped"] += 1
-                            return layer, variant
-                    _VISUAL_STATS["clip_fallback"] += 1
+                `remove` suppressed except `keep`, rendered in full and
+                isolated against onto_png."""
                 full = _render_variant(remove, keep)
                 return _isolate_layer_png(onto_png, full), full
 
@@ -731,7 +720,7 @@ def _generate_visual_report_impl(db_path, output_path, analysis_id=None,
                 if fnd["kind"] == "white_box":
                     def _wb(_f=fnd):
                         try:
-                            c = _reveal.white_box_components(
+                            c = _white_box(
                                 fpath, page_index, _f, page_height)
                         except Exception:
                             c = None
@@ -1677,6 +1666,7 @@ def generate_visual_reports(db_path, index_path, session=None,
             from pdf_forensics import perf as _perf
             for _k in _VISUAL_STATS:
                 _VISUAL_STATS[_k] = 0
+            _mupdf_reset()
             _t0 = _time.perf_counter()
             try:
                 n = _generate_visual_report_impl(db_path, path,
@@ -1688,10 +1678,11 @@ def generate_visual_reports(db_path, index_path, session=None,
                     findings=n_over, fast_pages=_VISUAL_STATS["fast"],
                     fallback_pages=_VISUAL_STATS["fallback"],
                     renders_reused=_VISUAL_STATS["reused"],
-                    layers_clipped=_VISUAL_STATS["clipped"],
-                    clip_fallbacks=_VISUAL_STATS["clip_fallback"],
                     verified=_VISUAL_STATS["verified"],
-                    mismatches=_VISUAL_STATS["mismatch"])
+                    mismatches=_VISUAL_STATS["mismatch"],
+                    mupdf_messages=_mupdf_collect(session, pdf_filename),
+                    **{k: round(v, 2) for k, v in _VISUAL_STATS.items()
+                       if k.startswith("t_")})
             except Exception as e:
                 n = 0
                 if session:

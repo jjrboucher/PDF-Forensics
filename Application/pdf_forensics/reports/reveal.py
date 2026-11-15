@@ -705,6 +705,7 @@ _FP_DOC = {"path": None, "pdf": None, "memo": {}}
 
 
 def clear_source_cache():
+    _drop_page_state()
     _SRC_CACHE.clear()
     try:
         if _FP_DOC["pdf"] is not None:
@@ -804,7 +805,280 @@ def single_page_pdf_bytes(src_path, page_index):
             pass
 
 
+# --------------------------------------------------------------------------
+# Page state shared by a page's variants (1.2.0)
+#
+# Building a variant used to reopen the source, re-parse the page's content
+# (and its forms) and re-decide the operators of every finding on the page,
+# for every layer: two-thirds of the visual reports' time. The page is now
+# opened and parsed once. Each build first restores the original page (its
+# annotations, its content, and any form rewritten by an earlier variant)
+# and clears the units' drop sets, then runs the same steps as before; the
+# decisions for a given set of findings are computed once and reused by the
+# variants that remove the same findings. One page at a time is held.
+# --------------------------------------------------------------------------
+_PAGE = {"key": None}
+
+
+def _drop_page_state():
+    try:
+        if _PAGE.get("pdf") is not None:
+            _PAGE["pdf"].close()
+    except Exception:
+        pass
+    _PAGE.clear()
+    _PAGE["key"] = None
+
+
+def _get_page_state(src_path, page_index):
+    if _PAGE.get("key") == (src_path, page_index):
+        return _PAGE
+    _drop_page_state()
+    pdf = _open_source(src_path)
+    if page_index < 0 or page_index >= len(pdf.pages):
+        pdf.close()
+        return None
+    page = pdf.pages[page_index]
+    _PAGE.update(key=(src_path, page_index), pdf=pdf, page=page, walk=None,
+                 had_annots="/Annots" in page.obj,
+                 annots=page.obj.get("/Annots"),
+                 contents=page.obj.get("/Contents"),
+                 form_orig={}, decisions={})
+    return _PAGE
+
+
+def _state_walk(st):
+    if st["walk"] is None:
+        st["walk"] = _walk_content(st["page"])
+    return st["walk"]
+
+
+def _restore_page_state(st):
+    """Put the page back as it was read, so a build cannot be affected by
+    the variant built before it."""
+    page = st["page"]
+    if st["had_annots"]:
+        page.obj["/Annots"] = st["annots"]
+    elif "/Annots" in page.obj:
+        del page.obj["/Annots"]
+    if st["contents"] is not None:
+        page.obj["/Contents"] = st["contents"]
+    for _uid, (obj, data) in st["form_orig"].items():
+        obj.write(data)
+    if st["walk"] is not None:
+        for u in st["walk"][0].values():
+            u.drop = set()
+
+
+def variant_digest(pdf_bytes, page_index):
+    """Digest of a variant's page as it will render: the operators of its
+    content and of the forms it draws, and its annotations. Used to compare
+    a variant built from the shared page state with one built from scratch
+    (verification mode and tests)."""
+    import hashlib
+    pdf = pikepdf.open(io.BytesIO(pdf_bytes))
+    try:
+        page = pdf.pages[page_index]
+        units = _walk_content(page)[0]
+        h = hashlib.md5()
+        for u in units.values():
+            h.update(pikepdf.unparse_content_stream(u.ops))
+            h.update(b"|")
+        annots = page.obj.get("/Annots")
+        h.update(str(len(annots) if annots is not None else 0).encode())
+        return h.hexdigest()
+    finally:
+        pdf.close()
+
+
 def build_revealed_pdf_bytes(src_path, page_index, findings, page_height,
+                             keep_ops=None, single_page=False):
+    """
+    Produce a copy of the PDF at src_path with the given overlay findings
+    suppressed on page `page_index` (0-based). `findings` is a list of dicts
+    each with keys: 'bbox' (PyMuPDF top-left coords) and 'kind' (one of
+    'white_box', 'text_over_text', 'annotation').
+
+    Returns (pdf_bytes, info) where info is a dict:
+        {"changed": bool,
+         "kinds": set(...),            # kinds actually suppressed
+         "ops_dropped": int,
+         "annots_removed": int,
+         "recovered": int,             # findings whose overlay was removed
+         "skipped": int}               # findings left intact (not isolable)
+    On failure or when nothing was suppressed, returns (None, info) with the
+    counters still populated so the caller can label the finding.
+    """
+    info = {"changed": False, "kinds": set(), "ops_dropped": 0,
+            "annots_removed": 0, "recovered": 0, "skipped": 0}
+
+    # Preserve original finding order so we can report per-finding outcomes.
+    cs_findings = []   # (orig_index, kind, pdf_rect)
+    annot_rects = []
+    annot_objrefs = set()   # (obj_num, obj_gen) for precise removal
+    for idx, fnd in enumerate(findings):
+        kind = fnd.get("kind", "other")
+        rect = _finding_rect_to_pdf(fnd["bbox"], page_height)
+        if kind in ("white_box", "text_over_text"):
+            cs_findings.append((idx, kind, rect))
+        elif kind == "annotation":
+            on = fnd.get("obj_num")
+            if on is not None:
+                try:
+                    annot_objrefs.add((int(on), int(fnd.get("obj_gen") or 0)))
+                except (TypeError, ValueError):
+                    annot_rects.append(rect)
+            else:
+                annot_rects.append(rect)
+
+    # The page is opened and parsed once and shared by all its variants
+    # (see _get_page_state); each build starts from the restored original.
+    try:
+        st = _get_page_state(src_path, page_index)
+    except Exception:
+        st = None
+    if st is None:
+        info["skipped"] = len(findings)
+        return None, info
+    pdf, page = st["pdf"], st["page"]
+
+    try:
+        _restore_page_state(st)
+
+        # --- Annotations -------------------------------------------------
+        n_annot_targets = len(annot_rects) + len(annot_objrefs)
+        if n_annot_targets:
+            n = _suppress_annotations(page, annot_rects,
+                                      objrefs=annot_objrefs)
+            if n:
+                info["annots_removed"] += n
+                info["kinds"].add("annotation")
+                info["recovered"] += n
+            info["skipped"] += max(0, n_annot_targets - n)
+
+        # --- Content stream + nested form tree ---------------------------
+        if cs_findings:
+            units, shows, rects, do_sites = _state_walk(st)
+            # The decisions below depend only on the page and on this set
+            # of findings; variants that remove the same findings (all the
+            # fill and line layers of a page) reuse them.
+            _dkey = tuple((k, tuple(r)) for (_, k, r) in cs_findings)
+            _saved = st["decisions"].get(_dkey)
+            _kinds = set()
+
+            regions = [r for (_, _, r) in cs_findings]
+
+            # Primary: container-level suppression (patch + forged text),
+            # with proper per-finding kind accounting.
+            if _saved is None:
+                recovered = set()
+                for ridx, (orig_idx, kind, region) in enumerate(cs_findings):
+                    chosen = _select_container_for_region(do_sites, region)
+                    if chosen is None:
+                        continue
+                    group = _collect_region_siblings(do_sites, chosen, region)
+                    ok = False
+                    for site in group:
+                        u = units.get(site.parent_uid)
+                        if u is None or u.shared:
+                            continue
+                        u.drop.add(site.op_idx)
+                        ok = True
+                    if ok:
+                        recovered.add(ridx)
+                        _kinds.add(kind)
+
+                # Fallbacks for inline (non-wrapped) overlays.
+                wb_regions = [r for (_, k, r) in cs_findings
+                              if k == "white_box"]
+                tt_regions = [r for (_, k, r) in cs_findings
+                              if k == "text_over_text"]
+                # Map region-index spaces for fallbacks
+                wb_recovered = set()
+                tt_recovered = set()
+                # Translate already-recovered global indices into per-kind lists
+                for ridx, (orig_idx, kind, region) in enumerate(cs_findings):
+                    if ridx in recovered:
+                        if kind == "white_box":
+                            wb_recovered.add(wb_regions.index(region))
+                        else:
+                            tt_recovered.add(tt_regions.index(region))
+
+                _decide_white_box_inline(units, shows, rects, wb_regions,
+                                         wb_recovered, _kinds)
+                _decide_text_inline(units, shows, tt_regions,
+                                    tt_recovered, _kinds)
+
+                # Recount recovered across both mechanisms.
+                recovered_total = 0
+                for ridx, (orig_idx, kind, region) in enumerate(cs_findings):
+                    if kind == "white_box":
+                        if wb_regions.index(region) in wb_recovered:
+                            recovered_total += 1
+                    else:
+                        if tt_regions.index(region) in tt_recovered:
+                            recovered_total += 1
+                st["decisions"][_dkey] = (
+                    {uid: frozenset(u.drop) for uid, u in units.items()},
+                    frozenset(_kinds), recovered_total)
+            else:
+                for uid, u in units.items():
+                    u.drop = set(_saved[0].get(uid, ()))
+                _kinds = set(_saved[1])
+                recovered_total = _saved[2]
+            info["kinds"] |= _kinds
+            info["recovered"] += recovered_total
+            info["skipped"] += len(cs_findings) - recovered_total
+
+            # --- Keep-list: operations to leave in place even though a
+            # finding removal selected them. Keys are (unit_seq, op_idx);
+            # unit_seq is the unit's position in the deterministic walk
+            # order, which is stable across separate opens of the file.
+            # Used to render one part of an alteration on its own (e.g. a
+            # white box without the text painted on it).
+            if keep_ops:
+                seq_to_uid = {i: uid for i, uid in enumerate(units)}
+                for (useq, idx) in keep_ops:
+                    uid = seq_to_uid.get(useq)
+                    if uid is not None:
+                        units[uid].drop.discard(idx)
+
+            # --- Rewrite affected streams --------------------------------
+            for uid, u in units.items():
+                if not u.drop or u.shared:
+                    continue
+                kept = [ins for j, ins in enumerate(u.ops)
+                        if j not in u.drop]
+                new_stream = pikepdf.unparse_content_stream(kept)
+                if u.kind == "page":
+                    page.Contents = pdf.make_stream(new_stream)
+                else:
+                    try:
+                        if uid not in st["form_orig"]:
+                            # first rewrite of this form: keep its content
+                            # so later variants start from the original
+                            st["form_orig"][uid] = (u.obj, u.obj.read_bytes())
+                        u.obj.write(new_stream)
+                    except Exception:
+                        continue
+                info["ops_dropped"] += len(u.drop)
+
+        info["changed"] = bool(info["ops_dropped"] or info["annots_removed"])
+        if not info["changed"]:
+            return None, info
+
+        if single_page:
+            return _single_page_bytes_from(pdf, page_index), info
+        buf = io.BytesIO()
+        pdf.save(buf)
+        return buf.getvalue(), info
+    except Exception:
+        _drop_page_state()      # do not reuse a state that failed mid-way
+        info["skipped"] = len(findings)
+        return None, info
+
+
+def _build_revealed_pdf_bytes_reference(src_path, page_index, findings, page_height,
                              keep_ops=None, single_page=False):
     """
     Produce a copy of the PDF at src_path with the given overlay findings
@@ -1032,15 +1306,15 @@ def white_box_components(src_path, page_index, finding, page_height):
                   "bbox": (x0, y0, x1, y1)  # PyMuPDF top-left pts (approx)
                  }, ...]}           # top-to-bottom
     """
+    # Uses the page already opened and parsed for its variants (read-only).
     try:
-        pdf = _open_source(src_path)
+        st = _get_page_state(src_path, page_index)
     except Exception:
+        st = None
+    if st is None:
         return None
     try:
-        if page_index < 0 or page_index >= len(pdf.pages):
-            return None
-        page = pdf.pages[page_index]
-        units, shows, rects, do_sites = _walk_content(page)
+        units, shows, rects, do_sites = _state_walk(st)
         region = _finding_rect_to_pdf(finding["bbox"], page_height)
         if _select_container_for_region(do_sites, region) is not None:
             return None
@@ -1086,8 +1360,3 @@ def white_box_components(src_path, page_index, finding, page_height):
         return {"fill": fill, "lines": out_lines}
     except Exception:
         return None
-    finally:
-        try:
-            pdf.close()
-        except Exception:
-            pass

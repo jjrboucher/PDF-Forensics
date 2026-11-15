@@ -1,10 +1,70 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.2.0 — 2026-11-06 (build 2026-11-06)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.2.0 — 2026-11-12 (build 2026-11-12)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
 
-## Version 1.2.0 — Release (2026-11-06, build 2026-11-06)
+## Version 1.2.0 — Release (2026-11-12, build 2026-11-12)
 
 Performance. No database schema change; findings are unchanged.
+
+### Build 2026-11-12
+
+The timing breakdown added in build 2026-11-10 showed where the visual
+reports' time goes on a 325-file case (8,142 s): building variants 53%,
+decomposing white boxes 14%, rendering 15%, isolating layers 12%, the
+composite check 4%.
+
+#### Visual Overlay reports: each page opened and parsed once
+- Building a layer's variant reopened the source PDF, re-parsed the page's
+  content and its forms, and re-decided the operators of every finding on
+  the page, for every layer; a page with 686 findings did all of that 686
+  times, and the white-box decomposition opened and parsed the page again
+  for each box. The page is now opened and parsed once and shared by its
+  variants and by the white-box decomposition. Each build first restores
+  the original page (its annotations, its content, and any form rewritten
+  by an earlier variant), then runs the same steps as before; the
+  decisions for a given set of findings are computed once and reused by
+  the variants that remove the same findings (all the fill and line layers
+  of a page). On a page with 300 white boxes, 601 variants build in 1.1 s
+  instead of 28.8 s. The previous builder is kept as a reference:
+  146 variants across pages and documents, including forms rewritten in
+  place and annotations, compare identical. In verification mode
+  (PDF_FORENSICS_VERIFY_REUSE=1) every variant is also built from scratch
+  and compared. (`reports/reveal.py`, `reports/visual.py`)
+
+#### MuPDF messages during visual reports
+- Diagnostics MuPDF prints while rendering (for example "invalid ICC
+  colorspace" for a malformed colour profile, which it replaces with a
+  standard colour space) appeared in the terminal. They are now written to
+  the session log with the document they came from, and counted per
+  document in the performance log (mupdf_messages), as analysis and triage
+  already did.
+
+### Build 2026-11-10
+
+### Build 2026-11-10
+
+Verification of build 2026-11-06 on a 325-file case: every analysis check
+passed (reused pages 11,254, reused forms 14,754, image-less forms 21,939,
+overlay detector on all 19,902 pages; no mismatches), findings identical to
+the previous build file by file, and reused visual-report renders identical
+to fresh ones. Visual Overlay reports took 7,615 s (13,015 s before); the
+whole workflow 3.4 h (7.7 h in 1.1.6).
+
+- Clipped layer renders withdrawn. Rendering each visual-report layer only
+  around its overlay gave no measurable speed-up (the page render is not
+  where a layer's time goes), and about 2% of clipped layers (410 of some
+  13,000 compared) were not pixel-identical to a full render. Every layer
+  is again rendered on the full page, and PDF_FORENSICS_VISUAL_CLIP is
+  gone. Visual reports generated with build 2026-11-06 used clipped layers
+  for some overlays and should be regenerated.
+- The performance log's line for each document's visual report now also
+  gives the seconds spent building variants (t_build), rendering
+  (t_render), isolating layers including PNG encoding (t_isolate),
+  decomposing white boxes (t_whitebox), the one-page check (t_single), the
+  final composite check (t_check) and embedding images (t_encode).
+  (`reports/visual.py`)
+
+### Build 2026-11-06
 
 ### Build 2026-11-06: from the build 2026-11-05 performance logs
 
@@ -19,7 +79,7 @@ placements present (the reuse fix holds).
   reused; the version's own numbering and labels are built afresh. Each
   prior version used to redraw every page of its parent's report.
 
-#### Visual Overlay reports: each layer rendered around its overlay only
+#### Visual Overlay reports: each layer rendered around its overlay only (withdrawn in the next build)
 - Each layer used to need a full-page render; a page with hundreds of
   findings took over a second per finding. A layer differs from its
   background only where its overlay is, so the variant is now rendered

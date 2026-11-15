@@ -12,6 +12,6 @@ __version__ = "1.2.0"
 # footers, GUI About), so it identifies the build that produced it. For
 # each update, change __version__ and BUILD_DATE together and add a dated
 # CHANGELOG entry.
-BUILD_DATE = "2026-11-06"
+BUILD_DATE = "2026-11-12"
 __tool_name__ = "PDF Forensics Suite"
 SCHEMA_REVISION = 10  # Increment when DB schema changes

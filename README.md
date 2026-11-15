@@ -12,7 +12,7 @@ documents. This repository brings together four companion pieces:
 
 | Component | What it is | Location | Status |
 |---|---|---|---|
-| **PDF Forensics Suite** | A desktop and command-line application that examines PDFs for signs of alteration and produces reports, graphs, spreadsheets and a case index | [`Application/`](Application) | v1.2.0 (build 2026-11-06) |
+| **PDF Forensics Suite** | A desktop and command-line application that examines PDFs for signs of alteration and produces reports, graphs, spreadsheets and a case index | [`Application/`](Application) | v1.2.0 (build 2026-11-12) |
 | **PDF Structure Explorer** | A single-file, browser-based learning tool that shows any PDF's internal structure: select a component to see it on the page and in the raw bytes. Includes the guide *Inside a PDF* and teaching sample PDFs | [`PDF Explorer/`](PDF%20Explorer) | v1.0 (2026-11-04) |
 | **PDF Forensics Examiner Course** | A self-paced, browser-based course with lessons, hands-on labs, quizzes, a capstone exercise, a final assessment and a certificate | [`Course/`](Course) | 0.9 pre-release (beta review) |
 | **Technical Reference Guide** | An in-depth guide to PDF structure, detection logic, risk scoring, false positives, counter-verification and chain of custody | [`PDF_Forensics_Technical_Guide.docx`](PDF_Forensics_Technical_Guide.docx) | v1.2 (applies to Suite v1.2.0) |
@@ -172,7 +172,7 @@ The course is in **beta review** and has not yet been released as version 1.0.
 ## Technical Reference Guide
 
 [`PDF_Forensics_Technical_Guide.docx`](PDF_Forensics_Technical_Guide.docx)
-(version 1.2, applies to PDF Forensics Suite v1.2.0, build 2026-11-06) is the
+(version 1.2, applies to PDF Forensics Suite v1.2.0, build 2026-11-12) is the
 in-depth companion to both the application and the course. It covers the
 applicable standards, a PDF structure primer, every artifact the Suite
 analyses and its detection logic, risk scoring, known false positives,
@@ -203,7 +203,7 @@ Get-FileHash PDF_Forensics_Technical_Guide.docx -Algorithm SHA256
 The value must match the one in the corresponding `SHA256SUMS.txt`. After
 installing the
 application, `python pdf_forensics.py --version` should print
-`pdf_forensics 1.2.0 (build 2026-11-06)`.
+`pdf_forensics 1.2.0 (build 2026-11-12)`.
 
 ## Licensing
 

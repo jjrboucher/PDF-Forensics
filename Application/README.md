@@ -348,13 +348,11 @@ that reuse gives the same results as a full analysis. Verification also
 covers form XObjects, which are analysed once per document and reused on
 later pages (forms reused, verified and mismatched), the faster paths of
 two detectors, and the Visual Overlay reports, which reuse prior versions'
-renders and render each layer around its overlay only.
-`PDF_FORENSICS_VISUAL_CLIP=0` renders every visual-report layer on the full
-page.
+renders for unchanged pages.
 
 ## Versioning
 
-This is **version 1.2.0** (build 2026-11-06), an update to the first feature release
+This is **version 1.2.0** (build 2026-11-12), an update to the first feature release
 after version 1.0.0, the first frozen release. Changes after 1.0 are released
 as incremental updates (1.0.1, 1.0.2, …) and new features raise the minor
 version (1.1.0); each release has its own build marker.

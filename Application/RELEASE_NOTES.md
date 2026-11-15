@@ -2,7 +2,7 @@
 
 ## Version 1.2.0
 
-**Released:** 2026-11-06 · **Build:** 2026-11-06 · **Database schema:** revision 10 (unchanged)
+**Released:** 2026-11-12 · **Build:** 2026-11-12 · **Database schema:** revision 10 (unchanged)
 
 ### What changed
 
@@ -12,9 +12,9 @@
 - **Faster form handling.** A form drawn on many pages (a letterhead, a
   page template) is analysed once per document.
 - **Much faster Visual Overlay reports.** Layer variants are built from
-  the edited page alone where that renders identically, each layer is
-  rendered around its overlay only, and prior versions reuse their
-  parent's renders for unchanged pages.
+  the edited page alone where that renders identically, each page is
+  opened and parsed once for all its layers, and prior versions reuse
+  their parent's renders for unchanged pages.
 - **Faster detectors.** Forms without images and the content-stream
   overlay detector do the same checks with far less work.
 - **Finer timing.** The performance log times each page detector, and
@@ -38,7 +38,7 @@ sha256sum PDF_Forensics_Suite_v1.2.0.zip
 ```
 
 The value must match the one in `SHA256SUMS.txt`. Running
-`python pdf_forensics.py --version` should print `pdf_forensics 1.2.0 (build 2026-11-06)`.
+`python pdf_forensics.py --version` should print `pdf_forensics 1.2.0 (build 2026-11-12)`.
 
 ---
 
