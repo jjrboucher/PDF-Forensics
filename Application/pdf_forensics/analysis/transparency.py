@@ -18,6 +18,8 @@ def parse_ext_gstates(page_pk):
             gs = gs_ref.resolve() if hasattr(gs_ref, "resolve") else gs_ref
         except Exception:
             continue
+        if not hasattr(gs, "get"):                   # missing object
+            continue
 
         ca_val = gs.get("/ca")
         ca = float(ca_val) if ca_val is not None else 1.0
@@ -58,15 +60,16 @@ def get_zorder_and_graphics_state(page_pk, content_ops=None):
     z_order = 0
     results = []
 
-    for operands, operator in ops:
-        op = str(operator)
+    from pdf_forensics.analysis.content_ops import named_ops, operands_of
+    names, ops = named_ops(ops)
+    for i, op in enumerate(names):
         if op == "q":
             gstate_stack.append(dict(current_gstate))
         elif op == "Q":
             if gstate_stack:
                 current_gstate = gstate_stack.pop()
         elif op == "gs":
-            gs_name = str(operands[0])
+            gs_name = str(operands_of(ops[i])[0])
             if gs_name in gstate_props:
                 props = gstate_props[gs_name]
                 current_gstate["ca"] = props["ca"]
@@ -76,7 +79,7 @@ def get_zorder_and_graphics_state(page_pk, content_ops=None):
         elif op == "Do":
             z_order += 1
             results.append({
-                "xobj_name": str(operands[0]),
+                "xobj_name": str(operands_of(ops[i])[0]),
                 "z_order": z_order,
                 "ca": current_gstate["ca"],
                 "BM": current_gstate["BM"],
@@ -101,6 +104,18 @@ def enrich_image_transparency(label_to_info, placements,
     # Build lookup: z_order -> gstate info
     gstate_by_z = {g["z_order"]: g for g in gstate_per_do}
 
+    # Page XObjects by object number, in resource order (build
+    # 2026-11-23). Each image used to scan the whole XObject list twice;
+    # with 1,000 images on a page that is a million look-ups per page.
+    # Entries are tried in the same order as the scan, with the same
+    # handling of entries that cannot be read.
+    by_num = {}
+    for xname, xref_ref in xobjects.items():
+        try:
+            by_num.setdefault(xref_ref.objgen[0], []).append(xref_ref)
+        except Exception:
+            continue
+
     labels_in_order = sorted(label_to_info.keys())
     for label in labels_in_order:
         info = label_to_info[label]
@@ -124,10 +139,8 @@ def enrich_image_transparency(label_to_info, placements,
         # Check Form XObject for transparency group and SMask
         form_xref = info.get("form_xref", 0)
         if form_xref:
-            for xname, xref_ref in xobjects.items():
+            for xref_ref in by_num.get(form_xref, ()):
                 try:
-                    if xref_ref.objgen[0] != form_xref:
-                        continue
                     resolved = (xref_ref.resolve()
                                 if hasattr(xref_ref, "resolve")
                                 else xref_ref)
@@ -145,10 +158,8 @@ def enrich_image_transparency(label_to_info, placements,
 
         # Check Image XObject itself for SMask
         img_xref = info["xref"]
-        for xname, xref_ref in xobjects.items():
+        for xref_ref in by_num.get(img_xref, ()):
             try:
-                if xref_ref.objgen[0] != img_xref:
-                    continue
                 resolved = (xref_ref.resolve()
                             if hasattr(xref_ref, "resolve")
                             else xref_ref)

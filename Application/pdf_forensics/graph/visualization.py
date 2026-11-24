@@ -15,6 +15,92 @@ except ImportError:
     pass
 
 
+class _IdList(list):
+    """pyvis's list of node ids, with set-speed membership. pyvis checks
+    "is this node already there?" against the list for every node it adds
+    (twice per link in from_nx); on a list that is a scan of every node."""
+
+    def __init__(self, items=()):
+        super().__init__(items)
+        self._set = set(self)
+
+    def append(self, x):
+        super().append(x)
+        self._set.add(x)
+
+    def __contains__(self, x):
+        return x in self._set
+
+
+def _fast_from_nx(net, G):
+    """pyvis's own from_nx (same node and link records, same order), with
+    its two slow checks removed (build 2026-11-19d):
+
+    - node ids are looked up in a set instead of a list (_IdList);
+    - links are added without pyvis's search for an existing identical
+      link, which reads every link already added (so the time grows with
+      the square of the number of links: 470 s for 66,000 links). A
+      networkx Graph (undirected, not a multigraph) never holds the same
+      link twice, and from_nx adds both nodes before each link, so that
+      search never finds anything here.
+
+    Links are made by pyvis's own Edge class, exactly as its add_edge does
+    once the search has found nothing. Used only for an undirected simple
+    graph; the caller checks it against pyvis's own from_nx first
+    (_fast_matches)."""
+    from pyvis.edge import Edge
+    net.node_ids = _IdList(net.node_ids)
+
+    def add_edge(source, to, **options):
+        net.edges.append(Edge(source, to, net.directed, **options).options)
+    net.add_edge = add_edge
+    try:
+        net.from_nx(G)
+    finally:
+        del net.add_edge                # the class's method again
+    return net
+
+
+def _sample_graph(G, n=400):
+    """A small copy of G to compare the two ways of building on: the first
+    nodes with their neighbours (so it has links, of every kind of node
+    near the start), and isolated nodes if any."""
+    import copy
+    import networkx as nx
+    picked = []
+    seen = set()
+    for v in G.nodes():
+        for u in [v] + list(G.neighbors(v)):
+            if u not in seen and len(picked) < n:
+                seen.add(u)
+                picked.append(u)
+        if len(picked) >= n:
+            break
+    iso = [v for v in nx.isolates(G)][:20]
+    # copy() first: a deep copy of the subgraph view would copy all of G
+    return copy.deepcopy(G.subgraph(set(picked) | set(iso)).copy())
+
+
+def _fast_matches(make_net, G):
+    """True when _fast_from_nx gives exactly the records pyvis's own
+    from_nx gives, on a sample of this graph, with this pyvis."""
+    try:
+        if G.is_directed() or G.is_multigraph():
+            return False
+        a, b = make_net(), make_net()
+        if a.directed:
+            return False
+        sample = _sample_graph(G)
+        a.from_nx(_sample_graph(G))
+        _fast_from_nx(b, sample)
+        return (a.nodes == b.nodes and a.edges == b.edges
+                and list(a.node_ids) == list(b.node_ids)
+                and getattr(a, "node_map", None)
+                == getattr(b, "node_map", None))
+    except Exception:
+        return False
+
+
 def get_pdf_dirs_from_db(conn):
     """
     Return a list of unique directories where the analyzed PDFs
@@ -115,27 +201,60 @@ def visualize_graph(G, image_meta, thumbnails, db_path,
                     doc_meta=None,
                     output_path="image_relationship_graph.html",
                     case_number=None,
-                    scope=None, group_versions=True):
+                    scope=None, group_versions=True,
+                    progress=None, timings=None):
+    """progress(stage, info) and timings (a dict of seconds per stage),
+    both optional, are for the Generation Log and the performance log
+    (1.3.0, build 2026-11-19b)."""
+    import time as _t
+    _t0 = [_t.perf_counter()]
+
+    def _stage(name, next_stage=None, **info):
+        now = _t.perf_counter()
+        if timings is not None:
+            timings[name] = timings.get(name, 0.0) + now - _t0[0]
+        _t0[0] = now
+        if progress and next_stage:
+            try:
+                progress(next_stage, info)
+            except Exception:
+                pass
+    if progress:
+        try:
+            progress("network", {"nodes": G.number_of_nodes(),
+                                 "edges": G.number_of_edges()})
+        except Exception:
+            pass
     # pyvis versions vary in what they accept for height/width.
     # Try CSS units first, then pixel strings, then bare integers.
-    net = None
-    for h, w in [("100vh", "100%"), ("900px", "1200px"), (900, 1200)]:
-        try:
-            net = Network(
-                height=h, width=w,
-                bgcolor="#1B1B1B",
-                font_color="#F0F0F0",
-                notebook=False,
-                cdn_resources="remote",
-            )
-            break
-        except (ValueError, TypeError):
-            continue
+    def make_net():
+        for h, w in [("100vh", "100%"), ("900px", "1200px"), (900, 1200)]:
+            try:
+                return Network(
+                    height=h, width=w,
+                    bgcolor="#1B1B1B",
+                    font_color="#F0F0F0",
+                    notebook=False,
+                    cdn_resources="remote",
+                )
+            except (ValueError, TypeError):
+                continue
+        return None
+    net = make_net()
     if net is None:
         raise RuntimeError(
             "Could not initialize pyvis Network. "
             "Try updating pyvis: pip install --upgrade pyvis")
-    net.from_nx(G)
+    # Build 2026-11-19d: the fast way when it gives exactly what pyvis's
+    # own from_nx gives on a sample of this graph; otherwise pyvis's own.
+    if _fast_matches(make_net, G):
+        _fast_from_nx(net, G)
+        path = "fast"
+    else:
+        net.from_nx(G)
+        path = "pyvis"
+    if timings is not None:
+        timings["network_path"] = path
 
     # Physics config that stabilizes then freezes.
     net.set_options("""
@@ -178,11 +297,13 @@ def visualize_graph(G, image_meta, thumbnails, db_path,
     }
     """)
 
+    _stage("t_network", "write_html")
     try:
         net.write_html(output_path, notebook=False,
                        open_browser=False)
     except TypeError:
         net.write_html(output_path)
+    _stage("t_write_html", "custom_ui")
 
     # Generation provenance is captured NOW — at write time — so the
     # exhibit carries the true generation timestamp. (Previously the
@@ -217,6 +338,7 @@ def visualize_graph(G, image_meta, thumbnails, db_path,
                      doc_meta=doc_meta or {}, case_number=case_number,
                      scope=scope, generated_at=generated_at,
                      graph_stats=graph_stats)
+    _stage("t_custom_ui")
 
     return os.path.abspath(output_path)
 

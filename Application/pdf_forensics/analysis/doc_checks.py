@@ -13,6 +13,11 @@ import re
 from datetime import datetime, timezone, timedelta
 
 
+def _quiet_meta(pdf):
+    from pdf_forensics.analysis.metadata import quiet_metadata
+    return quiet_metadata(pdf)
+
+
 # ---------------------------------------------------------------------
 # PDF / XMP date parsing
 # ---------------------------------------------------------------------
@@ -443,7 +448,8 @@ def extract_camera_info(image_bytes, ext):
         return None
     import io
     try:
-        img = Image.open(io.BytesIO(image_bytes))
+        from pdf_forensics.analysis.metadata import open_image_info
+        img = open_image_info(image_bytes)
         exif = img.getexif()
         if not exif:
             return None
@@ -608,7 +614,7 @@ def _revision_declarations(data, password=None):
                 cv = pdf.Root.get("/Version")
                 cv = str(cv).lstrip("/") if cv is not None else None
                 try:
-                    xv = pdf.open_metadata().get("pdf:PDFVersion")
+                    xv = _quiet_meta(pdf).get("pdf:PDFVersion")
                     xv = str(xv).strip() if xv is not None and str(xv).strip() else None
                 except Exception:
                     xv = None
@@ -748,7 +754,7 @@ def check_version_anachronism(doc_pk, pdf_path, pdf_metadata, password=None,
     xmp_raw = _meta_lookup(pdf_metadata, "xmp", "pdfversion")
     if xmp_raw is None:
         try:
-            xr = doc_pk.open_metadata().get("pdf:PDFVersion")
+            xr = _quiet_meta(doc_pk).get("pdf:PDFVersion")
             xmp_raw = str(xr).strip() if xr is not None and str(xr).strip() else None
         except Exception:
             xmp_raw = None
@@ -1099,7 +1105,7 @@ def revision_metadata(pdf):
         mod = None
     xmod = xmd = None
     try:
-        meta = pdf.open_metadata()
+        meta = _quiet_meta(pdf)
         for k, v in meta.items():
             key = str(k)
             local = key.rsplit("}", 1)[-1] if "}" in key else key.split(":")[-1]
@@ -1284,3 +1290,198 @@ def check_metadata_history(pdf_path, password=None):
                 "VERSION_CONFLICT)."),
         })
     return results
+
+
+# ---------------------------------------------------------------------
+# Resource entries that refer to objects that do not exist (build
+# 2026-11-23). In a 12,745-file case, 28 documents stopped with
+# "'NoneType' object has no attribute 'get'" because a page's resources
+# named an object missing from the file. The analysis now skips such an
+# entry (it draws nothing) and reports it here instead.
+# ---------------------------------------------------------------------
+_RESOURCE_KINDS = ("/XObject", "/ExtGState", "/Font", "/ColorSpace",
+                   "/Pattern", "/Shading", "/Properties")
+
+
+def missing_resource_refs(page_pk, limit=50):
+    """[(kind, name, where)] for resource entries of the page, and of the
+    forms it draws, whose object does not exist. where is "page" or
+    "form <object number>". At most `limit` entries."""
+    import pikepdf
+    out = []
+    seen = set()
+
+    def walk(res, where, depth):
+        if depth > 12 or len(out) >= limit or not hasattr(res, "get"):
+            return
+        for kind in _RESOURCE_KINDS:
+            try:
+                d = res.get(kind)
+            except Exception:
+                continue
+            if not hasattr(d, "items"):
+                continue
+            try:
+                items = list(d.items())
+            except Exception:
+                continue
+            for name, ref in items:
+                if ref is None:
+                    out.append((kind[1:], str(name), where))
+                    if len(out) >= limit:
+                        return
+                elif kind == "/XObject":
+                    try:
+                        key = ref.objgen
+                        if key in seen or key == (0, 0):
+                            continue
+                        seen.add(key)
+                        if ref.get("/Subtype") == pikepdf.Name("/Form"):
+                            walk(ref.get("/Resources"), f"form {key[0]}",
+                                 depth + 1)
+                    except Exception:
+                        continue
+
+    try:
+        walk(page_pk.get("/Resources"), "page", 0)
+    except Exception:
+        pass
+    return out
+
+
+def missing_refs_finding(page_num, missing):
+    """The structural warning for missing_resource_refs' result."""
+    shown = ", ".join(f"{k} {n}" + ("" if w == "page" else f" (in {w})")
+                      for k, n, w in missing[:12])
+    more = f" and {len(missing) - 12} more" if len(missing) > 12 else ""
+    n = len(missing)
+    return {
+        "image": None,
+        "type": "STRUCTURAL_WARNING",
+        "detail": (
+            f"Page {page_num}: "
+            + (f"a resource entry refers to an object that does not exist "
+               f"in the file: {shown}. Whatever it named is not drawn. "
+               if n == 1 else
+               f"{n} resource entries refer to objects that do not exist "
+               f"in the file: {shown}{more}. Whatever they named is not "
+               f"drawn. ")
+            + f"This can result from faulty software, "
+            f"from objects removed by later editing, or from a damaged "
+            f"file."),
+    }
+
+
+# ---------------------------------------------------------------------
+# Byte-level structure of the original file (build 2026-11-23): cross-
+# reference entries that do not point to the object they name, and runs
+# of zero bytes outside streams (such as a zero-filled tail, seen in a
+# file cut short mid-object). Both read the submitted file's bytes, so
+# they apply to the original even when the analysis used a repaired copy.
+# ---------------------------------------------------------------------
+import re as _re
+
+ZERO_RUN_MIN = 4096          # zero bytes in a row worth reporting
+_XREF_SECTION = _re.compile(rb"(?<![A-Za-z])xref[ \t]*\r?\n")
+_XREF_SUB = _re.compile(rb"\s*(\d+)\s+(\d+)[ \t]*\r?\n")
+_XREF_ENTRY = _re.compile(rb"(\d{10}) (\d{5}) ([nf])")
+
+
+def xref_mismatches(data, limit=100000):
+    """(checked, [(objnum, gen, offset)]) for the in-use entries of the
+    file's classic cross-reference tables that do not point to
+    "objnum gen obj" (cross-reference streams are not read here)."""
+    checked, bad = 0, []
+    for sec in _XREF_SECTION.finditer(data):
+        pos = sec.end()
+        while checked < limit:
+            sub = _XREF_SUB.match(data, pos)
+            if not sub:
+                break
+            first, count = int(sub.group(1)), int(sub.group(2))
+            pos = sub.end()
+            if count > 1_000_000:
+                break
+            for k in range(count):
+                e = _XREF_ENTRY.match(data, pos)
+                if not e:
+                    break
+                pos = e.end()
+                while pos < len(data) and data[pos:pos + 1] in b" \r\n":
+                    pos += 1
+                if e.group(3) != b"n":
+                    continue
+                off, gen, num = int(e.group(1)), int(e.group(2)), first + k
+                if off == 0 and num == 0:
+                    continue
+                checked += 1
+                head = data[off:off + 40] if off < len(data) else b""
+                m = _re.match(rb"\s*(\d+)\s+(\d+)\s+obj\b", head)
+                if not m or int(m.group(1)) != num or int(m.group(2)) != gen:
+                    bad.append((num, gen, off))
+    return checked, bad
+
+
+def zero_runs(data, min_len=ZERO_RUN_MIN):
+    """[(offset, length)] of runs of zero bytes of at least min_len that
+    lie outside streams (stream data may legitimately be zeros)."""
+    runs = [(m.start(), m.end() - m.start())
+            for m in _re.finditer(rb"\x00{%d,}" % min_len, data)]
+    if not runs:
+        return []
+    streams = [(m.end(), data.find(b"endstream", m.end()))
+               for m in _re.finditer(rb"stream\r?\n", data)]
+    streams = [(a, b if b != -1 else len(data)) for a, b in streams]
+    out = []
+    for off, n in runs:
+        inside = any(a <= off and off + n <= b for a, b in streams)
+        if not inside or off + n == len(data):
+            out.append((off, n))
+    return out
+
+
+def check_byte_structure(pdf_path):
+    """Structural warnings from the file's bytes (see above)."""
+    try:
+        with open(pdf_path, "rb") as fh:
+            data = fh.read()
+    except Exception:
+        return []
+    out = []
+    try:
+        checked, bad = xref_mismatches(data)
+    except Exception:
+        checked, bad = 0, []
+    if bad:
+        first = ", ".join(f"object {n} {g} at offset {o:,} (0x{o:X})"
+                          for n, g, o in bad[:5])
+        out.append({
+            "image": None, "type": "STRUCTURAL_WARNING",
+            "detail": (
+                f"{len(bad):,} of {checked:,} cross-reference entries do not "
+                f"point to the object they name ({first}"
+                f"{' and more' if len(bad) > 5 else ''}). Readers then have "
+                f"to search the file for its objects. Offsets that no longer "
+                f"match are typical of a file whose bytes were changed after "
+                f"it was written (by hand or by faulty software), or of a "
+                f"damaged file.")})
+    try:
+        runs = zero_runs(data)
+    except Exception:
+        runs = []
+    if runs:
+        desc = []
+        for off, n in runs[:5]:
+            tail = off + n == len(data)
+            desc.append(f"{n:,} bytes at offset {off:,} (0x{off:X})"
+                        + (", to the end of the file" if tail else ""))
+        out.append({
+            "image": None, "type": "STRUCTURAL_WARNING",
+            "detail": (
+                f"{len(runs)} run(s) of zero bytes outside the file's "
+                f"streams: {'; '.join(desc)}. A zero-filled stretch where "
+                f"PDF objects should be usually means the file was cut "
+                f"short or overwritten (an incomplete copy or download, or "
+                f"a recovery tool filling missing data with zeros); the "
+                f"objects it replaced are lost.")})
+    return out

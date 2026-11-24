@@ -269,6 +269,26 @@ class Session:
         if self.logger:
             getattr(self.logger, level, self.logger.info)(msg)
 
+    def replay(self, records, worker=None):
+        """Write log entries recorded in a worker process (see
+        analysis/parallel.py), each with the time it was recorded, so a
+        file's entries stay together and keep their real times."""
+        import logging as _lg
+        for t, level, msg in records:
+            if level == "__output__":         # an output a worker produced
+                self.register_output(*msg)
+                continue
+            if not self.logger:
+                continue
+            lvl = _lg.getLevelName(str(level).upper())
+            if not isinstance(lvl, int):
+                lvl = _lg.INFO
+            rec = self.logger.makeRecord(self.logger.name, lvl, "(worker)",
+                                         0, msg, None, None)
+            rec.created = t
+            rec.msecs = (t - int(t)) * 1000
+            self.logger.handle(rec)
+
     def log_pdf_start(self, pdf_path, pdf_md5, pdf_size):
         """Log the start of a PDF analysis."""
         self.log(f"--- PDF Analysis Start ---")

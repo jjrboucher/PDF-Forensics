@@ -7,6 +7,7 @@ import copy
 import hashlib
 from datetime import datetime, timezone
 
+import io
 import pymupdf
 import pikepdf
 from pikepdf import Name
@@ -41,11 +42,13 @@ from pdf_forensics.analysis.doc_checks import (
     check_structural_integrity, check_mixed_cameras,
     check_unapplied_redactions, extract_camera_info,
     check_version_anachronism, check_metadata_history,
+    missing_resource_refs, missing_refs_finding, check_byte_structure,
 )
 from pdf_forensics.analysis.timeline import (
     build_timeline, timeline_findings, timeline_rows, exif_dates,
 )
 from pdf_forensics.database import save_timeline
+from pdf_forensics.analysis.commit import commit_analysis
 
 
 def print_report(all_findings):
@@ -90,12 +93,236 @@ def print_report(all_findings):
             print()
 
 
+
+def _plain_error(e, pdf_path):
+    """An exception's message without the file's path or name."""
+    msg = str(e) or type(e).__name__
+    for x in (os.path.abspath(pdf_path), str(pdf_path),
+              os.path.basename(str(pdf_path))):
+        if x:
+            msg = msg.replace(x + ": ", "").replace(x, "the file")
+    return msg.strip()
+
+
+
+def page_pairs(doc_mu, doc_pk):
+    """
+    [(MuPDF page index, pikepdf page index)] for the pages both readers
+    have (build 2026-11-24b). When they count the same pages, the pages
+    pair in order, as always. When they do not (a damaged page tree), the
+    pages are paired by object number, in MuPDF's order, so that each of
+    MuPDF's pages is examined with the same page from pikepdf; pages only
+    one reader lists are left out. Pairing by position could put one
+    page's text beside another page's content when the extra page is not
+    the last.
+    """
+    n_mu, n_pk = len(doc_mu), len(doc_pk.pages)
+    if n_mu == n_pk:
+        return [(i, i) for i in range(n_mu)]
+    pk_index = {}
+    for j, pg in enumerate(doc_pk.pages):
+        try:
+            obj = pg.obj if hasattr(pg, "obj") else pg
+            pk_index.setdefault(obj.objgen[0], j)
+        except Exception:
+            continue
+    pairs = []
+    for i in range(n_mu):
+        try:
+            x = (doc_mu.page_xref(i) if hasattr(doc_mu, "page_xref")
+                 else doc_mu[i].xref)
+        except Exception:
+            continue
+        j = pk_index.get(x)
+        if j is not None:
+            pairs.append((i, j))
+    return pairs
+
+
+def _pairs_text(doc_mu, doc_pk):
+    """How many pages both readers have, and which of MuPDF's are not
+    examined, for the structural warning."""
+    pairs = page_pairs(doc_mu, doc_pk)
+    have = {i for i, _ in pairs}
+    left = [i + 1 for i in range(len(doc_mu)) if i not in have]
+    text = (f"the {len(pairs)} page(s) both readers find (matched by "
+            f"object number) were examined" + (" (none)" if not pairs
+                                               else ""))
+    if left:
+        shown = ", ".join(str(n) for n in left[:10])
+        more = f" and {len(left) - 10} more" if len(left) > 10 else ""
+        text += (f"; MuPDF's page(s) {shown}{more} could not be paired "
+                 f"with a page pikepdf reads and were not examined")
+    return text
+
+
+def open_documents(pdf_path, password=None):
+    """
+    Open a PDF with both readers: (doc_mu, doc_pk, repair_findings).
+
+    Build 2026-11-23. In a 12,745-file case, 88 documents were not
+    analysed because pikepdf could not read their page tree ("root of
+    pages tree has no /Kids array", 71) or found fewer pages than MuPDF
+    (an IndexError, 16), although MuPDF opened them after repairing
+    them. Now, when pikepdf cannot open the file, cannot read its pages,
+    or counts a different number of pages from MuPDF, the document is
+    analysed from a copy that MuPDF has repaired (and, if encrypted,
+    decrypted), opened by both readers, so that their object numbers
+    agree. A structural warning says so, and gives both page counts
+    when they differ: pages that one reader finds and the other does
+    not can be pages hidden from some viewers, or a damaged page tree.
+    Byte-level checks (revisions, metadata history) still read the
+    original file.
+
+    Build 2026-11-23b: before saving the copy, MuPDF rewrites its page
+    tree from MuPDF's page list (select), and the copy is used only if
+    both readers then count the same pages. If no such copy can be made
+    but pikepdf read the original, the original is analysed for the pages
+    both readers have, with a structural warning saying how many.
+
+    A wrong password still raises pikepdf.PasswordError, and a file
+    neither reader can read raises RuntimeError with both reasons.
+    """
+    doc_mu = pymupdf.open(pdf_path)
+    if password is not None and doc_mu.needs_pass:
+        doc_mu.authenticate(password)
+    pk_err, pk_pages, doc_pk = None, None, None
+    try:
+        doc_pk = (pikepdf.open(pdf_path, password=password)
+                  if password is not None else pikepdf.open(pdf_path))
+        pk_pages = len(doc_pk.pages)
+    except pikepdf.PasswordError:
+        doc_mu.close()
+        raise
+    except Exception as e:
+        pk_err = e
+    mu_pages = len(doc_mu)
+    if pk_err is None and pk_pages == mu_pages:
+        return doc_mu, doc_pk, []
+
+    was_repaired = bool(getattr(doc_mu, "is_repaired", False))
+    try:
+        encrypted = bool((doc_mu.metadata or {}).get("encryption"))
+    except Exception:
+        encrypted = False
+    copy, repair_err = None, None
+    if mu_pages == 0:
+        repair_err = RuntimeError("MuPDF finds no pages")
+    else:
+        copy_mu = copy_pk = None
+        try:
+            # Build 2026-11-23b: MuPDF's repair can find pages that the
+            # file's page tree does not list; a copy saved as it stands
+            # kept the broken tree, and pikepdf read fewer pages from it
+            # (26 documents in a 12,745-file case). select() rewrites the
+            # page tree from MuPDF's own page list (inherited page
+            # attributes are copied onto the pages) before saving.
+            try:
+                doc_mu.select(list(range(mu_pages)))
+            except Exception:
+                pass
+            data = doc_mu.tobytes(
+                garbage=0,
+                encryption=getattr(pymupdf, "PDF_ENCRYPT_NONE", 1))
+            copy_mu = pymupdf.open(stream=data, filetype="pdf")
+            copy_pk = pikepdf.open(io.BytesIO(data))
+            copy_pages = len(copy_pk.pages)
+            # Build 2026-11-24b: a copy whose readers still disagree is
+            # used for the pages they share (see page_pairs) rather than
+            # rejected; one 100-page file failed outright that way.
+            copy = (copy_mu, copy_pk, copy_pages)
+        except Exception as e:
+            repair_err = e
+            for d in (copy_mu, copy_pk):
+                try:
+                    if d is not None:
+                        d.close()
+                except Exception:
+                    pass
+
+    how = ("repaired" + (" and decrypted" if encrypted else "")
+           + " by MuPDF")
+    if pk_err is not None:
+        why = (f"pikepdf could not read this file as it stands "
+               f"({_plain_error(pk_err, pdf_path)})")
+    else:
+        why = (f"the two PDF readers disagree on the number of pages: "
+               f"MuPDF finds {mu_pages}, pikepdf finds {pk_pages}. Pages "
+               f"that one reader finds and the other does not can be "
+               f"pages hidden from some viewers, or a damaged page tree")
+
+    if copy is not None:
+        doc_mu.close()
+        if doc_pk is not None:
+            try:
+                doc_pk.close()
+            except Exception:
+                pass
+        copy_mu, copy_pk, copy_pages = copy
+        if copy_pages != len(copy_mu):
+            return copy_mu, copy_pk, [{
+                "image": None,
+                "type": "STRUCTURAL_WARNING",
+                "detail": (
+                    f"Pages not fully analysed: {why}. The analysis used a "
+                    f"copy {how}, in which MuPDF still finds "
+                    f"{len(copy_mu)} page(s) and pikepdf {copy_pages}; "
+                    f"{_pairs_text(copy_mu, copy_pk)}. Findings refer to "
+                    f"that copy. A file that can only be read after repair "
+                    f"has a damaged structure, which can come from faulty "
+                    f"software or from changes made to the file's bytes "
+                    f"directly; examine the original with other tools "
+                    f"before relying on its structure."),
+            }]
+        return copy_mu, copy_pk, [{
+            "image": None,
+            "type": "STRUCTURAL_WARNING",
+            "detail": (
+                f"Document analysed from a repaired copy: {why}. "
+                f"MuPDF opened the file"
+                + (" after repairing its structure" if was_repaired else "")
+                + f" ({mu_pages} page(s)); the analysis used a copy {how} "
+                f"({copy_pages} page(s)). Findings refer to that copy: "
+                f"object numbers are those MuPDF recovered, and anything "
+                f"it reconstructed may differ from what other software "
+                f"shows. A file that can only be read after repair has a "
+                f"damaged structure, which can come from faulty software "
+                f"or from changes made to the file's bytes directly; "
+                f"examine the original with other tools before relying on "
+                f"its structure."),
+        }]
+
+    why_copy = _plain_error(repair_err, pdf_path)
+    if pk_err is None:
+        # pikepdf read the original but no consistent copy could be made:
+        # the original is analysed, as far as both readers have pages
+        # (analyze_pdf analyses min(MuPDF, pikepdf) pages).
+        doc_mu.close()
+        doc_mu = pymupdf.open(pdf_path)
+        if password is not None and doc_mu.needs_pass:
+            doc_mu.authenticate(password)
+        return doc_mu, doc_pk, [{
+            "image": None,
+            "type": "STRUCTURAL_WARNING",
+            "detail": (
+                f"Pages not fully analysed: {why}. A repaired copy could "
+                f"not be made ({why_copy}), so the file was analysed as it "
+                f"stands, and {_pairs_text(doc_mu, doc_pk)}. Examine the "
+                f"file with other tools; its page tree is damaged or was "
+                f"altered."),
+        }]
+    doc_mu.close()
+    raise RuntimeError(
+        f"Damaged file that neither PDF reader can read: pikepdf: "
+        f"{_plain_error(pk_err, pdf_path)}; MuPDF: {why_copy}") from None
+
+
 def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 store_images=True, conn=None, session=None,
                 skip_duplicates=True, force=False,
                 quiet=False, progress_callback=None,
                 source_analysis_id=None, version_number=None,
-                password=None, image_callback=None):
+                password=None, image_callback=None, defer=False):
     """
     Analyze a single PDF.
 
@@ -114,6 +341,12 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
       quiet             : if True, suppress all terminal output
       progress_callback : callable(page_num, total_pages) called after
                           each page is processed (for GUI progress)
+      defer             : if True, analyse without touching the database
+                          and return {"deferred": payload, ...}; the
+                          payload is written later, in order, by
+                          commit_analysis() (parallel analysis, see
+                          analysis/parallel.py). conn and duplicate
+                          checks are not used.
 
     Returns a dict summarising the run, or None if skipped/failed.
     """
@@ -141,7 +374,6 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     pf = _perf.get(session)
     lap = pf.lap
     pf.lap_reset()
-    _escaped0 = getattr(conn, "escaped", [0])[0] if conn is not None else 0
 
     if session:
         pdf_md5 = hashlib.md5()
@@ -160,12 +392,12 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
         _out(f"  Extract:  (disk extraction disabled)")
 
     own_conn = False
-    if conn is None:
+    if conn is None and not defer:
         conn = init_db(db_path, session=session)
         own_conn = True
 
     # Duplicate detection
-    if skip_duplicates and not force:
+    if skip_duplicates and not force and not defer:
         already, info = check_pdf_already_analyzed(conn, pdf_path)
         if already:
             msg = (f"Already analyzed: {info['pdf_filename']} "
@@ -190,18 +422,18 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     # then authenticates. Harmless for unencrypted files.
     from pdf_forensics import _mupdf as _mu
     _mu.silence()
-    if password is not None:
-        doc_pk = pikepdf.open(pdf_path, password=password)
-        doc_mu = pymupdf.open(pdf_path)
-        if doc_mu.needs_pass:
-            doc_mu.authenticate(password)
-    else:
-        doc_mu = pymupdf.open(pdf_path)
-        doc_pk = pikepdf.open(pdf_path)
+    doc_mu, doc_pk, repair_findings = open_documents(pdf_path, password)
+    if repair_findings and session:
+        for _rf in repair_findings:
+            session.log(f"  {_rf['detail']}", "warning")
 
     _mu.drain(session, os.path.basename(pdf_path))
-    total_pages = len(doc_mu)
-    page_pad = len(str(total_pages))
+    # The pages both readers have (they agree unless the file is damaged;
+    # see open_documents and page_pairs). Pages are numbered as MuPDF
+    # numbers them.
+    pairs = page_pairs(doc_mu, doc_pk)
+    total_pages = len(pairs)
+    page_pad = len(str(max(total_pages, len(doc_mu))))
     _out(f"  Pages:    {total_pages}")
 
     # Extract PDF metadata and detect prior versions
@@ -237,6 +469,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     _form_results = {}    # form XObject objgen -> its findings (template)
     exif_done = set()     # xrefs whose camera / capture dates were read
     img_stats = {}        # cache_hits across documents (prior versions)
+    from pdf_forensics.analysis import detectors as _det
+    _rects0 = dict(_det.RECT_STATS)
     lap("open")
 
     # Reuse of unchanged pages in prior versions (analysis/page_reuse.py).
@@ -291,10 +525,10 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 label, label_to_info[label].get("image_bytes"),
                 label_to_info[label].get("ext")))
 
-    for page_idx in range(total_pages):
+    for page_pos, (page_idx, pk_idx) in enumerate(pairs, 1):
         page_num = page_idx + 1
         page_mu = doc_mu[page_idx]
-        page_pk = doc_pk.pages[page_idx]
+        page_pk = doc_pk.pages[pk_idx]
 
         # Unchanged page of a prior version: reuse its results.
         _key = None
@@ -328,7 +562,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 "risk_scores": risk_scores,
             }
             if progress_callback:
-                progress_callback(page_num, total_pages)
+                progress_callback(page_pos, total_pages)
             lap("page_reused")
             continue
 
@@ -340,6 +574,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
         # extraction, preserving its original error behaviour.
         try:
             page_ops = list(pikepdf.parse_content_stream(page_pk))
+            pf.add("operators", len(page_ops))
         except Exception:
             page_ops = None
         page_text = extract_page_text(page_mu)
@@ -380,6 +615,9 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 _out(f"      {label}: {', '.join(parts)}")
 
         findings = []
+        _missing = missing_resource_refs(page_pk)
+        if _missing:
+            findings.append(missing_refs_finding(page_num, _missing))
 
         # Analyze Form XObjects for cropping / clipping
         xobjects = page_pk.get("/Resources", {}).get("/XObject", {})
@@ -390,6 +628,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                             if hasattr(xobj_ref, "resolve")
                             else xobj_ref)
             except Exception:
+                continue
+            if not hasattr(resolved, "get"):          # missing object
                 continue
             if resolved.get("/Subtype") != Name("/Form"):
                 continue
@@ -546,7 +786,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
             _pr.put(_key, _now_results)
 
         if progress_callback:
-            progress_callback(page_num, total_pages)
+            progress_callback(page_pos, total_pages)
         lap("page_other")
 
     _all_imgs = {x: len(v.get("image") or b"")
@@ -601,7 +841,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
     # consistency, signature ByteRange coverage, structural integrity,
     # and cross-image capture-device consistency. Run before the
     # documents close (signature/structural checks need doc_pk).
-    doc_findings = []
+    doc_findings = list(repair_findings)
     lap("comments")
     doc_findings.extend(check_metadata_consistency(pdf_metadata))
     doc_findings.extend(check_signature_coverage(doc_pk, pdf_path))
@@ -613,6 +853,8 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                                                    password=password))
     lap("metadata_history")
     doc_findings.extend(check_structural_integrity(doc_pk))
+    if version_number is None:
+        doc_findings.extend(check_byte_structure(pdf_path))
     doc_findings.extend(check_mixed_cameras(doc_cameras))
     # Revision history is examined on the submitted file only; a prior
     # version analysed in its own right is a subset of that history.
@@ -649,6 +891,7 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                 session.log(f"    qpdf: {w}")
 
     lap("timeline")
+    _mu.drain(session, os.path.basename(pdf_path))
     doc_mu.close()
     doc_pk.close()
 
@@ -688,84 +931,50 @@ def analyze_pdf(pdf_path, db_path, extract_dir=None,
                  f"(highest page: {max(page_risk_scores.values(), default=0)})")
 
     lap("risk")
-    analysis_id = save_to_db(conn, pdf_path, total_pages, page_data,
-                             pdf_metadata=pdf_metadata,
-                             pdf_versions=pdf_versions,
-                             store_images=store_images,
-                             comments=pdf_comments,
-                             doc_risk=doc_risk,
-                             source_analysis_id=source_analysis_id,
-                             version_number=version_number)
+    for _k in ("verified", "mismatch"):
+        _n = _det.RECT_STATS[_k] - _rects0[_k]
+        if _n:
+            pf.add("rects_" + _k, _n)
+    if (_det.RECT_STATS["mismatch"] > _rects0["mismatch"]) and session:
+        session.log("  Image positions: the one-pass reading differed from "
+                    "get_image_rects on a page of this document; "
+                    "get_image_rects is used for the rest of the run "
+                    "(results unaffected)", "warning")
+    # Converted here so a failure stays limited to the timeline, as when it
+    # was stored directly ("Timeline could not be stored", logged on commit).
+    _tl_rows, _tl_err = None, None
     if timeline is not None:
         try:
-            save_timeline(conn, analysis_id, timeline_rows(timeline))
+            _tl_rows = timeline_rows(timeline)
         except Exception as e:
-            if session:
-                session.log(f"  Timeline could not be stored: {e}",
-                            "warning")
-    record_submission(conn, pdf_path, "analysed", session=session,
-                      analysis_id=analysis_id,
-                      is_version=version_number is not None)
-    pf.set("findings", sum(len(v) for v in all_findings.values()))
-    _escaped = getattr(conn, "escaped", [0])[0] - _escaped0
-    if _escaped and session:
-        session.log(f"  {_escaped} text value(s) contained invalid UTF-16 "
-                    f"(unpaired surrogates) and were stored with \\uXXXX "
-                    f"escapes, e.g. \\udc8f, so the analysis could be saved",
-                    "warning")
-    lap("db_save")
+            _tl_err = str(e)
+    payload = {
+        "pdf_path": pdf_path,
+        "db_path": db_path,
+        "total_pages": total_pages,
+        "page_data": page_data,
+        "pdf_metadata": pdf_metadata,
+        "pdf_versions": pdf_versions,
+        "store_images": store_images,
+        "comments": pdf_comments,
+        "doc_risk": doc_risk,
+        "source_analysis_id": source_analysis_id,
+        "version_number": version_number,
+        "timeline_rows": _tl_rows,
+        "timeline_error": _tl_err,
+        "total_findings": sum(len(f) for f in all_findings.values()),
+        "total_extracted": total_extracted,
+        "extract_dir": extract_dir,
+    }
+    if defer:
+        return {"deferred": payload, "pdf": pdf_path,
+                "total_pages": total_pages,
+                "total_findings": payload["total_findings"],
+                "total_extracted": total_extracted}
+    summary = commit_analysis(conn, payload, session=session, quiet=quiet)
     if own_conn:
         conn.close()
-
-    total_findings = sum(len(f) for f in all_findings.values())
-    _out(f"Results saved to: {os.path.abspath(db_path)}")
-    _out(f"  {total_findings} finding(s) recorded.")
-    if extract_dir:
-        _out(f"  {total_extracted} image(s) extracted to: "
-             f"{os.path.abspath(extract_dir)}")
-    _out(f"  {len(pdf_metadata)} metadata entries stored.")
-    _out(f"  {len(pdf_versions)} version marker(s) stored.")
-
-    # High-risk image summary
-    high_risk = []
-    total_risk_imgs = 0
-    for page_num, pd in page_data.items():
-        for label, score in pd.get("risk_scores", {}).items():
-            if score > 0:
-                total_risk_imgs += 1
-            if score >= 30:
-                high_risk.append((page_num, label, score))
-
-    if total_risk_imgs:
-        _out(f"  {total_risk_imgs} image(s) carry a non-zero risk score.")
-    if high_risk:
-        high_risk.sort(key=lambda x: -x[2])
-        _out(f"  {len(high_risk)} high-risk image(s) (score >= 30):")
-        for page_num, label, score in high_risk[:10]:
-            _out(f"    page {page_num}, {label}: risk score {score}")
-        if len(high_risk) > 10:
-            _out(f"    ... and {len(high_risk) - 10} more")
-
-    # Session logging
-    if session:
-        session.log_pdf_complete(
-            pdf_path, total_pages, total_extracted,
-            total_findings, high_risk_count=len(high_risk))
-    lap("finish")
-
-    return {
-        "pdf": pdf_path,
-        "db": os.path.abspath(db_path),
-        "analysis_id": analysis_id,
-        "version_number": version_number,
-        "extract_dir": (os.path.abspath(extract_dir)
-                        if extract_dir else None),
-        "total_pages": total_pages,
-        "total_findings": total_findings,
-        "total_extracted": total_extracted,
-        "metadata_count": len(pdf_metadata),
-        "version_count": len(pdf_versions),
-    }
+    return summary
 
 
 def process_pdfs(pdf_paths, db_path, output_dir=None,
@@ -904,7 +1113,7 @@ def process_pdfs(pdf_paths, db_path, output_dir=None,
 
 
 def extract_prior_versions(pdf_path, output_dir, session=None,
-                           password=None):
+                           password=None, name=None, written=None):
     """
     Extract prior versions of a PDF from incremental updates.
 
@@ -920,6 +1129,13 @@ def extract_prior_versions(pdf_path, output_dir, session=None,
       pdf_path   : path to the PDF file
       output_dir : directory to write extracted versions into
       session    : optional Session for logging
+      name       : the name to base the version folder and files on, when
+                   it must differ from the PDF's own name (two submitted
+                   files with the same name get separate folders; see
+                   analysis/parallel.unique_stems)
+      written    : optional list; each written version path is appended
+                   as (path, existed_before) so a caller can undo the
+                   extraction if the file turns out to be a duplicate
 
     Returns a list of extracted file paths (empty if no prior versions).
     """
@@ -939,6 +1155,7 @@ def extract_prior_versions(pdf_path, output_dir, session=None,
 
     output_dir = os.path.normpath(output_dir)
     basename = os.path.splitext(os.path.basename(pdf_path))[0]
+    stem = name or basename
 
     # Only extract %%EOF markers that end a genuine, usable earlier version.
     # A linearized file's first %%EOF (end of the first-page section) and
@@ -984,12 +1201,12 @@ def extract_prior_versions(pdf_path, output_dir, session=None,
     # Budget: output_dir \ {base}_versions \ {base}{suffix}; keep margin.
     fixed = len(os.path.abspath(output_dir)) + 2 + len("_versions") + suffix_len
     allow = 255 - fixed
-    safe_base = basename
-    if allow < len(basename) * 2:
+    safe_base = stem
+    if allow < len(stem) * 2:
         per_name = max(8, allow // 2 - 8)                 # room for a hash tag
-        tag = "~" + hashlib.md5(basename.encode("utf-8", "replace")
+        tag = "~" + hashlib.md5(stem.encode("utf-8", "replace")
                                 ).hexdigest()[:6]
-        safe_base = basename[:per_name].rstrip(" .") + tag
+        safe_base = stem[:per_name].rstrip(" .") + tag
         if session:
             session.log(
                 f"  Note: shortening extracted-version names for "
@@ -1016,6 +1233,7 @@ def extract_prior_versions(pdf_path, output_dir, session=None,
         version_filename = f"{safe_base}_version{version_num}.pdf"
         version_path = os.path.join(version_dir, version_filename)
 
+        existed = os.path.exists(version_path)
         try:
             with open(version_path, "wb") as f:
                 f.write(version_data)
@@ -1029,6 +1247,8 @@ def extract_prior_versions(pdf_path, output_dir, session=None,
             continue
 
         extracted.append(version_path)
+        if written is not None:
+            written.append((version_path, existed))
         if session:
             session.log(
                 f"  Extracted version {version_num}: "

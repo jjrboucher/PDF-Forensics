@@ -1,7 +1,7 @@
 # PDF Forensics Suite
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.2.0-informational)
+![Version](https://img.shields.io/badge/version-1.3.0-informational)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 A forensic analysis toolkit for PDF documents. The PDF Forensics Suite examines
@@ -49,7 +49,10 @@ the command line for scripted and batch work.
   and off, from the page as received to the original content underneath, with
   white-box alterations shown step by step. A self-check verifies that the
   layers reproduce the page as received; if they do not, the page is shown as
-  received rather than as a possibly misleading reconstruction.
+  received rather than as a possibly misleading reconstruction. White boxes
+  that hide nothing (blank paper beneath) are listed in a collapsed group,
+  still toggleable, and the index can be sorted by the overlays that hide
+  content.
 - Image analysis: overlapping and off-page images, soft-mask concealment,
   DPI/resolution anomalies, and cross-document image reuse.
 - Metadata edits: fields changed by a later revision (with a warning when no
@@ -89,11 +92,20 @@ the command line for scripted and batch work.
   a manifest of output files and their MD5 hashes.
 - All results stored in a SQLite database for repeatable, auditable review.
 
+**Large cases**
+- Several PDFs processed at once, one process each, largest first, with
+  results written in the order the files were selected, so they are the
+  same as one at a time. Triage, Visual Overlay reports and graphs run in
+  parallel too.
+
 ## Requirements
 
 - Python 3.9 or newer
 - The packages in [`requirements.txt`](requirements.txt): PyMuPDF, pikepdf,
-  Pillow, networkx, pyvis and openpyxl.
+  Pillow, networkx, pyvis, openpyxl and psutil. psutil lets *Auto* (files
+  processed at once) see free memory and how busy the processors are;
+  without it, *Auto* uses the most the computer supports and the log says
+  so.
 
 ## Installation
 
@@ -120,7 +132,12 @@ python pdf_forensics.py
 2. Enter a case number. All output for the session is organised under it.
 3. **Analyse PDFs:** add files with *Add files*, *Add folder* or *From list*,
    optionally choose a *Password list…*, and run the analysis (or run a quick
-   triage instead).
+   triage instead). *Files processed at once* sets how many PDFs are
+   processed in parallel (triage, analysis, visual reports and graphs);
+   *Auto* suits most computers. The setting is shown on the analysis,
+   graphs and reports screens, starts at *Auto* every session, and is
+   amber when set to a number; ⓘ beside it explains what *Auto*
+   chooses on your computer.
 4. **Generate reports and graphs** from the resulting database.
 5. Open the **case index** (`{case}_index.html` in the results folder) as the
    starting point for review.
@@ -143,6 +160,9 @@ python pdf_forensics.py --case 2026-0001 analyze file1.pdf file2.pdf -o /path/to
 
 # Analyse the files named in a text file, trying a list of candidate passwords
 python pdf_forensics.py --case 2026-0001 analyze -l selected.txt -p passwords.txt -o /path/to/case
+
+# Also extract and analyse prior versions; analyse 4 files at a time
+python pdf_forensics.py --case 2026-0001 analyze -l selected.txt --prior-versions -w 4 -o /path/to/case
 
 # Fast triage to Excel
 python pdf_forensics.py --case 2026-0001 triage *.pdf -o triage.xlsx
@@ -172,6 +192,8 @@ Key options:
 | `-d`, `--database` | analyze | Database path |
 | `--force` | analyze | Re-analyse files already in the database |
 | `--no-store-images` | analyze | Do not store image data in the database |
+| `--prior-versions` | analyze | Also extract and analyse prior versions (incremental updates) |
+| `-w`, `--workers` | analyze, report | Files analysed (or visual reports made) at the same time: `auto` (default) or a number; `1` for one at a time |
 | `--no-prior-versions` | triage | Do not add rows for prior versions |
 | `-r`, `--reports` | report | Report IDs to generate (default: all) |
 | `--visual` | report | Also generate the Visual Overlay reports (one per document, with an index) |
@@ -220,6 +242,22 @@ warns when one database's outputs come from more than one build, and offers
   folders (e.g. OneDrive) compete with the application for disk access.
 - Untick *Store extracted images in database* (or use `--no-store-images`)
   when you do not need image data kept in the database.
+- **Several files at once.** *Files processed at once* (`--workers`) runs
+  triage, analysis, the Visual Overlay reports and the graphs in parallel,
+  one process each. *Auto* uses one process per physical processor core
+  (with psutil; otherwise the logical processors less one) and allows
+  about 4 GB of memory per process, up to 24; it is decided again at the
+  start of each step and chooses fewer when free memory is short (about
+  2 GB free per process) or other programs are keeping the processors
+  busy, and the log states the number and why. The largest files are started
+  first; results are written in the order the files were selected, so they
+  are the same as one file at a time (choose *1* to do exactly that).
+  Finished results waiting for their turn are kept in memory up to 4 GB (or
+  15% of the computer's memory, if less) and on disk beyond that. Triage with
+  a password list runs one file at a time. Lower the number if the computer
+  runs short of memory, or to leave it free for other work. More processes
+  are not always faster: they share the processor's memory bandwidth and
+  cache, so each runs slower than one alone.
 
 ## Encrypted PDFs
 
@@ -246,6 +284,27 @@ guess, generate or brute-force passwords, and files are only ever read.
 - The **Encrypted Files** report lists every encrypted PDF and the password that
   opened it, or that none did. It contains passwords and should be handled with
   the same care as the password list.
+
+## Building an executable
+
+The `build_exe/` folder builds a Windows executable with PyInstaller, so the
+application can run on a computer without Python. Run it on Windows, from
+the `Application` folder's copy:
+
+- `build_exe\build_windows_onefile.bat` builds a single file,
+  `PDF_Forensics_Suite.exe`, in the `Application` folder. It unpacks itself
+  on each launch (a few seconds) and keeps its branding settings in a
+  `branding.json` beside it.
+- `build_exe\build_windows.bat` builds a folder, `PDF_Forensics_Suite\`,
+  that starts faster; distribute the whole folder.
+
+Each script makes a temporary virtual environment, installs the
+requirements and PyInstaller, builds, prints the version and the SHA-256 of
+the executable, and removes everything it created except the result (on a
+failure it leaves them in place for troubleshooting). Run the executable
+with no arguments for the interface, or with a command (`analyze`, `report`
+…) for the command line. Antivirus software sometimes flags unsigned
+PyInstaller executables; publishing the hash, or code-signing, helps.
 
 ## Documentation
 
@@ -350,10 +409,24 @@ later pages (forms reused, verified and mismatched), the faster paths of
 two detectors, and the Visual Overlay reports, which reuse prior versions'
 renders for unchanged pages.
 
+Analysis and the Visual Overlay reports run several files at once (see
+*Several files at once* under Working with large batches). On a computer
+with few cores or little memory, *Auto* chooses fewer processes; if the
+computer becomes unresponsive, choose a lower number. The performance log
+records the number of processes used (`workers=` in the run's options)
+and, for each step, what *Auto* chose and why (machine numbers only).
+
+To confirm that two runs over the same files gave the same results (for
+example one file at a time and several at once), compare their databases:
+`python tests/compare_databases.py first.db second.db` compares every table
+row by row, ignoring only run times and the case folder in paths, and
+prints no file contents. The `tests/` folder also holds the application's
+automated tests (`python -m unittest discover -s tests -t .`).
+
 ## Versioning
 
-This is **version 1.2.0** (build 2026-11-12), an update to the first feature release
-after version 1.0.0, the first frozen release. Changes after 1.0 are released
+This is **version 1.3.0** (build 2026-11-24c), a feature release after
+version 1.0.0, the first frozen release. Changes after 1.0 are released
 as incremental updates (1.0.1, 1.0.2, …) and new features raise the minor
 version (1.1.0); each release has its own build marker.
 `python pdf_forensics.py --version` prints the version and build you are

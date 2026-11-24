@@ -48,7 +48,10 @@ COUNTERS = ("size_mb", "pages", "pages_reused", "reuse_verified",
             "cs_overlay_verified", "cs_overlay_mismatch",
             "visual_reused", "visual_verified", "visual_mismatch",
             "image_placements", "unique_images",
-            "cache_hits", "image_mb", "findings", "revisions")
+            "cache_hits", "image_mb", "findings", "revisions",
+            # build 2026-11-23: drawing operators parsed, and the
+            # one-pass image boxes checked against get_image_rects
+            "operators", "rects_verified", "rects_mismatch")
 
 
 def _rss_mb():
@@ -194,6 +197,115 @@ def _lib_versions():
     return out
 
 
+class LoadSampler:
+    """Processor load while a step runs (build 2026-11-19e), so a slow run
+    can be told apart from a busy computer: every `interval` seconds, in a
+    background thread, how busy the whole machine is and how much of that
+    is this application (its own process and its worker processes); the
+    rest is other programs. Percentages are of the whole machine (all
+    logical processors). Needs psutil; without it nothing is measured."""
+
+    def __init__(self, interval=2.0):
+        import threading
+        import psutil                   # ImportError: not measured
+        self.ps = psutil
+        self.me = psutil.Process()
+        self.ncpu = os.cpu_count() or 1
+        self.interval = interval
+        self.samples = []               # (machine %, this application %)
+        self._procs = {}
+        self._stop = threading.Event()
+        psutil.cpu_percent(None)        # the first reading only primes
+        self._ours()
+        self._t = threading.Thread(target=self._loop, daemon=True,
+                                   name="perf-load-sampler")
+        self._t.start()
+
+    def _ours(self):
+        total = 0.0
+        try:
+            procs = [self.me] + self.me.children(recursive=True)
+        except Exception:
+            procs = [self.me]
+        seen = set()
+        for p in procs:
+            seen.add(p.pid)
+            q = self._procs.get(p.pid)
+            try:
+                if q is None:           # a new process: prime it
+                    self._procs[p.pid] = p
+                    p.cpu_percent(None)
+                    continue
+                total += q.cpu_percent(None)
+            except Exception:
+                pass
+        for pid in [k for k in self._procs if k not in seen]:
+            del self._procs[pid]
+        return min(100.0, total / self.ncpu)
+
+    def _loop(self):
+        while not self._stop.wait(self.interval):
+            try:
+                machine = self.ps.cpu_percent(None)
+                ours = self._ours()
+                self.samples.append((machine, min(machine, ours)))
+            except Exception:
+                pass
+
+    def stop(self):
+        self._stop.set()
+        self._t.join(timeout=self.interval + 1)
+        return list(self.samples)
+
+
+_CALIB_DATA = None
+
+
+def speed_check():
+    """A fixed piece of work, timed (build 2026-11-20), so runs at
+    different times can be compared: the same computer can run at
+    different speeds (power settings, temperature). Two parts, each about
+    0.1 to 0.3 s on a desktop processor: Python code (as the analysis
+    runs) and compressing data in memory (as image and PDF work does).
+    Returns (python seconds, compress seconds)."""
+    import zlib
+    global _CALIB_DATA
+    if _CALIB_DATA is None:
+        # fixed data, made the same way every time: text-like, partly
+        # repetitive (as page content streams are)
+        import random
+        r = random.Random(20261120)
+        words = [bytes(r.choice(b"abcdefghijklmnopqrstuvwxyz0123456789 ")
+                       for _ in range(r.randint(2, 9))) for _ in range(4000)]
+        _CALIB_DATA = b" ".join(r.choice(words) for _ in range(700_000))
+    t0 = time.perf_counter()
+    acc = 0
+    for i in range(1_500_000):
+        acc = (acc * 31 + i) % 1000003
+    t1 = time.perf_counter()
+    for _ in range(3):
+        zlib.compress(_CALIB_DATA, 6)
+    t2 = time.perf_counter()
+    return t1 - t0, t2 - t1
+
+
+def load_summary(samples, interval=2.0, window=5):
+    """The NOTE text for a step's load samples (numbers only)."""
+    if not samples:
+        return None
+    n = len(samples)
+    machine = [m for m, _ in samples]
+    ours = [o for _, o in samples]
+    other = [max(0.0, m - o) for m, o in samples]
+    w = max(1, min(window, n))
+    peak_other = max(sum(other[k:k + w]) / w for k in range(n - w + 1))
+    return (f"machine average {sum(machine) / n:.0f}%, highest "
+            f"{max(machine):.0f}%; this application average "
+            f"{sum(ours) / n:.0f}%; other programs average "
+            f"{sum(other) / n:.0f}%, highest {peak_other:.0f}% over "
+            f"{w * interval:.0f} s ({n} samples every {interval:.0f} s)")
+
+
 class PerfLog:
     """One performance log per session. All methods are safe to call at
     any time; failures to write never interrupt processing."""
@@ -205,6 +317,7 @@ class PerfLog:
         self._n = 0
         self._run = None
         self._t_last = None
+        self._load = None
         self._header(case_folder)
 
     # -- writing ------------------------------------------------------
@@ -241,9 +354,39 @@ class PerfLog:
         self._w(f"Memory at start: {_rss_mb()} MB")
         self._w("")
 
+    # -- processor load ---------------------------------------------------
+    def load_begin(self):
+        """Start measuring processor load for a step (see LoadSampler),
+        after a speed check (speed_check)."""
+        self.load_end(None)
+        try:
+            py, zc = speed_check()
+            self._w(f"NOTE\tspeed check: python {py:.3f} s, compress "
+                    f"{zc:.3f} s (the same fixed work every time; lower is "
+                    f"faster)")
+        except Exception:
+            pass
+        try:
+            self._load = LoadSampler()
+        except Exception:
+            self._load = None
+
+    def load_end(self, step):
+        """Stop measuring; write the step's load as a NOTE (if step)."""
+        ls, self._load = self._load, None
+        if ls is None:
+            return
+        try:
+            text = load_summary(ls.stop(), ls.interval)
+            if text and step:
+                self.note(f"processor load during {step}: {text}")
+        except Exception:
+            pass
+
     # -- runs ---------------------------------------------------------
     def run_begin(self, mode, n_files, **options):
         """mode: 'analysis' or 'triage'. options: flags and counts only."""
+        self.load_begin()
         self._run = {"mode": mode, "t0": time.perf_counter(), "files": 0,
                      "pages": 0, "images": 0}
         stages = ANALYSIS_STAGES if mode == "analysis" else TRIAGE_STAGES
@@ -275,6 +418,7 @@ class PerfLog:
                 f"{el:.1f} s"
                 + (f" ({r['files'] / el * 60:.1f} files/min)" if el else "")
                 + f"; memory {_rss_mb()} MB")
+        self.load_end(r["mode"])
         self._run = None
 
     # -- files --------------------------------------------------------
@@ -324,7 +468,7 @@ class PerfLog:
         row = [str(f["n"]), f["kind"], str(f["of"] or ""), f["md5"] or "-",
                status, f"{total:.2f}"]
         row += [str(c.get(k, "")) for k in COUNTERS]
-        mem = _rss_mb()
+        mem = f.get("mem") or _rss_mb()     # a worker's, when resumed
         row.append("" if mem is None else str(mem))
         row += [f"{f['stages'][s]:.2f}" if s in f["stages"] else ""
                 for s in stages]
@@ -334,6 +478,32 @@ class PerfLog:
             self._run["pages"] += int(c.get("pages", 0) or 0)
             self._run["images"] += int(c.get("image_placements", 0) or 0)
         self._file = None
+
+    def file_resume(self, record, kind=None, of=None):
+        """Open a file's record from one made in a worker process
+        (RecordingPerf), so the main process can add the stages it runs
+        itself (db_save, finish) and then call file_end. Returns the
+        file's #. Times already spent are kept; total = worker time plus
+        the main process's time from here."""
+        if self._file is not None:
+            self.file_end("interrupted")
+        self._n += 1
+        r = record or {}
+        self._file = {"n": self._n, "kind": kind or r.get("kind", "submitted"),
+                      "of": of, "md5": r.get("md5", ""),
+                      "t0": time.perf_counter() - float(r.get("total", 0.0)),
+                      "stages": dict(r.get("stages", {})),
+                      "counts": dict(r.get("counts", {})),
+                      "mem": r.get("mem")}
+        self._t_last = time.perf_counter()
+        return self._n
+
+    def stage_add(self, stage, seconds):
+        """Credit time measured elsewhere (e.g. in the main process before
+        a worker ran) to a stage of the open file."""
+        if self._file is not None and seconds:
+            st = self._file["stages"]
+            st[stage] = st.get(stage, 0.0) + seconds
 
     # -- other timed events (reports, spreadsheets, graphs, index) ----
     def event(self, kind, name, seconds, **counts):
@@ -347,6 +517,7 @@ class PerfLog:
         self._w(f"NOTE\t{text}")
 
     def close(self):
+        self.load_end(None)
         try:
             self._w(f"Closed {datetime.now():%Y-%m-%d %H:%M:%S}; "
                     f"memory {_rss_mb()} MB")
@@ -371,6 +542,53 @@ def error_label(exc):
         return f"{name} at {where}" if where else name
     except Exception:
         return name
+
+
+class RecordingPerf:
+    """Stand-in for PerfLog in a worker process (analysis/parallel.py):
+    records one file's stages and counts for the main process to write
+    with PerfLog.file_resume. Only per-file calls are kept."""
+
+    def __init__(self):
+        self.record = None
+        self._t0 = None
+        self._t_last = None
+        self._stages = {}
+        self._counts = {}
+        self._md5 = ""
+
+    def begin(self):
+        self._t0 = self._t_last = time.perf_counter()
+        self._stages, self._counts, self._md5 = {}, {}, ""
+
+    def set(self, key, value):
+        if key == "md5":
+            self._md5 = value
+        else:
+            self._counts[key] = value
+
+    def add(self, key, n=1):
+        self._counts[key] = self._counts.get(key, 0) + n
+
+    def lap_reset(self):
+        self._t_last = time.perf_counter()
+
+    def lap(self, stage):
+        now = time.perf_counter()
+        self._stages[stage] = (self._stages.get(stage, 0.0)
+                               + (now - (self._t_last or now)))
+        self._t_last = now
+
+    def take(self):
+        """The record so far (and start a new one)."""
+        rec = {"md5": self._md5, "stages": self._stages,
+               "counts": self._counts, "mem": _rss_mb(),
+               "total": (time.perf_counter() - self._t0) if self._t0 else 0.0}
+        self.begin()
+        return rec
+
+    def __getattr__(self, name):          # run_begin, event, note ...
+        return lambda *a, **k: None
 
 
 class _NullPerf:

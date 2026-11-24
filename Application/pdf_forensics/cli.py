@@ -58,6 +58,22 @@ def main_cli():
                            help="Process PDFs even if already analyzed")
     p_analyze.add_argument("--quiet", "-q", action="store_true",
                            help="Suppress terminal output")
+    p_analyze.add_argument("--watchdog-minutes", type=float, default=None,
+                           help="With more than one worker: stop a file "
+                                "that makes no progress for this many "
+                                "minutes and record it as failed (timed "
+                                "out). Default 30; 0 turns it off.")
+    p_analyze.add_argument("-w", "--workers", default="auto",
+                           help="PDFs analysed at the same time, each in its "
+                                "own process: 'auto' (default: from the "
+                                "processor cores and memory) or a number. 1 "
+                                "analyses one file at a time. Results are "
+                                "written in the order given either way.")
+    p_analyze.add_argument("--prior-versions", action="store_true",
+                           help="Also extract and analyse the prior versions "
+                                "of PDFs with incremental updates (as the "
+                                "GUI's 'Extract and process prior PDF "
+                                "versions' option)")
 
     # --- graph subcommand ---
     p_graph = sub.add_parser("graph",
@@ -92,6 +108,11 @@ def main_cli():
                           help="Also generate the visual overlay report "
                                "(annotated page images of detected "
                                "text/image overlays)")
+    p_report.add_argument("-w", "--workers", default="auto",
+                          help="Visual overlay reports made at the same "
+                               "time, each in its own process: 'auto' "
+                               "(default) or a number; 1 makes one at a "
+                               "time. The reports are the same either way.")
 
     # --- triage subcommand ---
     p_triage = sub.add_parser("triage",
@@ -107,6 +128,12 @@ def main_cli():
                                 "this run are tried first).")
     p_triage.add_argument("-o", "--output", default=None,
                           help="Output Excel file path")
+    p_triage.add_argument("-w", "--workers", default="auto",
+                          help="PDFs triaged at the same time, each in its "
+                               "own process: 'auto' (default) or a number; "
+                               "1 for one at a time. Rows are written in the "
+                               "order given either way. With a password "
+                               "list, always one at a time.")
     p_triage.add_argument("--no-prior-versions", action="store_true",
                           help="Do not include prior-version metadata "
                                "for PDFs with incremental updates "
@@ -296,6 +323,35 @@ def _cli_analyze(args, session, case):
 
     pw_manager = _build_password_manager(getattr(args, "password_list", None),
                                          session, quiet=args.quiet)
+    from pdf_forensics.analysis.parallel import (resolve_workers,
+                                                 auto_choice, describe_auto)
+    _wv = getattr(args, "workers", "auto")
+    if _wv in (None, "", "auto", "Auto", 0, "0"):
+        workers, _why = auto_choice("analysis")
+        if not args.quiet:
+            print(describe_auto(workers, _why))
+    else:
+        workers = resolve_workers(_wv)
+    if workers > 1 or getattr(args, "prior_versions", False):
+        st = _cli_analyze_parallel(valid, db_path, extract_dir, session,
+                                   args, workers, pw_manager)
+        from pdf_forensics.reports.case_index import refresh_case_index
+        _idx = refresh_case_index(session, log=print)
+        if _idx:
+            print(f"Case index updated: {_idx}")
+        session.write_summary(
+            stats={
+                "PDFs processed": st["analysed"] - st["versions"],
+                "Prior versions analysed": st["versions"],
+                "PDFs failed": st["failed"],
+                "Identical copies skipped": st["duplicates"],
+                "Encrypted, not opened": st["encrypted"],
+                "Total images": st["images"],
+                "Total findings": st["findings"],
+            },
+            db_path=db_path)
+        return
+
     summaries = process_pdfs(
         valid, db_path,
         output_dir=extract_dir,
@@ -321,6 +377,85 @@ def _cli_analyze(args, session, case):
                                   for s in summaries),
         },
         db_path=db_path)
+
+
+def _cli_analyze_parallel(paths, db_path, extract_dir, session, args,
+                          workers, pw_manager):
+    """analyze with several worker processes and/or prior versions
+    (analysis/parallel.py). Same results as one file at a time."""
+    import time as _time
+    from pdf_forensics import perf as _perf
+    from pdf_forensics.database import init_db, refresh_statistics
+    from pdf_forensics.analysis.parallel import ParallelRunner
+
+    quiet = args.quiet
+    conn = init_db(db_path, session=session)
+    pf = _perf.get(session)
+    pf.run_begin("analysis", len(paths), interface="command line",
+                 workers=workers, store_images=not args.no_store_images,
+                 extract_to_disk=True, skip_duplicates=not args.force,
+                 password_list=pw_manager is not None,
+                 prior_versions=bool(getattr(args, "prior_versions", False)))
+    versions_out = None
+    if getattr(args, "prior_versions", False):
+        versions_out = session.pdf_versions_dir or os.path.join(
+            os.path.dirname(db_path), "pdf_versions")
+        os.makedirs(versions_out, exist_ok=True)
+
+    def on_event(evt):
+        if quiet or evt["type"] not in ("result", "versions"):
+            return
+        if evt["type"] == "versions":
+            print(f"    -> {evt['count']} prior version(s) of {evt['name']} "
+                  f"analysed")
+            return
+        oc, name = evt["outcome"], evt["name"]
+        if oc == "analysed":
+            print(f"  OK  {name}: {evt.get('images', 0)} image(s), "
+                  f"{evt.get('findings', 0)} finding(s)")
+        elif oc == "duplicate":
+            print(f"  --  {name}: identical copy of {evt.get('duplicate_of')}"
+                  f" (not re-analysed)")
+        elif oc == "encrypted":
+            print(f"  --  {name}: encrypted, not opened")
+        elif oc == "not_found":
+            print(f"  !!  {name}: not found")
+        else:
+            print(f"  !!  {name}: failed ({evt.get('error')})")
+
+    if not quiet:
+        print(f"Analysing {workers} file(s) at a time; results are written "
+              f"in the order given.")
+    runner = ParallelRunner(
+        paths, conn, db_path, session=session, workers=workers,
+        out_dir=extract_dir, store_images=not args.no_store_images,
+        skip_duplicates=not args.force,
+        extract_versions=bool(getattr(args, "prior_versions", False)),
+        versions_out=versions_out, password_manager=pw_manager,
+        link_encryption=pw_manager is not None, on_event=on_event,
+        watchdog_minutes=getattr(args, "watchdog_minutes", None))
+    try:
+        st = runner.run()
+    except KeyboardInterrupt:
+        runner.terminate()
+        raise
+    t0 = _time.perf_counter()
+    refresh_statistics(conn)
+    pf.event("database", "statistics", _time.perf_counter() - t0)
+    conn.close()
+    pf.run_end()
+    line = (f"{len(paths)} submitted: {st['analysed'] - st['versions']} "
+            f"analysed, {st['duplicates']} skipped as identical copies of "
+            f"files already analysed, {st['failed']} failed"
+            + (f", {st['encrypted']} encrypted and not opened"
+               if st["encrypted"] else "")
+            + (f", {st['not_found']} not found" if st["not_found"] else "")
+            + (f"; plus {st['versions']} prior version(s) extracted and "
+               f"analysed" if st["versions"] else ""))
+    if not quiet:
+        print(f"  {line}")
+    session.log(f"Run summary: {line}")
+    return st
 
 
 def _cli_graph(args, session):
@@ -357,6 +492,7 @@ def _cli_graph(args, session):
     import time as _time
     from pdf_forensics import perf as _perf
     _gpf = _perf.get(session)
+    _gpf.load_begin()
     _tg0 = _time.perf_counter()
     md5_set = {row[6] for row in rows}
     image_bytes = load_image_bytes(conn, md5_set)
@@ -389,6 +525,7 @@ def _cli_graph(args, session):
     session.register_output("graph", out_path)
     _gpf.event("graph", args.scope, _time.perf_counter() - _tg0,
                placements=len(rows), unique_images=len(md5_set))
+    _gpf.load_end("graphs")
     graph_print_summary(rows, G, len(thumbnails))
     print(f"\nGraph written to: {out_path}")
     from pdf_forensics.reports.case_index import refresh_case_index
@@ -443,7 +580,8 @@ def _cli_report(args, session):
         print(f"\nGenerating visual overlay reports...")
         ndocs, n = generate_visual_reports(
             args.database, visual_path, session=session,
-            progress=lambda i, t: print(f"  document {i} of {t}", end="\r"))
+            progress=lambda i, t: print(f"  document {i} of {t}", end="\r"),
+            workers=getattr(args, "workers", "auto"))
         if n > 0:
             print(f"  Visual reports: {ndocs} document(s), {n} finding(s); "
                   f"index -> {os.path.basename(visual_path)}")
@@ -538,7 +676,8 @@ def _cli_triage(args, session, case):
         valid, xlsx_path, session=session,
         progress_callback=progress,
         include_prior_versions=not args.no_prior_versions,
-        password_manager=pw_manager)
+        password_manager=pw_manager,
+        workers=getattr(args, "workers", "auto"))
 
     print(f"\nTriage complete: {processed} processed, "
           f"{skipped} skipped")

@@ -27,6 +27,8 @@ def find_images_in_form(form_obj):
         try:
             objnum = ref.objgen[0] if hasattr(ref, "objgen") else None
             resolved = ref.resolve() if hasattr(ref, "resolve") else ref
+            if not hasattr(resolved, "get"):          # missing object
+                continue
             inner_lookup[str(name)] = (objnum, resolved)
         except Exception:
             continue
@@ -36,10 +38,12 @@ def find_images_in_form(form_obj):
     except Exception:
         return image_xrefs
 
-    for operands, operator in ops:
-        if str(operator) != "Do":
+    from pdf_forensics.analysis.content_ops import named_ops, operands_of
+    names, ops = named_ops(ops)
+    for i, op in enumerate(names):
+        if op != "Do":
             continue
-        inner_name = str(operands[0])
+        inner_name = str(operands_of(ops[i])[0])
         if inner_name not in inner_lookup:
             continue
         objnum, resolved = inner_lookup[inner_name]
@@ -76,6 +80,11 @@ def find_image_placements(page_pk, content_ops=None):
         try:
             objnum = ref.objgen[0] if hasattr(ref, "objgen") else None
             resolved = ref.resolve() if hasattr(ref, "resolve") else ref
+            # A reference to an object that does not exist reads as None:
+            # such an entry draws nothing (reported by the engine as a
+            # structural warning; build 2026-11-23).
+            if not hasattr(resolved, "get"):
+                continue
             name_to_obj[str(name)] = (objnum, resolved)
         except Exception:
             continue
@@ -111,11 +120,12 @@ def find_image_placements(page_pk, content_ops=None):
 
     ctm = _identity()
     ctm_stack = []
+    _form_images = {}
 
     z_order = 0
-    for operands, operator in ops:
-        op = str(operator)
-
+    from pdf_forensics.analysis.content_ops import named_ops, operands_of
+    names, ops = named_ops(ops)
+    for i, op in enumerate(names):
         if op == "q":
             ctm_stack.append(ctm)
         elif op == "Q":
@@ -123,13 +133,13 @@ def find_image_placements(page_pk, content_ops=None):
                 ctm = ctm_stack.pop()
         elif op == "cm":
             try:
-                vals = [float(x) for x in operands]
+                vals = [float(x) for x in operands_of(ops[i])]
                 if len(vals) == 6:
                     ctm = _multiply(tuple(vals), ctm)
             except (ValueError, TypeError):
                 pass
         elif op == "Do":
-            xobj_name = str(operands[0])
+            xobj_name = str(operands_of(ops[i])[0])
             if xobj_name not in name_to_obj:
                 continue
 
@@ -148,7 +158,13 @@ def find_image_placements(page_pk, content_ops=None):
                 })
             elif subtype == Name("/Form"):
                 form_xref = objnum
-                inner_images = find_images_in_form(resolved)
+                # A form drawn many times is read once per page (its
+                # images do not change between uses).
+                inner_images = _form_images.get(objnum)
+                if inner_images is None:
+                    inner_images = find_images_in_form(resolved)
+                    if objnum is not None:
+                        _form_images[objnum] = inner_images
                 for img_xref in inner_images:
                     placements.append({
                         "xobj_name": xobj_name,

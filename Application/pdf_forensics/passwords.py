@@ -160,6 +160,7 @@ def try_open(pdf_path, manager, open_fn=None):
                 "label": "not encrypted", "attempts": 0}
 
     attempts = 0
+    unreadable = None
     for label, pw in manager.candidates():
         attempts += 1
         manager.attempts += 1
@@ -170,14 +171,77 @@ def try_open(pdf_path, manager, open_fn=None):
                     manager.files_opened_with_password += 1
                 return {"encrypted": True, "opened": True, "password": pw,
                         "label": label, "attempts": attempts}
-        except Exception:
+        except Exception as e:
+            unreadable = e
             continue
+    # Build 2026-11-23: pikepdf could not read the file at all (not a
+    # wrong password). Four permissions-only files in a 12,745-file case
+    # were recorded as "password required" and not analysed this way.
+    # MuPDF, which repairs damaged files, decides which password opens it;
+    # the analysis then reads MuPDF's repaired copy.
+    if unreadable is not None and open_fn is _pikepdf_opens:
+        doc = _mupdf_doc(pdf_path)
+        if doc is not None:
+            try:
+                for label, pw in ([("empty password", "")]
+                                  if not doc.needs_pass else
+                                  list(manager.candidates())):
+                    if doc.needs_pass:
+                        attempts += 1
+                        manager.attempts += 1
+                        if not doc.authenticate(pw):
+                            continue
+                    manager.record_success(pw)
+                    if pw != "":
+                        manager.files_opened_with_password += 1
+                    return {"encrypted": True, "opened": True,
+                            "password": pw,
+                            "label": f"{label} (opened by MuPDF; pikepdf "
+                                     f"cannot read the file)",
+                            "attempts": attempts, "unreadable": True}
+            except Exception:
+                pass
+            finally:
+                try:
+                    doc.close()
+                except Exception:
+                    pass
     return {"encrypted": True, "opened": False, "password": None,
             "label": None, "attempts": attempts}
 
 
+def _read_bytes(pdf):
+    if isinstance(pdf, (bytes, bytearray, memoryview)):
+        return bytes(pdf)
+    with open(pdf, "rb") as fh:
+        return fh.read()
+
+
+def _mupdf_doc(pdf):
+    """The file opened by MuPDF (path or bytes), or None."""
+    try:
+        import pymupdf
+        try:
+            from pdf_forensics import _mupdf as _mu
+            _mu.silence()
+        except Exception:
+            pass
+        if isinstance(pdf, (bytes, bytearray, memoryview)):
+            return pymupdf.open(stream=bytes(pdf), filetype="pdf")
+        return pymupdf.open(pdf)
+    except Exception:
+        return None
+
+
 def is_encrypted(pdf_path):
-    """True if the file declares encryption (an /Encrypt dictionary)."""
+    """True if the file declares encryption (an /Encrypt dictionary).
+
+    Build 2026-11-23: the same answer for a path and for the file's bytes.
+    When pikepdf cannot read the file at all, MuPDF decides (it asks for
+    a password, or reports an encryption scheme); without MuPDF, the
+    trailer's /Encrypt entry is looked for. Before, a path fell back to a
+    raw search of the file and bytes fell back to nothing, so triage said
+    "not encrypted" and analysis said "encrypted" for the same file."""
     try:
         import pikepdf
         try:
@@ -189,12 +253,91 @@ def is_encrypted(pdf_path):
         except pikepdf.PasswordError:
             return True
     except Exception:
-        # Fall back to a raw scan for the Encrypt entry in the trailer.
+        pass
+    doc = _mupdf_doc(pdf_path)
+    if doc is not None:
         try:
-            with open(pdf_path, "rb") as fh:
-                return b"/Encrypt" in fh.read()
+            if doc.needs_pass:
+                return True
+            return bool((doc.metadata or {}).get("encryption"))
         except Exception:
-            return False
+            pass
+        finally:
+            try:
+                doc.close()
+            except Exception:
+                pass
+    try:
+        return _encrypt_dict_text(_read_bytes(pdf_path)) is not None
+    except Exception:
+        return False
+
+
+def _encrypt_dict_text(data):
+    """The text of the file's last /Encrypt dictionary (from the trailer
+    or cross-reference stream that names it), or None. The encryption
+    dictionary is never itself encrypted or in an object stream, so it
+    can be read without the password."""
+    import re
+    refs = list(re.finditer(rb"/Encrypt\s*(?:(\d+)\s+(\d+)\s+R|<<)",
+                            data))
+    if not refs:
+        return None
+    m = refs[-1]
+    if m.group(1) is None:                      # dictionary written in place
+        start = m.end() - 2
+        depth, i = 0, start
+        while i < len(data) - 1:
+            two = data[i:i + 2]
+            if two == b"<<":
+                depth += 1
+                i += 2
+                continue
+            if two == b">>":
+                depth -= 1
+                i += 2
+                if depth == 0:
+                    return data[start:i].decode("latin-1")
+                continue
+            i += 1
+        return None
+    num, gen = m.group(1).decode(), m.group(2).decode()
+    objs = list(re.finditer(rb"(?<!\d)" + num.encode() + rb"\s+"
+                            + gen.encode() + rb"\s+obj\b", data))
+    if not objs:
+        return None
+    o = objs[-1]
+    end = data.find(b"endobj", o.end())
+    return data[o.end():end if end != -1 else o.end() + 4096].decode(
+        "latin-1")
+
+
+def scheme_from_bytes(data):
+    """Encryption scheme read from the /Encrypt dictionary itself, without
+    the password: as encryption_scheme describes it, or ''."""
+    import re
+    txt = _encrypt_dict_text(data)
+    if not txt:
+        return ""
+
+    def num(key):
+        m = re.search(r"/" + key + r"\s+(\d+)", txt)
+        return int(m.group(1)) if m else None
+    v, r, length = num("V"), num("R"), num("Length")
+    cfm = re.search(r"/CFM\s*/(\w+)", txt)
+    cfm = cfm.group(1) if cfm else ""
+    filt = re.search(r"/Filter\s*/(\w+)", txt)
+    if filt and filt.group(1) != "Standard":
+        return f"{filt.group(1)} security handler (V{v} R{r})"
+    if v == 5 or r in (5, 6) or cfm == "AESV3":
+        algo = "AES-256"
+    elif v == 4 or r == 4:
+        algo = "AES-128" if cfm in ("AESV2", "") else f"RC4-128 ({cfm})"
+    elif v in (1, 2) or r in (2, 3):
+        algo = f"RC4-{length or 40}"
+    else:
+        algo = "unknown"
+    return f"{algo} (V{v} R{r})" if v is not None else algo
 
 
 def encryption_scheme(pdf_path, password=None):
@@ -224,7 +367,12 @@ def encryption_scheme(pdf_path, password=None):
                 algo = "unknown"
             return (f"{algo} (V{v} R{r})" if v is not None else algo)
     except Exception:
-        return ""
+        # A locked file (or one pikepdf cannot read): read the scheme from
+        # the /Encrypt dictionary directly (build 2026-11-23; it was blank).
+        try:
+            return scheme_from_bytes(_read_bytes(pdf_path))
+        except Exception:
+            return ""
 
 
 def _pikepdf_opens(pdf_path, password):
@@ -236,54 +384,56 @@ def _pikepdf_opens(pdf_path, password):
         return False
 
 
-def resolve_file_password(conn, pdf_path, manager, session=None,
-                          quiet=False, record_unopened_submission=True,
-                          is_version=False):
+def probe_file_password(pdf_path, manager):
     """
-    Shared encryption step for a single file, used by both the batch
-    engine and the GUI's own analysis loop so the behaviour is identical.
+    The detection half of resolve_file_password: detects encryption and
+    finds a password that opens the file, without writing to the database
+    or the log. Used where those must happen later and in order (parallel
+    analysis; see analysis/parallel.py). Never raises.
 
-    Detects encryption and tries to open the file (empty password first,
-    then any passwords already found this run, then the supplied list).
-    Records the outcome in the encryption table for the Encrypted Files
-    report, logs it, and for a file that could not be opened records an
-    'encrypted_unopened' submission (so it is accounted for) and returns
-    skip=True. Runs even when no password list was supplied, so
-    permissions-only files still open and genuinely locked files are
-    still recorded, distinguished as 'no password list supplied'.
-
-    manager may be None (equivalent to an empty list). Never raises.
-
-    Returns a dict:
-      encrypted : the file declares encryption
-      opened    : a password (incl. empty) opened it
-      password  : the password to analyse the file with ('' = empty,
-                  None if it could not be opened)
-      skip      : True if the caller should not analyse this file
-      scheme    : encryption scheme, or ''
+    Returns {"result": try_open's dict or None, "scheme": str,
+             "supplied_count": int}; result is None for a file that is not
+    encrypted (or could not be examined).
     """
-    from pdf_forensics.database import record_encryption, record_submission
     mgr = manager if manager is not None else PasswordManager()
     try:
         res = try_open(pdf_path, mgr)
     except Exception:
-        return {"encrypted": False, "opened": True, "password": None,
-                "skip": False, "scheme": ""}
+        return {"result": None, "scheme": "", "supplied_count":
+                mgr.supplied_count}
     if not res["encrypted"]:
-        return {"encrypted": False, "opened": True, "password": None,
-                "skip": False, "scheme": ""}
-
+        return {"result": None, "scheme": "", "supplied_count":
+                mgr.supplied_count}
     scheme = encryption_scheme(
         pdf_path, res["password"] if res["opened"] else None)
+    return {"result": res, "scheme": scheme,
+            "supplied_count": mgr.supplied_count}
+
+
+def record_file_password(conn, pdf_path, probe, session=None, quiet=False,
+                         record_unopened_submission=True, is_version=False):
+    """
+    The recording half of resolve_file_password: records the outcome of
+    probe_file_password in the encryption table, logs it, and for a file
+    that could not be opened records an 'encrypted_unopened' submission.
+    Returns the same dict as resolve_file_password. Never raises.
+    """
+    from pdf_forensics.database import record_encryption, record_submission
+    res = probe.get("result")
+    if not res:
+        return {"encrypted": False, "opened": True, "password": None,
+                "skip": False, "scheme": ""}
+    scheme = probe.get("scheme", "")
     name = os.path.basename(pdf_path)
 
     if not res["opened"]:
         # Distinguish "a list was tried and nothing worked" from "no list
         # was supplied, so the file was not attempted against a list".
-        no_list = mgr.supplied_count == 0
+        supplied = probe.get("supplied_count", 0)
+        no_list = supplied == 0
         res["password_source"] = ("no password list supplied" if no_list
                                   else f"list exhausted "
-                                       f"({mgr.supplied_count} supplied)")
+                                       f"({supplied} supplied)")
         record_encryption(conn, pdf_path, res, session=session,
                           scheme=scheme, source=res["password_source"])
         if no_list:
@@ -315,3 +465,37 @@ def resolve_file_password(conn, pdf_path, manager, session=None,
                         f"password \"{res['password']}\" ({res['label']})")
     return {"encrypted": True, "opened": True, "password": res["password"],
             "skip": False, "scheme": scheme}
+
+
+def resolve_file_password(conn, pdf_path, manager, session=None,
+                          quiet=False, record_unopened_submission=True,
+                          is_version=False):
+    """
+    Shared encryption step for a single file, used by both the batch
+    engine and the GUI's own analysis loop so the behaviour is identical.
+
+    Detects encryption and tries to open the file (empty password first,
+    then any passwords already found this run, then the supplied list).
+    Records the outcome in the encryption table for the Encrypted Files
+    report, logs it, and for a file that could not be opened records an
+    'encrypted_unopened' submission (so it is accounted for) and returns
+    skip=True. Runs even when no password list was supplied, so
+    permissions-only files still open and genuinely locked files are
+    still recorded, distinguished as 'no password list supplied'.
+
+    manager may be None (equivalent to an empty list). Never raises.
+    It is probe_file_password followed by record_file_password.
+
+    Returns a dict:
+      encrypted : the file declares encryption
+      opened    : a password (incl. empty) opened it
+      password  : the password to analyse the file with ('' = empty,
+                  None if it could not be opened)
+      skip      : True if the caller should not analyse this file
+      scheme    : encryption scheme, or ''
+    """
+    probe = probe_file_password(pdf_path, manager)
+    return record_file_password(
+        conn, pdf_path, probe, session=session, quiet=quiet,
+        record_unopened_submission=record_unopened_submission,
+        is_version=is_version)

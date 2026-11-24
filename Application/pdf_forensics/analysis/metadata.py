@@ -11,6 +11,107 @@ except ImportError:
     HAS_PILLOW = False
 
 
+
+# ---------------------------------------------------------------------
+# XMP read without side effects (build 2026-11-23). open_metadata() used
+# as a context manager rewrites the document's XMP and Info in memory on
+# exit, and an XMP packet that is not well-formed XML was replaced with
+# an empty one, with warnings printed to the console and nothing kept.
+# The XMP is now read strictly first; if that fails the problem and the
+# raw packet are recorded, and the values a repairing parser can still
+# recover are listed, labelled as such. Nothing is written back.
+# ---------------------------------------------------------------------
+XMP_RAW_MAX = 20000
+
+
+@__import__("contextlib").contextmanager
+def _quiet_pikepdf():
+    import logging
+    import warnings
+    lg = logging.getLogger("pikepdf")
+    level = lg.level
+    lg.setLevel(logging.CRITICAL)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            yield
+    finally:
+        lg.setLevel(level)
+
+
+def _xmp_value(v):
+    if isinstance(v, (set, frozenset)):
+        return ", ".join(sorted(str(x) for x in v))
+    if isinstance(v, (list, tuple)):
+        return ", ".join(str(x) for x in v)
+    return str(v)
+
+
+def raw_xmp(pdf):
+    """The document's XMP packet as text, or None."""
+    try:
+        m = pdf.Root.get("/Metadata")
+        if m is None:
+            return None
+        return m.read_bytes().decode("utf-8", "replace")
+    except Exception:
+        return None
+
+
+def read_xmp(pdf):
+    """(items, problem, raw): items [(key, text)], problem None or why the
+    XMP could not be read as it stands, raw the packet when there was a
+    problem."""
+    def _items(strict):
+        with _quiet_pikepdf():
+            meta = pdf.open_metadata(set_pikepdf_as_editor=False,
+                                     update_docinfo=False, strict=strict)
+            return [(str(k), _xmp_value(v)) for k, v in meta.items()]
+    try:
+        return _items(True), None, None
+    except Exception as e:
+        problem = f"{type(e).__name__}: {str(e)[:300]}"
+    raw = raw_xmp(pdf)
+    if raw is None or not raw.strip():
+        return [], None, None
+    try:
+        items = _items(False)
+    except Exception:
+        items = []
+    if len(raw) > XMP_RAW_MAX:
+        raw = (raw[:XMP_RAW_MAX] + f" \u2026 [shortened: {len(raw):,} "
+               f"characters in all]")
+    return items, problem, raw
+
+
+def quiet_metadata(pdf):
+    """pdf.open_metadata() for reading only: no rewrite, no console
+    output (repairing parser, as before)."""
+    with _quiet_pikepdf():
+        meta = pdf.open_metadata(set_pikepdf_as_editor=False,
+                                 update_docinfo=False)
+        list(meta.items())                     # parse now, quietly
+    return meta
+
+
+def open_image_info(image_bytes):
+    """PIL image opened for its header and EXIF only (pixels are not
+    decoded). Build 2026-11-23: PIL's decompression-bomb limit (about 179
+    million pixels) is lifted here, since nothing is decoded; very large
+    scans raised DecompressionBombWarning on the console, or an error
+    above twice the limit, and lost their EXIF."""
+    import io as _io
+    import warnings
+    from PIL import Image
+    saved = Image.MAX_IMAGE_PIXELS
+    Image.MAX_IMAGE_PIXELS = None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            return Image.open(_io.BytesIO(image_bytes))
+    finally:
+        Image.MAX_IMAGE_PIXELS = saved
+
 def extract_pdf_metadata(doc_pk, doc_mu):
     """
     Extract all available metadata from the PDF.
@@ -37,18 +138,18 @@ def extract_pdf_metadata(doc_pk, doc_mu):
 
     # --- XMP Metadata ---
     try:
-        with doc_pk.open_metadata() as xmp:
-            for k, v in xmp.items():
-                key = str(k)
-                # XMP arrays: rdf:Seq/Alt come back as lists, rdf:Bag as a
-                # set (e.g. dc:creator, dc:subject); join both as text.
-                if isinstance(v, (set, frozenset)):
-                    value = ", ".join(sorted(str(x) for x in v))
-                elif isinstance(v, (list, tuple)):
-                    value = ", ".join(str(x) for x in v)
-                else:
-                    value = str(v)
-                metadata.append(("xmp", key, value))
+        # XMP arrays: rdf:Seq/Alt come back as lists, rdf:Bag as a set
+        # (e.g. dc:creator, dc:subject); both are joined as text.
+        items, problem, raw = read_xmp(doc_pk)
+        if problem:
+            metadata.append((
+                "xmp", "_unparsed",
+                f"XMP present but could not be parsed as it stands "
+                f"({problem}); any XMP values listed were recovered by a "
+                f"repairing parser"))
+            metadata.append(("xmp", "_raw", raw))
+        for key, value in items:
+            metadata.append(("xmp", key, value))
     except Exception as e:
         metadata.append(("xmp", "_error", str(e)))
 
@@ -151,9 +252,8 @@ def extract_image_metadata(image_bytes, ext):
     except ImportError:
         return metadata
 
-    import io
     try:
-        img = Image.open(io.BytesIO(image_bytes))
+        img = open_image_info(image_bytes)
     except Exception:
         return metadata
 

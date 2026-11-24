@@ -1,6 +1,703 @@
 # PDF Forensics Suite — Changelog
 
-**Current: version 1.2.0 — 2026-11-12 (build 2026-11-12)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+**Current: version 1.3.0 — 2026-11-24 (build 2026-11-24c)** · schema revision 10. Version 1.0.0 (build 2026-10-20) is frozen. Later changes are released as incremental updates (1.0.1, 1.0.2, …); for each, update `__version__` and `BUILD_DATE` in `pdf_forensics/__init__.py` and add a dated entry below. Dated entries record when each change was made and are kept as historical record.
+
+## Version 1.3.0 — (2026-11-24, build 2026-11-24c)
+
+Parallel processing; fill colours read in their colour space for the
+white-box checks; white boxes that hide nothing grouped in the Visual
+Overlay report. No database schema change (revision 10).
+
+### Build 2026-11-24c: screens
+Build 2026-11-24b on the damaged-file case: every file as intended
+(`2e3adcb2…` analysed from its repaired copy for the 99 pages both
+readers have; its unpaired page was page 84 of 100, and that of
+`0f3b49b8…` page 2 of 5, so pairing by position would have mismatched
+every page after them); visual reports 1,070 s with 18 processes (the
+lineage of `925bdc8e…` done in 276 s; the rest is the damaged
+`774066d4…`); nothing printed to the console. Changes to the screens only:
+- **PDF Forensics Analysis:** the controls scroll when the window is too
+  short and the Run button stays visible below them (it was squeezed);
+  the screen opens taller (990 px, still limited to the screen).
+- **Graph Analysis:** opens taller (700 px) so the controls fit.
+- **Status bar:** always visible at the bottom of the window; a screen
+  taller than the window could push it out of sight. Its message is reset
+  to "Ready" when moving to another screen ("Done. 5 analysed …" stayed
+  on the graph screen).
+
+### Build 2026-11-24b: final checks
+Build 2026-11-24 on a case of the damaged files and on the 325-file case
+(no failures; triage 58 s, analysis 147 s, visual reports 318 s with 18
+processes and 4 documents in 41 parts; nothing printed to the console).
+On the small case the visual reports for `925bdc8e…` and its three
+versions took 1,220 s (5,749 s in build 2026-11-23), the versions reusing
+11,000 drawings; the damaged files came out as intended but one.
+- **Pages paired by object number when the readers disagree.**
+  `2e3adcb2…` failed: MuPDF lists 100 pages and pikepdf 99 even in the
+  repaired copy (MuPDF's page list includes an entry pikepdf rejects as
+  not a page). Such a copy is now analysed for the pages both readers
+  have. Whenever the two count different pages, each MuPDF page is now
+  paired with the pikepdf page of the same object number (`page_pairs`)
+  rather than by position, which could put one page's text beside
+  another page's content when the extra page is not the last; pages only
+  one reader lists are named in the structural warning and not examined.
+  Pages keep MuPDF's numbering.
+- **Visual reports use all processes on small cases.** The number of
+  processes was capped at the number of documents, so a case of one large
+  document and its three versions ran 4, not 18; it is now capped at the
+  pieces of work (pages that can be drawn separately). The status line
+  says when documents are drawn in parts ("1 running in 6 parts"), and the
+  session log gives the number of worker processes.
+- **Forensic Reports screen.** The Visual report panel runs across the
+  full width at the bottom, its checkbox and "Documents rendered at once"
+  on one line, with the Generate button beneath; the Report Log beside
+  the report choices ends level with them. The left-hand controls scroll
+  when the window is too short. **Graph Analysis screen:** the controls
+  scroll too, and the Generate button stays visible below them (it was
+  cut off). **Tooltips** open above the pointer when there is no room
+  below (allowing for the taskbar) and to its left near the right-hand
+  edge; one ran off the bottom of a 24-inch screen.
+- **Tests:** page pairing and the inconsistent repaired copy in
+  `test_repaired_copy.py`.
+
+### Build 2026-11-24: after the second 12,746-file run
+Build 2026-11-23 on the same 12,745 files: triage 466 s plus 278 s for its
+spreadsheet; analysis 1,405 s (13,150 s before; 15,614 s of work against
+72,500 s; `129f8caa…` 66 s against 11,796 s, `89d75b74…` 64 s against
+523 s); the one-pass image boxes matched get_image_rects on all 540
+pages checked; Visual Overlay reports 8,909 s (5,874 s before). On the
+325-file case: triage 65 s, analysis 201 s (626 s in build 2026-11-20),
+visual reports 421 s. Files are named by MD5 here.
+- **Visual reports: a regression fixed.** Build 2026-11-23 counted a page
+  shared by a document's versions once, assuming they reuse its drawings.
+  `925bdc8e…` and its three 70-page versions differ on every page and
+  reuse nothing, so the four were kept in one process and drawn one after
+  another (8,900 s, the whole of the step's last hour and a half). Every
+  document's pages now count in full; a heavy lineage is still split by
+  page range across its versions, so where versions share pages they
+  still reuse the drawings.
+- **Damaged page trees.** 26 documents failed with "Accessing nonexistent
+  PDF page number": MuPDF's repaired copy kept the broken page tree, so
+  pikepdf read fewer pages from it than MuPDF had found. MuPDF now
+  rewrites the page tree from its own page list (`select`) before the
+  copy is saved, and the copy is used only if both readers then count
+  the same pages. If no such copy can be made but pikepdf read the
+  original, the original is analysed for the pages both readers have,
+  with a structural warning giving the numbers; that also covers files
+  MuPDF could open but not save (2) and one where MuPDF finds no pages
+  (which build 2026-11-20b reported as analysed, with no pages examined).
+  A file neither reader can read (7 here: no pages for MuPDF and an
+  unreadable page tree for pikepdf, or no trailer) fails with both
+  reasons in plain words.
+- **Malformed text matrix.** A `Tm` instruction with fewer than six
+  numbers stopped one document in the white-box check (IndexError); it is
+  ignored, as viewers do, there and in the visual reports.
+- **Triage spreadsheet.** Its metadata sheet had 756 columns (one per
+  field found in any file) and wrote and styled all 13.8 million cells,
+  empty or not: 278 s. Only the fields a file has are written now (the
+  same values, about 15 times faster in a comparison); empty cells have
+  no border.
+- **PyMuPDF's own messages** ("unhandled font type ''" from triage's font
+  list, for an embedded font program whose type is missing) went to the
+  console; they are written to the session log with the document, and
+  MuPDF's warnings are no longer displayed (they were already logged).
+- **Tests:** `test_library_messages.py`; repaired-copy fallbacks in
+  `test_repaired_copy.py`; a malformed `Tm` in `test_content_ops.py`;
+  versions that share no pages in `test_visual_split.py`.
+
+### Build 2026-11-23: a 12,746-file case
+From the build 2026-11-20b run on 12,745 submitted files (16.2 GB; 5,570
+distinct documents, 2,632 prior versions; 18 processes): triage 504 s plus
+350 s writing its spreadsheet, analysis 13,150 s, reports about 175 s,
+Visual Overlay reports 5,874 s. Files are named by MD5 here.
+- **Content walks read operator names first.** Every walk over a page's
+  drawing operators (image placements, transparency, the white-box check,
+  forms, annotations) unpacked each operator with its operands, building
+  the operands as Python objects for every operator, though most are then
+  ignored. On a 13-page drawing with 2.75 million operators that took 85 s
+  per walk on the examiner's computer, against 7 s to parse the page, and
+  each page was walked three times or more; these steps were 67% of all
+  analysis time. The walks now read the name and fetch operands only for
+  the operators they act on (`analysis/content_ops.py`): about 5 times
+  faster here on a 780,000-operator page. A form drawn many times on a
+  page is read once. Identical results to build 2026-11-20b on 20
+  synthetic pages (2,624 white-box findings, 8,541 placements).
+- **Three checks no longer grow with the square of a page's images.**
+  `129f8caa…` (29 pages, 28,260 images) took 11,796 s, most of the
+  analysis step. The overlap and off-page checks asked MuPDF for each
+  image's boxes separately, and MuPDF decodes every image on the page to
+  answer each time (8,661 s and 1,218 s): the boxes now come from one call
+  per page, checked against the old call on each process's first pages
+  with images (a difference sends that process back to the old call and is
+  counted: `rects_verified`, `rects_mismatch` in the performance log).
+  Overlapping pairs are found by a sweep instead of testing every pair, in
+  the same order. The transparency step looked each image up by scanning
+  the page's whole XObject list (1,850 s); it uses a map. Identical
+  findings to build 2026-11-20b on six stand-in pages (21,328 findings).
+- **Watchdog and Skip.** A file whose worker reports no progress (a page
+  finished, images extracted) for 30 minutes is stopped and recorded as
+  failed ("timed out", with the page it was on); *Skip a file…* below the
+  progress bar does the same on request ("skipped by the examiner"). The
+  files running alongside are sent again; the run continues.
+  `--watchdog-minutes` sets the time on the command line (0 turns it off).
+- **Damaged files are analysed from MuPDF's repaired copy.** 112 distinct
+  documents (2%) were not analysed. 67 could not be opened by pikepdf
+  ("root of pages tree has no /Kids array"), 13 had fewer pages for
+  pikepdf than for MuPDF, and 4 were permissions-only encrypted with the
+  same damage. When pikepdf cannot open a file or read its pages, or the
+  two readers count different numbers of pages, the document is now
+  analysed from a copy MuPDF has repaired (and decrypted). A structural
+  warning says so and gives both page counts, since pages one reader finds
+  and the other does not can be hidden pages. Visual reports use the same
+  copy. Byte-level checks still read the original.
+- **Missing objects are findings, not failures.** 28 documents stopped on
+  a resource entry naming an object that does not exist (`'NoneType'
+  object has no attribute 'get'`). Such entries are skipped (they draw
+  nothing) and listed in a structural warning for the page.
+- **New byte-level checks** (structural warnings): cross-reference entries
+  that do not point to the object they name (typical of bytes changed
+  after the file was written, or damage), and runs of zero bytes outside
+  streams, such as a zero-filled tail (a file cut short or filled in by a
+  recovery tool).
+- **One encryption check for triage and analysis.** For a file pikepdf
+  cannot read, triage (which reads bytes) said "not encrypted" and
+  analysis (which reads the path) said "password required", and the file
+  was skipped. Both now ask MuPDF in that case, and a structural error is
+  no longer taken for a wrong password: the four permissions-only files
+  open with no password and are analysed. The Encrypted Files report now
+  shows the encryption scheme of locked files (read from the encryption
+  dictionary, which needs no password) and every file's MD5. It also
+  groups identical copies ("Files with this MD5") and states how many
+  distinct documents there are.
+- **XMP is read without side effects.** It was opened in a way that
+  rewrote it in memory, and an XMP packet that is not well-formed XML was
+  replaced by an empty one, with warnings on the console. It is now read
+  strictly; if that fails, the metadata records "XMP present but could not
+  be parsed" with the reason and the raw packet (up to 20,000 characters),
+  and lists what a repairing parser can still recover, labelled as such.
+- **Very large images:** header and EXIF reads no longer stop at PIL's
+  decompression-bomb limit (nothing is decoded), so those images keep
+  their EXIF, without console warnings.
+- **Library messages in the session log.** pikepdf's warnings went to the
+  console; they are now written to the session log with the document,
+  like MuPDF's. The visual reports' quick drawing no longer prints MuPDF
+  messages.
+- **Visual reports: heavy lineages split by page range.** A document whose
+  lineage was over a share of the work was split into its documents, each
+  drawn in a different process, so versions could not reuse its renders
+  (`925bdc8e…` and its three versions: four complete drawings of about
+  3,200 s side by side; about 19,600 s of work across 72 versions). Such a
+  lineage is now split by page range, each task drawing those pages of the
+  document and then of its versions, and pages shared by versions count
+  once in the estimate.
+- **Performance log:** operators parsed per file (`operators`), the image
+  box check counts, and the triage spreadsheet's metadata columns and
+  cells (its 350 s will be looked at once known).
+- **Not changed:** files are still started largest first. After these
+  fixes the slowest files are the large vector drawings, which size
+  already starts early; ordering by triage's image counts was not worth
+  the added complexity.
+- **Tests:** `test_content_ops.py`, `test_image_boxes.py`
+  (`fake_mupdf_boxes.py`), `test_watchdog.py`, `test_repaired_copy.py`,
+  `test_encryption_check.py`, `test_byte_structure.py`; lineage splitting
+  in `test_visual_split.py`; the stand-in analysis can report progress and
+  hang (`stub_compute.py`).
+
+### Build 2026-11-20b: ready for a 12,746-file case
+From the build 2026-11-20 run on the same 325 files (*Auto*: 17 and 16
+processes, see below): triage 59 s, analysis 626 s, graphs about 53 s,
+Visual Overlay reports 777 s.
+- **Analysis: the hand-out thread is no longer held up.** Its 48,122
+  progress messages took 0 s (the log is drawn by the window's timer), and
+  analysis now ends with its longest file and its prior versions (604 s;
+  that file is the largest and is started first). With every process busy
+  each file is slower than when most were idle, so a shorter analysis now
+  needs splitting the work inside one file; not planned.
+- **Visual reports: work estimate corrected.** Build 2026-11-20 estimated
+  work from the quick drawing alone; that missed the cost every overlay has
+  whatever the page (building its variant, separating its layer, encoding
+  it), so the 30-page document with 1,627 overlays was rated small, not
+  split, and ran 773 s alone. The estimate is now about 0.4 s per drawing
+  of a page (once per overlay plus three), plus, for a page that is slow to
+  draw (its quick drawing took 0.2 s or more; an ordinary page takes about
+  0.02 s), 110 times its quick drawing per drawing: fitted to that run, it
+  follows the time each document took with a correlation of 0.93 (0.88 for
+  either measure alone). Each document's largest page area is now in the
+  performance log (`max_area=`, square inches), to see whether page size
+  explains the two documents still underestimated.
+- **Auto ignores light background load.** At 3 to 9% busy (including this
+  application's own window), Auto had dropped to 17 and 16; load up to 10%
+  is no longer counted.
+- **Document Comparison Matrix at scale.** The query paired every placement
+  of an image with every other placement of it, growing with the square of
+  how often an image is used; it now pairs documents (each document's
+  distinct images once): the same rows in the same order (ties now in
+  document order), 15 to 20 times faster in tests. With thousands of
+  documents, an image nearly all of them carry (a logo) makes almost every
+  pair share something: 12,746 documents could give about 81 million
+  pairs. The report now lists the 10,000 pairs sharing the most images and
+  states the total at the top ("Showing the 10,000 pairs ... of N pairs");
+  smaller cases are unchanged. The pairs are counted in one pass keeping
+  only those 10,000 (about 2 million pairs in 1.7 s in a test).
+- **Analysis log at scale.** A file's line in the Processing Log, once
+  final, drops its own marker and leaves the list of lines updated each
+  second, so the log costs the same with 25,000 finished lines as with 25.
+- **Tests:** `test_doc_comparison.py` (against the previous SQL, the cap
+  and its notice); the estimate tests (`test_visual_split.py`), Auto and
+  line retirement (`test_build_19b.py`) updated.
+
+### Build 2026-11-20: Auto by physical cores; analysis log off the busy thread; drawing-time estimate
+From runs of build 2026-11-19e on the same 325 files on a computer with 18
+cores (36 logical processors):
+- Visual Overlay reports alone at 6, 18 and 24 processes: 708, 445 and
+  583 s. More processes slow each one down (total work 3,553, 4,673 and
+  6,341 s), so 18 did the work of about 13.6 processes running alone and
+  24 about 13.5: no gain past the number of cores.
+- The whole run at 18 against 12: triage 57 against 72 s, graphs about 38
+  against 55 s, visual reports 439 against 697 s; analysis 781 against
+  692 s, although its total work fell (4,122 against 5,547 s) and so did
+  its longest file (429 against 632 s). This application used 17% of the
+  machine during analysis at 18 (24% at 12): most processes were idle.
+- **Auto uses physical cores.** One process per physical core (18 on
+  that computer), still limited by memory (about 4 GB each) and now to 24
+  (was 12). Without psutil, where cores are not known: logical processors
+  less one, as before. The busy-processors rule now counts the share of
+  cores that is idle. The ⓘ panel shows cores and logical processors,
+  and why Auto counts cores.
+- **Analysis log drawn by a timer.** The thread that hands out files and
+  writes results also drew the Processing Log for every file's progress
+  (up to four times a second per running file, each time forcing the
+  window to redraw), so the more files at once, the less time it had to
+  hand out work. It now only records progress; the window draws it once a
+  second on its own thread, as the Generation and Report Logs do. Each
+  file's line has an elapsed clock and, when done, the time it took; a
+  file's prior-versions line is drawn under it.
+- **The performance log says where the analysis main loop's time went:**
+  checks before sending, writing results, progress messages (and how
+  many), waiting for workers, and how many worker processes were busy on
+  average.
+- **Visual reports: work estimated from drawing time.** Before planning,
+  the worker processes draw each page that has overlays once at 36 dpi
+  and time it (a second or two in all). A page's work is that time
+  multiplied by the number of times it is drawn (about once per overlay,
+  plus three). Before, the number of overlays was the estimate, which
+  rated four one-overlay pages that take 2 to 4 minutes each to draw as
+  trivial: they started late, each after its prior version in the same
+  process, and finished last. Tasks with more than half a process's share
+  of the work now start first, largest first; the rest follow in listed
+  order. A document and its prior versions are split into separate tasks
+  when together they exceed a share, as before, now by this estimate.
+  Each document's estimate is in the performance log (`est=`,
+  `probe_s=`). If a page cannot be drawn quickly, the median is used; with
+  no measurements at all, overlays are counted as before.
+- **Speed check:** before each step, a fixed piece of work is timed and
+  noted (Python code and compressing data), so runs at different times
+  can be compared.
+
+### Build 2026-11-19e: long documents split by pages; processor load
+From the build 2026-11-19d run on the same 325 files (*Auto*, 12
+processes): triage 71 s, analysis 655 s, graphs 38 s (from about 511 s:
+handing the largest graph to pyvis took 1.1 s instead of 470 s, by the
+fast way, with the real pyvis), Visual Overlay reports 805 s; about 1,620 s
+in all. The visual reports' rendering and page building, which that build
+did not change, were 45% slower than in the run before, so the computer was
+busier during that step; the self-check, which it did change, went from
+435 s to 193 s regardless. In both runs one 30-page document with 1,627
+overlays was the last 150 to 180 seconds of the step, alone.
+- **Visual Overlay reports: long documents split by pages.** A document
+  with more than one process's share of all the overlays (and at least 40
+  of them) is split into parts of consecutive pages, at most about half a
+  share each and no more parts than processes, balanced by the number of
+  overlays. The parts are rendered in different processes; the main
+  process joins them in page order and writes the report when the last
+  part is in. Every page is still read and numbered in each part, so the
+  overlay numbers are those of the whole document; the report, its log
+  entries (in the same order), the index and the counts are the same as
+  when the document is made at once (tested: one at a time against split,
+  with the parts finishing out of order). The performance log gives the
+  number of parts for such a document (`parts=`) and a note of how many
+  documents were split. One page is the smallest part: a single page with
+  many overlays is not split.
+- **Processor load in the performance log.** While triage, analysis, the
+  graphs and the visual reports run, the machine's processor load is
+  sampled every 2 seconds, with the share used by this application (its
+  own process and its worker processes) and by other programs. Each step
+  ends with a note, for example "processor load during visual reports:
+  machine average 64%, highest 98%; this application average 61%; other
+  programs average 3%, highest 9% over 10 s". Numbers only; needs psutil.
+- **Tests.** `test_visual_split.py` (parts against the whole document,
+  using stand-ins for PyMuPDF's rendering so the report's own code runs,
+  and the planning of parts) and `test_load_sampler.py`.
+
+### Build 2026-11-19d: graphs and visual reports faster
+From the build 2026-11-19c run on the same 325 files (*Auto*, 12
+processes): triage 67 s, analysis 644 s, graphs about 511 s, Visual
+Overlay reports 680 s; about 1,950 s in all, against about 2,390 s for
+build 2026-11-19.
+- **Graphs.** 470 of the largest graph's 505 seconds (23,432 nodes,
+  65,973 links) were spent handing the graph to pyvis: for every link,
+  pyvis reads every link already added, looking for an identical one, so
+  the time grows with the square of the number of links. A networkx graph
+  never holds the same link twice, so that search never finds anything.
+  The graph is now handed over without it, and with node ids looked up in
+  a set rather than a list; the nodes and links are still made by pyvis's
+  own code. Before each graph, a sample of it (400 nodes with their links)
+  is built both ways, and the fast way is used only if the two are
+  identical; otherwise pyvis's own method is used. A graph of that size
+  is handed over in under a second (measured with a stand-in following
+  pyvis 0.3.2). The performance log records which way was used
+  (`network_path=fast` or `pyvis`).
+- **Visual Overlay reports.** On a page with many overlays, the page with
+  every overlay removed was decoded again for every overlay, and a white
+  box's page again for its measurement and for each line painted on it;
+  they are now decoded once per page (at most 192 MB of decoded images
+  kept per process). The self-check, which rebuilt the page from every
+  layer, decoded each layer image again just after making it; it now uses
+  the part of each layer that is not transparent, kept from when it was
+  made. Layers, measurements and self-check results are identical byte
+  for byte (tested against the previous code). On a synthetic page with 54
+  white boxes, each with two painted lines, this part of the work took
+  about 30% less time; rendering the pages, the other large part, is
+  unchanged. The longest document in the run above (30 pages, 1,627
+  overlays) spent 408 of its 679 seconds in this part.
+- **psutil.** Added to `requirements.txt`: without it *Auto* cannot see
+  free memory or how busy the processors are, and uses the most the
+  computer supports. The log line and the ⓘ panel now say when it is
+  missing.
+- **Status line wording.** "*N* analysed, waiting to be written to the
+  database" (was "finished, waiting their turn"), and the same in each
+  such file's log line.
+- **Not done yet:** splitting a very long document's visual report by
+  pages across processes (done in build 2026-11-19e).
+- **Tests.** `test_graph_fast.py` (the fast way against pyvis's own, with
+  the stand-in in `tests/fake_pyvis` or the real pyvis where installed,
+  and the fallback when they differ) and `test_visual_speed.py` (layers,
+  measurements and self-check against the previous code). The graph test
+  that compares files made one at a time and several at once had a fault
+  in its own setup (the same image numbered twice in one document), which
+  showed only where pyvis is installed; fixed.
+
+### Build 2026-11-19c: start-up fix
+- Build 2026-11-19b stopped at start-up (`NameError: workers_cb`): a
+  tooltip still referred to the setting's old drop-down. The tooltip is now
+  part of the shared control, so it appears on all three screens.
+- Why the tests missed it: the check for names that are never defined
+  skipped any module using `import *`, and the interface module imports its
+  colours that way, so it was not checked at all. The check now resolves
+  `import *` from the package's own modules, and covers the interface.
+  The window is also now built end to end against a stand-in for Tk
+  before release.
+
+### Build 2026-11-19b: the setting in view, live progress, visual order
+From the build 2026-11-19 run on the same 325 files with *Auto* (12
+processes): triage 60 s, analysis 659 s (peak 422 MB of finished results
+held, none written to disk), graphs 647 s, Visual Overlay reports 882 s;
+per-file results identical to earlier runs.
+- **Files processed at once.** Every session starts at *Auto*; a number
+  chosen for one run is no longer carried into the next (the saved choice
+  had kept "1" after a comparison run). *Auto* is decided again at the
+  start of each step (triage, analysis, graphs, visual reports): the
+  machine's ceiling as before (one process per logical CPU less one, about
+  4 GB of installed memory each, at most 12), lowered when free memory is
+  short (about 2 GB free per process) or other programs are keeping the
+  processors busy. Each step's log states the number and why, with the
+  machine's numbers only (also in the performance log). The setting is
+  shown on the analysis, graphs and reports screens (one setting), in
+  amber with "not Auto" when a number is chosen, and an ⓘ panel shows
+  this computer's processors and memory, what *Auto* would choose now and
+  why, the trade-offs and the recommendation. The command line's `auto`
+  adapts in the same way.
+- **Analysis status line.** It counts files *written*, *running* and
+  *finished, waiting their turn* (build 2026-11-19d: *analysed, waiting
+  to be written to the database*), and states the order ("largest files
+  first; results written in the order selected"). The old "51 being
+  analysed (12 at once)" came from a mismatch: workers reported a file
+  under its lineage number and results used its submission index, so
+  files never left the running count, and each file's progress line stayed
+  in the log beside its result line. One key is now used for both.
+- **Generation Log (graphs).** A live line per graph, updated in place
+  with its stage (loading, thumbnails *n* of *m*, building, laying out the
+  network with its nodes and links, writing the file) and an elapsed
+  clock, and marked done with its time as each graph finishes. Lines are
+  redrawn once a second by a timer, so a step that sends no messages never
+  looks frozen and the work is not slowed. Every stage is timed in the
+  performance log (`t_load`, `t_thumbnails`, `t_build`, `t_network`,
+  `t_write_html`, `t_custom_ui`, with node and link counts).
+- **Report Log (Visual Overlay reports).** Progress is now in the Report
+  Log itself, not only in the status bar at the bottom of the window,
+  which a small window may not show: a live line with the documents done,
+  running and an elapsed clock; a line under it for each document running
+  longer than 30 seconds, with its own clock and its time when done; and a
+  completion line.
+- **Visual Overlay reports: order.** Starting every heavy document first
+  (build 2026-11-19) ran them all at the same time, and they slowed each
+  other: the longest went from 614 s to 881 s. Now the task with the most
+  overlays starts first and the rest follow in their listed order, so the
+  heavy documents are spread through the run. Each document's start and
+  end, from the start of the step, are in the performance log. Splitting
+  one very long document by pages is not done: such documents are
+  uncommon.
+- **Case index.** Files not already in the MD5 cache are hashed eight at a
+  time in threads; the index lists the same digests in the same order.
+- **New tests** (`tests/test_build_19b.py`): live lines (with a stand-in
+  text widget), *Auto* under short memory and busy processors, one key for
+  a file's start, finish and result, the visual reports' progress
+  callback and start and end times, and the case index's digests threaded
+  against one at a time.
+
+### Build 2026-11-19: no waiting on the longest files
+From the build 2026-11-17 runs on 325 files (696 analyses, 19,902 pages):
+one at a time and *Auto* (12 processes) gave identical databases (all 16
+tables, `tests/compare_databases.py`) and identical per-file results in the
+performance logs; only the image-cache hit counts differ, as each process
+has its own cache. Analysis took 3,485 s one at a time and 1,707 s with 12
+processes; Visual Overlay reports 2,919 s and 837 s. The logs showed where
+the remaining time went, and simulations from their per-file times
+reproduce both runs (1,676 s and 838 s):
+- **Analysis: largest files first, no fixed look-ahead.** Results must be
+  written in submission order, and at most 24 finished lineages could wait;
+  a 577 s file early in the selection filled that allowance, leaving on
+  average 2.9 of 12 processes busy. Now the main-process checks run for
+  every file first (in order, as before), lineages are sent to workers
+  largest file first, and finished results wait as the bytes the worker
+  sent, in memory up to 4 GB (or 15% of RAM) and in the staging folder
+  beyond that. A lineage whose turn comes before it was sent is sent at
+  once. Writing order, and so the database, is unchanged. Simulated on the
+  same run: 1,707 s to about 580 s (the longest single lineage). The
+  performance log notes the order, the peak held in memory and the number
+  of results written to disk.
+- **Visual Overlay reports: most overlays first; long lineages split.** A
+  document and its prior versions are made in one process, so shared
+  pages reuse renders; one lineage of three documents (829 s together) set
+  the run's length. A lineage with more than one process's share of all
+  overlays is now split into its documents, and work is started with the
+  most overlays first (the overlay count predicts report time far better
+  than the page count: r = 0.73 against 0.32). Reports are identical:
+  reused renders are verified identical, and results are recorded in
+  document order. Simulated: 837 s to about 620 s (the longest single
+  document).
+- **Graphs: made at the same time**, one process each
+  (`graph/generate.py`, one function used one at a time too), reported in
+  the order listed. The three graphs took 701 s one after another; about
+  300 s at once.
+- **Triage in parallel**, rows, comments, log entries and performance rows
+  in the order given (`triage._triage_one`, used one at a time too). With a
+  password list it runs one file at a time, so passwords are tried in the
+  same order and the spreadsheet records the same password for each file.
+  It took 479 s for the 325 files.
+- **One at a time: fewer window updates.** The progress line was redrawn
+  after every page and every image written, which cost about 380 s of the
+  3,485 s run (timed under image writing and page handling); it is now
+  redrawn at most four times a second and on a document's last page.
+- **The setting** is now *Files processed at once*, shown in both modes
+  (it applies to triage too); command line `triage --workers`.
+- **New tests:** dispatch order against writing order, results identical
+  whatever the order, look-ahead and memory budget (including results
+  written to disk), the visual task plan, graphs in order with no data or
+  errors, and triage spreadsheets one at a time against three at a time
+  (needs PyMuPDF), graphs one against several (needs pyvis).
+
+### Build 2026-11-17b: white boxes that hide nothing (Visual Overlay report)
+- For each white box the report now measures, from its own renders,
+  whether removing it reveals anything: the pixels the box changes, within
+  its area, where the page beneath it (every overlay removed) is not blank
+  (`_hidden_pixels`; same 10-level tolerance as the layers). Any pixel
+  counts; the number is added to the box's description.
+- A box that reveals nothing (blank paper beneath, typically a cell
+  background or panel) is listed in a collapsed group, **Hides nothing
+  visible**, below the main list. It is not removed: still ticked (so the
+  page is still shown exactly as received), still toggleable, its layer
+  still in the page, and its number, anchor and leader line shown on the
+  page when the group is opened. Its description no longer says it covers
+  page content. The summary beneath the page lists these boxes in a
+  collapsed block; both open automatically for printing.
+- Boxes that reveal content are tagged **hides content** with the number of
+  pixels.
+- Only white boxes are measured, and only on pages whose layers passed the
+  self-check and from whose base image every overlay was removed (a box
+  left in the base would otherwise measure 0); a box that cannot be
+  measured, and every other kind of overlay, stays in the main list. Every
+  document with overlay findings still gets its report.
+- The page heading and the report's opening line give the number that hide
+  nothing. The index page has a new, sortable **Hides content** column:
+  the overlays not found to hide nothing.
+- Performance log: each document's visual-report event records
+  `white_boxes_measured` and `hide_nothing`.
+- Tested with renders of a synthetic page by an independent renderer
+  (Poppler): two layout boxes measure 0 and the altered amount's box 599
+  pixels; the collapsed group, the toggles, All/None and printing checked
+  in a browser. New tests: `tests/test_visual_hides.py`.
+- HTML Reports technical guide 3.1 and Technical Reference Guide 7.4
+  describe it.
+
+### Build 2026-11-17: fill colours in named colour spaces
+- The content-stream white-box check (Text Overlay, overlay kind
+  white_box) decides whether a filled rectangle is white from its fill
+  colour. Colours set with cs and sc/scn were read without regard to their
+  colour space: one component as grey, three as RGB, four as CMYK. In a
+  spot colour (Separation, DeviceN) a tint of 1 is full ink and 0 is no
+  ink, the opposite of grey, so:
+  - shapes drawn in a black spot colour at full ink (table borders, dark
+    title bands) were reported as white boxes with text painted on them
+    (false positives; one 29-page document gave 113, of which 110 were
+    0.3-0.6 pt table borders and one a black band behind a white title);
+  - a box in a spot colour at no ink (paper white) was not seen as white
+    (missed white boxes).
+- New `analysis/colour.py` evaluates the colour in its space where that
+  can be done exactly: device spaces, ICC-based and calibrated spaces (by
+  number of components), Lab, Indexed palettes, and Separation/DeviceN
+  through their tint transform (function types 0 one-input, 2, 3 and 4).
+  A colour that cannot be evaluated (a pattern, an unsupported function,
+  a missing resource, the /None colorant) is read exactly as before, so no
+  shape is treated differently from earlier versions unless its colour is
+  known.
+- Applied identically in the detector, its reference copy (verification
+  mode) and the Visual Overlay report's layer separation
+  (`reports/reveal.py`). Results are cached per page.
+- Findings and risk scores change for documents that use such colours.
+  Documents analysed with an earlier build must be analysed again for the
+  change to apply.
+- On the 29-page document above: 113 findings become 3; each of the 3 is a
+  white box in a spot colour at no ink, and removing it changes no pixel
+  when the page is rendered with an independent renderer (Poppler): white
+  boxes over blank paper, not reported before.
+- Technical Reference Guide 7.2.1 describes the colour evaluation.
+- New tests: `tests/test_colour.py` (each colour-space family, the
+  fallback to the old reading, and the detector and its reference copy on
+  synthetic pages).
+
+### Build 2026-11-15b
+- Visual Overlay reports made several at once were not written: the
+  report reads the case number from the session and registers its file
+  as an output of the session, and the stand-in session used in worker
+  processes provided neither, so each report failed in its worker (the
+  index listed the documents without reports; the session log gave the
+  reason). The stand-in now carries the case number, session timestamp
+  and case folder, and records registered outputs, which the main process
+  adds to the session in order. One at a time was not affected.
+- New tests: the stand-in provides every session attribute used by code
+  that runs in worker processes, and a visual report page is assembled
+  with it.
+
+### Build 2026-11-15
+
+### Several files analysed at once
+- Full parsing can analyse several PDFs at the same time, each in its own
+  process (`analysis/parallel.py`). The analysis itself is the same code as
+  before; what changes is where it runs.
+- The unit of work is a submitted file together with its prior versions,
+  which always run in the same process, parent first, so prior versions
+  still reuse the parent's unchanged pages and images.
+- Worker processes only compute. The main process writes everything, in
+  the order the files were selected: the duplicate check, the encryption
+  record, the database rows (`analysis/commit.py`), the session-log entries
+  and the performance-log rows. Analysis ids, duplicate decisions and every
+  table therefore come out as in a one-at-a-time run.
+- Identical copies are decided when their turn comes, against what is
+  already in the database. A file found to be a copy of one analysed
+  earlier in the run is not analysed at all when this is known in advance;
+  when it is only known later (for example a copy of another file's prior
+  version), its results are discarded and nothing it wrote is kept, so the
+  case folder is as a one-at-a-time run leaves it.
+- Images are written by a worker to a staging folder inside the extracted
+  images folder (`.pending_…`) and moved into the document's folder when
+  its analysis is written; the staging folder is removed at the end of the
+  run.
+- Session-log entries are written with the time they were recorded, a
+  file's entries together; the session log notes the number of worker
+  processes. The performance log records `workers=N` in the run's options;
+  each file's row gives that file's own processing time (they overlap), and
+  the RUN line gives the elapsed time.
+- A worker process that stops unexpectedly (for example a crash inside a
+  PDF library) no longer ends the run: the files it was analysing are
+  re-run one at a time, and a file that fails again on its own is recorded
+  as failed. If a worker cannot pass its results back, the main process
+  analyses that file itself. Closing the window during a run stops the
+  worker processes at once.
+- Equivalence is tested: the same files analysed one at a time and with
+  several workers give identical databases (`tests/`,
+  `tests/compare_databases.py`).
+
+### Setting
+- New option: **Files processed at once** (named *Files analysed at once*,
+  under Full parsing, before build 2026-11-19). *Auto* (the
+  default) uses one process per processor core, less one, limited by memory
+  (about 4 GB per process) and to 12. *1* runs the one-at-a-time loop of
+  earlier versions unchanged. The choice is remembered.
+- Command line: `analyze --workers N|auto` (default auto) and
+  `report --visual --workers N|auto`.
+
+### Visual Overlay reports in parallel
+- Per-document visual reports are made several at once with the same
+  setting, a document and its prior versions in the same process (so
+  unchanged pages still reuse renders). The reports, the index, the log
+  entries and the performance-log events are the same, in the same order.
+  Each process's render cache is a share of the previous single budget.
+
+### Prior versions on the command line
+- `analyze --prior-versions` extracts and analyses prior versions, as the
+  GUI option does (previously GUI only).
+
+### Files with the same name (also one at a time)
+- Two submitted files with the same name (from different folders) shared
+  one image folder and one prior-version folder: their images were mixed,
+  and the second file's prior versions overwrote the first's, so the first
+  file's database rows pointed to version files that now held other bytes.
+  The second now gets `name_2` (the third `name_3`, …), compared
+  case-insensitively as Windows does.
+
+### Command line, small alignment
+- With `--workers` above 1 or `--prior-versions`, an encrypted file that is
+  an identical copy of one already analysed is recorded as an identical
+  copy only, without an encryption-table row, as the GUI has always done.
+  With `--workers 1` the command line behaves as before.
+
+### Packaged executable
+- `multiprocessing.freeze_support()` in every entry point
+  (`pdf_forensics.py`, `pdf_forensics/__main__.py` and the single-file
+  build's launcher), without which a packaged executable would start the
+  application again in each worker process.
+
+### Internal (no change in behaviour)
+- `analyze_pdf(defer=True)` returns its results instead of writing them;
+  `commit_analysis()` writes them (and is what `analyze_pdf` itself now
+  calls). `passwords.resolve_file_password()` is now
+  `probe_file_password()` followed by `record_file_password()`.
+  `extract_prior_versions()` takes the name to base folders on and can
+  report the files it wrote. `Session.replay()`, `PerfLog.file_resume()`
+  and `PerfLog.stage_add()`, and `perf.RecordingPerf`, support results made
+  in worker processes.
+
+### Documentation
+- Technical Reference Guide: the architecture table gave the database
+  schema as revision 9; it is revision 10 (since 1.1.0, timeline events).
+  The table now also lists the modules added since 1.0
+  (`analysis/timeline.py`, `analysis/page_reuse.py`, `perf.py`,
+  `pathutil.py`, `reports/timeline_xlsx.py`) and the new
+  `analysis/parallel.py` and `analysis/commit.py`. Section 5.2 describes
+  parallel analysis. Getting Started describes the new setting.
+- The repository README's 1.2.0 entries gave build 2026-11-03; the 1.2.0
+  build is 2026-11-12. Now 1.3.0, build 2026-11-15.
+- `build_exe/` (scripts to build a Windows executable with PyInstaller,
+  one folder or a single file) is now part of the application folder;
+  see "Building an executable" in the README.
+
+### Tests
+- New `tests/` folder (standard-library `unittest`; synthetic files only):
+  static checks (every module compiles; no undefined names), regression
+  tests for the fixes made since 1.0, the parallel runner with a stand-in
+  analysis (order, copies, same-name files, encryption, crashes, logs),
+  visual reports one-at-a-time against several at once, and real analyses
+  compared with `tests/compare_databases.py` (needs PyMuPDF). The
+  comparison tool can also be run on two case databases.
+
+### Not parallel
+- Triage, graphs and the other reports run as before.
+- A password found while opening a prior version in a worker is not
+  offered first to the files analysed by other workers. This only changes
+  the order in which passwords are tried (and so the attempt count
+  recorded), not whether a file opens, and only when a prior version needs
+  a different password from its parent.
 
 ## Version 1.2.0 — Release (2026-11-12, build 2026-11-12)
 
@@ -41,8 +738,6 @@ composite check 4%.
 
 ### Build 2026-11-10
 
-### Build 2026-11-10
-
 Verification of build 2026-11-06 on a 325-file case: every analysis check
 passed (reused pages 11,254, reused forms 14,754, image-less forms 21,939,
 overlay detector on all 19,902 pages; no mismatches), findings identical to
@@ -63,8 +758,6 @@ whole workflow 3.4 h (7.7 h in 1.1.6).
   decomposing white boxes (t_whitebox), the one-page check (t_single), the
   final composite check (t_check) and embedding images (t_encode).
   (`reports/visual.py`)
-
-### Build 2026-11-06
 
 ### Build 2026-11-06: from the build 2026-11-05 performance logs
 

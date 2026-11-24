@@ -1,5 +1,147 @@
 # PDF Forensics Suite — Release Notes
 
+## Version 1.3.0
+
+**Released:** 2026-11-24 · **Build:** 2026-11-24c · **Database schema:** revision 10 (unchanged)
+
+### What changed
+
+- **Several files analysed at once.** Full parsing analyses PDFs in
+  parallel, one process per file, and writes the results to the database
+  in the order the files were selected, so the database is the same as
+  when analysing one file at a time. A file and its prior versions are
+  analysed together, so prior versions still reuse the parent's unchanged
+  pages. The largest files are started first. Set how many with *Files
+  processed at once* (*Auto* by default; *1* is the one-at-a-time behaviour
+  of earlier versions), or with `--workers` on the command line.
+- **Triage, Visual Overlay reports and graphs in parallel**, with the same
+  setting (triage with a password list runs one file at a time).
+- **Measured on 325 files (696 analyses, 19,902 pages):** with *Auto*
+  (12 processes), analysis took 1,707 s against 3,806 s in 1.2.0 and the
+  Visual Overlay reports 837 s against 3,125 s, with identical databases
+  (all 16 tables) one at a time and with *Auto*. Build 2026-11-19 removes
+  the remaining waits found in those runs (see the CHANGELOG).
+- **The setting in view (build 2026-11-19b).** *Files processed at once*
+  starts at *Auto* every session, and *Auto* adapts at the start of each
+  step to the memory free and how busy the processors are. It is shown on
+  the analysis, graphs and reports screens, in amber when it is not
+  *Auto*, with an ⓘ panel explaining what *Auto* chooses on your
+  computer and why.
+- **Live progress in the logs.** The analysis status line counts files
+  written, running and analysed but waiting to be written to the
+  database, and states the order. The Generation Log has a live line per
+  graph with its stage and a clock; the Report Log shows the Visual
+  Overlay reports' progress, with a line for each document taking longer
+  than 30 seconds.
+- **Graphs and visual reports faster (build 2026-11-19d).** Large graphs
+  are handed to pyvis without its search for duplicate links (most of a
+  large graph's time), after a sample has been checked to come out
+  identical; the Visual Overlay report decodes shared page images once per
+  page and checks its layers without decoding them again, with identical
+  output. psutil is now in the requirements, so *Auto* can adapt.
+- **Long documents split by pages (build 2026-11-19e).** A document with
+  many more overlays than the rest has its Visual Overlay report made in
+  parts of consecutive pages by several processes, and joined in page
+  order: the same report, faster. The performance log now also records
+  the processor load during each step, and how much of it came from other
+  programs.
+- **Auto uses physical cores (build 2026-11-20).** One process per physical
+  core (more processes than cores were measured to give no gain), up to
+  24. The analysis log is drawn once a second by the window itself, so
+  showing progress no longer slows the analysis down, and the visual
+  reports estimate each page's work from a quick drawing of it, so slow
+  pages start first.
+- **Large cases (build 2026-11-20b).** The Document Comparison Matrix lists
+  the 10,000 pairs of documents sharing the most images and states the
+  total, as a case of thousands of documents can have millions of pairs;
+  it is also much faster. The Processing Log stays quick with tens of
+  thousands of files.
+- **Very large cases (builds 2026-11-23 and 2026-11-24).** From two 12,745-file runs (analysis 13,150 s, then 1,405 s):
+  - **Analysis much faster on drawings and image-heavy pages.** Walking a
+    page's drawing operators no longer builds every operator's operands,
+    and the overlap, off-page and transparency checks no longer grow with
+    the square of a page's images. One 29-page document with 28,260 images
+    took 3.3 hours of a 3.7-hour analysis.
+  - **A watchdog:** a file making no progress for 30 minutes is stopped
+    and recorded as timed out; *Skip a file…* stops one on request.
+  - **Damaged files are analysed** from a copy MuPDF has repaired, with a
+    structural warning saying so; before, 112 documents (2%) were not
+    analysed. A reference to a missing object is now a finding, not a
+    failure. New checks report cross-reference entries that do not point
+    to their object, and zero-filled stretches such as a truncated tail.
+  - **Encryption:** triage and analysis agree. A permissions-only file
+    that only MuPDF can read is no longer taken for a locked one, and the
+    Encrypted Files report shows the scheme and MD5 of locked files and
+    groups identical copies.
+  - **XMP** that is not well-formed is recorded as such, with the raw
+    packet, instead of being silently replaced by an empty one. Very large
+    images keep their EXIF. pikepdf's warnings go to the session log, not
+    the console.
+  - **Visual reports:** a heavy document and its versions are split by
+    page range, so versions reuse its renders where pages are unchanged.
+  - **Triage spreadsheet:** only the metadata fields each file has are
+    written; a case with 756 metadata fields took 278 s to write before.
+  - **Damaged page trees:** when the two PDF readers list different pages,
+    the pages they share are paired by object number and examined; the
+    others are named in a structural warning.
+- **Screens:** on Forensic Reports the Visual report panel runs across the
+  bottom with its settings on one line; the left-hand controls of the
+  analysis, report and graph screens scroll when the window is short, the
+  Run and Generate buttons and the status bar stay visible, the status
+  message is cleared between screens, and tooltips stay on the screen.
+- **Prior versions from the command line:** `analyze --prior-versions`.
+- **Files with the same name** from different folders now get their own
+  image and prior-version folders (`name`, `name_2`, …). Before, they
+  shared one, so images were mixed and one file's prior versions could
+  overwrite the other's.
+- **Fewer false white-box overlays.** Fill colours given in a named colour
+  space are now read in that space. Shapes drawn in a black spot colour
+  (table borders, dark bands) were reported as white boxes with text
+  painted on them; boxes in a spot colour at no ink (paper white) were
+  missed. A colour that cannot be evaluated is read as before. Findings and
+  risk scores change for documents that use such colours: analyse them
+  again.
+- **Visual Overlay report: white boxes that hide nothing are set aside.**
+  Each white box is measured from the report's own renders: if removing it
+  reveals nothing (blank paper beneath), it is listed in a collapsed
+  *Hides nothing visible* group, still ticked and toggleable; boxes that
+  reveal content are tagged *hides content*. Nothing is removed, and every
+  document still gets its report. The index page has a sortable *Hides
+  content* column.
+- **Sturdier runs.** A worker process that crashes no longer stops the run:
+  its files are re-run one at a time. Closing the window during a run stops
+  the worker processes.
+- **Tests.** A `tests/` folder with the application's automated tests, and
+  `tests/compare_databases.py` to check that two runs over the same files
+  produced identical databases.
+
+### Upgrading
+
+Replace the application folder with the 1.3.0 package. No database
+migration is needed. To confirm on your own files that parallel analysis
+gives the same results, analyse a folder once with *Files processed
+at once* set to *1* and once with *Auto*, into two case folders, and run
+`python tests/compare_databases.py first.db second.db`.
+
+If you build an executable with the build kit, rebuild it from this
+version: the entry points now include what a packaged executable needs to
+run worker processes.
+
+### Verifying this release
+
+```bash
+# Windows (PowerShell)
+Get-FileHash PDF_Forensics_Suite_v1.3.0.zip -Algorithm SHA256
+
+# macOS / Linux
+sha256sum PDF_Forensics_Suite_v1.3.0.zip
+```
+
+The value must match the one in `SHA256SUMS.txt`. Running
+`python pdf_forensics.py --version` should print `pdf_forensics 1.3.0 (build 2026-11-20b)`.
+
+---
+
 ## Version 1.2.0
 
 **Released:** 2026-11-12 · **Build:** 2026-11-12 · **Database schema:** revision 10 (unchanged)

@@ -8,6 +8,8 @@ import pikepdf
 from pikepdf import Name
 from itertools import combinations
 
+from pdf_forensics.analysis import colour as _colour
+
 
 def extract_page_text(page_mu):
     """
@@ -289,8 +291,9 @@ def analyze_form_xobject(form_xobj, xobj_name, page_num, findings,
     tol = HIDDEN_THRESHOLD_PTS
     image_dos = []   # (name, ctm, clips-at-do, resolved)
 
-    for operands, operator in ops:
-        op = str(operator)
+    from pdf_forensics.analysis.content_ops import named_ops, operands_of
+    names, ops = named_ops(ops)
+    for i, op in enumerate(names):
         if op == "q":
             gstack.append((ctm, list(clips)))
         elif op == "Q":
@@ -298,14 +301,14 @@ def analyze_form_xobject(form_xobj, xobj_name, page_num, findings,
                 ctm, clips = gstack.pop()
         elif op == "cm":
             try:
-                vals = [float(x) for x in operands]
+                vals = [float(x) for x in operands_of(ops[i])]
                 if len(vals) == 6:
                     ctm = _mat_multiply(tuple(vals), ctm)
             except (ValueError, TypeError):
                 pass
         elif op == "re":
             try:
-                rx, ry, rw, rh = (float(x) for x in operands[:4])
+                rx, ry, rw, rh = (float(x) for x in operands_of(ops[i])[:4])
                 path_rects.append((rx, ry, rw, rh))
             except (ValueError, TypeError):
                 path_has_nonrect = True
@@ -340,7 +343,7 @@ def analyze_form_xobject(form_xobj, xobj_name, page_num, findings,
             path_rects = []
             path_has_nonrect = False
         elif op == "Do":
-            name = str(operands[0])
+            name = str(operands_of(ops[i])[0])
             if name in image_names:
                 image_dos.append((name, ctm, list(clips), True))
             elif name in unresolved_names:
@@ -588,6 +591,132 @@ def _poly_clip(subject, clip):
     return output
 
 
+
+# ---------------------------------------------------------------------
+# Image boxes of a page in one pass (build 2026-11-23).
+#
+# get_image_rects(xref) finds an image's boxes through get_image_info(
+# xrefs=True), which decodes every image on the page to match it by
+# digest. Called once per distinct image, that is the square of the
+# number of images: a 29-page document with 28,260 images spent 8,661 s
+# in the overlap check and 1,218 s in the off-page check. The boxes of
+# all images are now read with one get_image_info(xrefs=True) call per
+# page and shared by both checks. Each process compares the result with
+# get_image_rects on its first pages with images (RECT_CHECK_PAGES, at
+# most RECT_CHECK_MAX_XREFS images each); if they ever differ, it goes
+# back to get_image_rects for the rest of the run and counts the
+# mismatch (performance log: rects_verified, rects_mismatch).
+# ---------------------------------------------------------------------
+RECT_CHECK_PAGES = 30
+RECT_CHECK_MAX_XREFS = 25
+RECT_STATS = {"verified": 0, "mismatch": 0}
+_RECT_STATE = {"left": RECT_CHECK_PAGES, "ok": True}
+_RECT_CACHE = {"page": None, "boxes": None}
+
+
+def _rect_key(r):
+    return (round(r.x0, 6), round(r.y0, 6), round(r.x1, 6), round(r.y1, 6))
+
+
+def _old_image_rects(page_mu, xref, transform):
+    """get_image_rects for one image, as the checks called it before."""
+    if transform:
+        try:
+            return [(rect, _mat6(mat)) for rect, mat in
+                    page_mu.get_image_rects(xref, transform=True)]
+        except Exception:
+            try:
+                return [(r, None) for r in page_mu.get_image_rects(xref)]
+            except Exception:
+                return []
+    try:
+        return list(page_mu.get_image_rects(xref))
+    except Exception:
+        return []
+
+
+def _page_image_boxes(page_mu):
+    """{xref: [(Rect, mat6 or None), ...]} for every image drawn on the
+    page, in drawing order, from one get_image_info call; None when
+    that is not available (the caller then uses get_image_rects)."""
+    if not _RECT_STATE["ok"]:
+        return None
+    if _RECT_CACHE["page"] is page_mu:
+        return _RECT_CACHE["boxes"]
+    try:
+        import pymupdf as _pm
+        boxes = {}
+        for im in page_mu.get_image_info(xrefs=True):
+            xref = im.get("xref", 0)
+            if not xref:
+                continue
+            tr = im.get("transform")
+            boxes.setdefault(xref, []).append(
+                (_pm.Rect(im["bbox"]),
+                 _mat6(tr) if tr is not None else None))
+    except Exception:
+        boxes = None
+    if boxes is not None and _RECT_STATE["left"] > 0 and boxes \
+            and len(boxes) <= RECT_CHECK_MAX_XREFS:
+        _RECT_STATE["left"] -= 1
+        same = True
+        for xref, got in boxes.items():
+            old = _old_image_rects(page_mu, xref, True)
+            if ([(_rect_key(r), m) for r, m in old]
+                    != [(_rect_key(r), m) for r, m in got]):
+                same = False
+                break
+        if same:
+            RECT_STATS["verified"] += 1
+        else:
+            RECT_STATS["mismatch"] += 1
+            _RECT_STATE["ok"] = False
+            boxes = None
+    _RECT_CACHE["page"], _RECT_CACHE["boxes"] = page_mu, boxes
+    return boxes
+
+
+def _image_rects(page_mu, xref, transform, boxes):
+    """One image's boxes: from the page's one-pass boxes when there are
+    any, otherwise from get_image_rects as before."""
+    if boxes is None:
+        return _old_image_rects(page_mu, xref, transform)
+    got = boxes.get(xref, [])
+    return list(got) if transform else [r for r, _ in got]
+
+
+
+OVERLAP_SWEEP_MIN = 48       # fewer boxes than this: test every pair
+
+
+def _overlap_candidates(rects):
+    """Index pairs (i, j), i < j, in the order combinations() gives them,
+    of the boxes in rects ((label, Rect, mat) tuples) that may intersect:
+    every pair whose boxes touch or overlap (a superset of the pairs with
+    a non-empty intersection, which the caller still tests)."""
+    n = len(rects)
+    if n < OVERLAP_SWEEP_MIN:
+        return combinations(range(n), 2)
+    box = []
+    for _l, r, _m in rects:
+        x0, x1 = (r.x0, r.x1) if r.x0 <= r.x1 else (r.x1, r.x0)
+        y0, y1 = (r.y0, r.y1) if r.y0 <= r.y1 else (r.y1, r.y0)
+        box.append((x0, y0, x1, y1))
+    order = sorted(range(n), key=lambda i: box[i][0])
+    pairs = []
+    active = []
+    for i in order:
+        x0, y0, x1, y1 = box[i]
+        active = [j for j in active if box[j][2] >= x0]
+        for j in active:
+            b = box[j]
+            if b[1] <= y1 and y0 <= b[3]:
+                pairs.append((j, i) if j < i else (i, j))
+        active.append(i)
+    pairs.sort()
+    return pairs
+
+
 def check_overlapping_images(page_mu, page_num, findings,
                              label_to_info, transparency):
     """
@@ -606,23 +735,13 @@ def check_overlapping_images(page_mu, page_num, findings,
     # label_to_info, we need to match by xref AND position.
     # get_image_rects(xref) returns all rendered positions for that xref.
     xref_rects_cache = {}
+    boxes = _page_image_boxes(page_mu) if label_to_info else None
 
     for label, info in sorted(label_to_info.items()):
         xref = info["xref"]
         if xref not in xref_rects_cache:
-            entries = []
-            try:
-                for item in page_mu.get_image_rects(xref, transform=True):
-                    rect, mat = item
-                    entries.append((rect, _mat6(mat)))
-            except Exception:
-                # Older PyMuPDF or failure: rects without transforms.
-                try:
-                    entries = [(r, None)
-                               for r in page_mu.get_image_rects(xref)]
-                except Exception:
-                    entries = []
-            xref_rects_cache[xref] = entries
+            xref_rects_cache[xref] = _image_rects(page_mu, xref, True,
+                                                  boxes)
 
     # Assign rects to labels. When multiple labels share the same xref,
     # assign rects in order.
@@ -643,9 +762,12 @@ def check_overlapping_images(page_mu, page_num, findings,
         return (mat is not None and
                 (abs(mat[1]) > 1e-6 or abs(mat[2]) > 1e-6))
 
-    # Check all pairs for overlap
-    for (label_a, rect_a, mat_a), (label_b, rect_b, mat_b) in \
-            combinations(rects, 2):
+    # Check every pair whose boxes can meet (build 2026-11-23: a sweep
+    # finds them instead of testing all n*(n-1)/2 pairs; the pairs are
+    # taken in the same order, so the findings are the same).
+    for ia, ib in _overlap_candidates(rects):
+        label_a, rect_a, mat_a = rects[ia]
+        label_b, rect_b, mat_b = rects[ib]
         intersection = rect_a & rect_b
         if intersection.is_empty:
             continue
@@ -755,6 +877,8 @@ def check_image_smasks(page_pk, page_num, findings, label_to_info):
                         if hasattr(xobj_ref, "resolve") else xobj_ref)
         except Exception:
             continue
+        if not hasattr(resolved, "get"):              # missing object
+            continue
         if (resolved.get("/Subtype") == Name("/Image")
                 and "/SMask" in resolved):
             try:
@@ -806,14 +930,12 @@ def check_offpage_images(page_mu, page_num, findings, label_to_info):
     # Build label -> rect mapping using the same algorithm as
     # check_overlapping_images so labels stay consistent.
     xref_rects_cache = {}
+    boxes = _page_image_boxes(page_mu) if label_to_info else None
     for label, info in sorted(label_to_info.items()):
         xref = info["xref"]
         if xref not in xref_rects_cache:
-            try:
-                xref_rects_cache[xref] = list(
-                    page_mu.get_image_rects(xref))
-            except Exception:
-                xref_rects_cache[xref] = []
+            xref_rects_cache[xref] = _image_rects(page_mu, xref, False,
+                                                  boxes)
 
     xref_rect_idx = {}
     label_rects = []  # (label, rect)
@@ -827,6 +949,9 @@ def check_offpage_images(page_mu, page_num, findings, label_to_info):
             xref_rect_idx[xref] = idx + 1
             if not rect.is_infinite and not rect.is_empty:
                 label_rects.append((label, rect))
+
+    # The off-page check is the last user of the page's boxes.
+    _RECT_CACHE["page"] = _RECT_CACHE["boxes"] = None
 
     # PDF coordinate convention: y increases UPWARD. PyMuPDF's Rect
     # uses y0 (top in PDF space) and y1 (bottom). For comparison
@@ -1075,8 +1200,8 @@ def _has_opaque_background(annot_obj):
                 ops = pikepdf.parse_content_stream(n_stream.obj
                       if hasattr(n_stream, "obj") else n_stream)
                 has_rect = False
-                for operands, operator in ops:
-                    op = str(operator)
+                from pdf_forensics.analysis.content_ops import op_names
+                for op in op_names(ops):
                     if op == "re":
                         has_rect = True
                     elif op in ("f", "F", "B", "B*", "b", "b*") \
@@ -1301,6 +1426,17 @@ def check_text_overlays(page_pk, page_mu, page_num, findings,
     return added
 
 
+def _page_resources(page_pk):
+    """The page's resources (inherited ones included), or None."""
+    try:
+        return page_pk.Resources
+    except Exception:
+        try:
+            return page_pk.obj.get("/Resources")
+        except Exception:
+            return None
+
+
 def check_content_stream_text_overlay(page_pk, page_mu, page_num,
                                       findings, content_ops=None):
     """
@@ -1337,7 +1473,8 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num,
     try:
         ops = (content_ops if content_ops is not None
                else list(pikepdf.parse_content_stream(page_pk)))
-        operators = [(str(op), operands) for operands, op in ops]
+        from pdf_forensics.analysis.content_ops import OpView
+        operators = OpView(ops)
     except Exception:
         return 0
 
@@ -1345,6 +1482,9 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num,
     ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
     ctm_stack = []
     fill_color = (0.0, 0.0, 0.0)   # default black
+    fill_space = None               # colour space set by cs (1.3.0)
+    resources = _page_resources(page_pk)
+    colour_cache = {}
     white_rects = []                # list of (x0,y0,x1,y1) in page space
 
     def transform_point(ctm, x, y):
@@ -1369,10 +1509,10 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num,
             # Fill colour is part of the graphics state and must be
             # saved/restored with it, or a white fill set inside a
             # q...Q block would incorrectly persist afterwards.
-            ctm_stack.append((ctm, fill_color))
+            ctm_stack.append((ctm, fill_color, fill_space))
         elif op == 'Q':
             if ctm_stack:
-                ctm, fill_color = ctm_stack.pop()
+                ctm, fill_color, fill_space = ctm_stack.pop()
         elif op == 'cm':
             try:
                 vals = tuple(float(str(x)) for x in operands)
@@ -1380,6 +1520,7 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num,
             except Exception:
                 pass
         elif op in ('rg', 'g'):
+            fill_space = None          # g / rg select a device space
             try:
                 if op == 'g':
                     v = float(str(operands[0]))
@@ -1390,6 +1531,7 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num,
             except Exception:
                 pass
         elif op == 'k':
+            fill_space = None
             # CMYK non-stroking colour. White = 0 0 0 0 k. Convert to
             # RGB so the single white test below applies.
             try:
@@ -1406,6 +1548,8 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num,
             # resolved here, so conservatively treat the colour as
             # non-white until explicitly set.
             fill_color = (0.0, 0.0, 0.0)
+            fill_space = (_colour.lookup_space(operands[0], resources)
+                          if operands else None)
         elif op in ('RG', 'G', 'K', 'CS', 'SC', 'SCN'):
             pass  # stroking-colour operators — do not affect fill
         elif op in ('sc', 'scn'):
@@ -1419,7 +1563,17 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num,
             except Exception:
                 fill_color = (0.0, 0.0, 0.0)
                 vals = None
-            if vals is not None:
+            # Since 1.3.0 the colour is evaluated in its colour space
+            # where that can be done exactly (analysis/colour.py): a spot
+            # colour's tint of 1 is full ink, not white. Where it cannot,
+            # the components are read as before.
+            _rgb = (_colour.resolve_rgb(fill_space, vals, resources,
+                                        cache=colour_cache)
+                    if vals is not None and fill_space is not None
+                    else None)
+            if _rgb is not None:
+                fill_color = _rgb
+            elif vals is not None:
                 if len(vals) == 1:
                     fill_color = (vals[0],) * 3
                 elif len(vals) == 3:
@@ -1433,7 +1587,7 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num,
                     fill_color = (0.0, 0.0, 0.0)
         elif op == 're':
             if i + 1 < len(operators):
-                next_op = operators[i + 1][0]
+                next_op = operators.names[i + 1]
                 if next_op in ('f', 'F', 'B', 'B*', 'b', 'b*'):
                     # Check fill colour is white
                     if (fill_color and
@@ -1520,8 +1674,12 @@ def check_content_stream_text_overlay(page_pk, page_mu, page_num,
             if op == 'Tm':
                 try:
                     vals = [float(str(x)) for x in operands]
-                    Tm  = vals
-                    Tlm = list(vals)
+                    # A malformed Tm (not six numbers) is ignored, as
+                    # viewers do; it stopped the analysis of a damaged
+                    # file (build 2026-11-23b).
+                    if len(vals) == 6:
+                        Tm  = vals
+                        Tlm = list(vals)
                 except Exception:
                     pass
             elif op in ('Td', 'TD'):
@@ -1644,7 +1802,8 @@ def _check_content_stream_text_overlay_reference(page_pk, page_mu, page_num,
     try:
         ops = (content_ops if content_ops is not None
                else list(pikepdf.parse_content_stream(page_pk)))
-        operators = [(str(op), operands) for operands, op in ops]
+        from pdf_forensics.analysis.content_ops import OpView
+        operators = OpView(ops)
     except Exception:
         return 0
 
@@ -1652,6 +1811,9 @@ def _check_content_stream_text_overlay_reference(page_pk, page_mu, page_num,
     ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
     ctm_stack = []
     fill_color = (0.0, 0.0, 0.0)   # default black
+    fill_space = None               # colour space set by cs (1.3.0)
+    resources = _page_resources(page_pk)
+    colour_cache = {}
     white_rects = []                # list of (x0,y0,x1,y1) in page space
 
     def transform_point(ctm, x, y):
@@ -1676,10 +1838,10 @@ def _check_content_stream_text_overlay_reference(page_pk, page_mu, page_num,
             # Fill colour is part of the graphics state and must be
             # saved/restored with it, or a white fill set inside a
             # q...Q block would incorrectly persist afterwards.
-            ctm_stack.append((ctm, fill_color))
+            ctm_stack.append((ctm, fill_color, fill_space))
         elif op == 'Q':
             if ctm_stack:
-                ctm, fill_color = ctm_stack.pop()
+                ctm, fill_color, fill_space = ctm_stack.pop()
         elif op == 'cm':
             try:
                 vals = tuple(float(str(x)) for x in operands)
@@ -1687,6 +1849,7 @@ def _check_content_stream_text_overlay_reference(page_pk, page_mu, page_num,
             except Exception:
                 pass
         elif op in ('rg', 'g'):
+            fill_space = None          # g / rg select a device space
             try:
                 if op == 'g':
                     v = float(str(operands[0]))
@@ -1697,6 +1860,7 @@ def _check_content_stream_text_overlay_reference(page_pk, page_mu, page_num,
             except Exception:
                 pass
         elif op == 'k':
+            fill_space = None
             # CMYK non-stroking colour. White = 0 0 0 0 k. Convert to
             # RGB so the single white test below applies.
             try:
@@ -1713,6 +1877,8 @@ def _check_content_stream_text_overlay_reference(page_pk, page_mu, page_num,
             # resolved here, so conservatively treat the colour as
             # non-white until explicitly set.
             fill_color = (0.0, 0.0, 0.0)
+            fill_space = (_colour.lookup_space(operands[0], resources)
+                          if operands else None)
         elif op in ('RG', 'G', 'K', 'CS', 'SC', 'SCN'):
             pass  # stroking-colour operators — do not affect fill
         elif op in ('sc', 'scn'):
@@ -1726,7 +1892,17 @@ def _check_content_stream_text_overlay_reference(page_pk, page_mu, page_num,
             except Exception:
                 fill_color = (0.0, 0.0, 0.0)
                 vals = None
-            if vals is not None:
+            # Since 1.3.0 the colour is evaluated in its colour space
+            # where that can be done exactly (analysis/colour.py): a spot
+            # colour's tint of 1 is full ink, not white. Where it cannot,
+            # the components are read as before.
+            _rgb = (_colour.resolve_rgb(fill_space, vals, resources,
+                                        cache=colour_cache)
+                    if vals is not None and fill_space is not None
+                    else None)
+            if _rgb is not None:
+                fill_color = _rgb
+            elif vals is not None:
                 if len(vals) == 1:
                     fill_color = (vals[0],) * 3
                 elif len(vals) == 3:
@@ -1740,7 +1916,7 @@ def _check_content_stream_text_overlay_reference(page_pk, page_mu, page_num,
                     fill_color = (0.0, 0.0, 0.0)
         elif op == 're':
             if i + 1 < len(operators):
-                next_op = operators[i + 1][0]
+                next_op = operators.names[i + 1]
                 if next_op in ('f', 'F', 'B', 'B*', 'b', 'b*'):
                     # Check fill colour is white
                     if (fill_color and
@@ -1792,8 +1968,12 @@ def _check_content_stream_text_overlay_reference(page_pk, page_mu, page_num,
             if op == 'Tm':
                 try:
                     vals = [float(str(x)) for x in operands]
-                    Tm  = vals
-                    Tlm = list(vals)
+                    # A malformed Tm (not six numbers) is ignored, as
+                    # viewers do; it stopped the analysis of a damaged
+                    # file (build 2026-11-23b).
+                    if len(vals) == 6:
+                        Tm  = vals
+                        Tlm = list(vals)
                 except Exception:
                     pass
             elif op in ('Td', 'TD'):

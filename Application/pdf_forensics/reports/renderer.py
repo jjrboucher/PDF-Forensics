@@ -68,9 +68,14 @@ def generate_report(db_path, report_def, output_path, session=None):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
+    fn_notice = None
     if "query_fn" in report_def:
-        # Dynamic report — Python function builds columns + data
-        columns, table_data = report_def["query_fn"](conn)
+        # Dynamic report — Python function builds columns + data (and,
+        # optionally, a notice for the top of the report)
+        got = report_def["query_fn"](conn)
+        columns, table_data = got[0], got[1]
+        if len(got) > 2:
+            fn_notice = got[2]
     else:
         cur = conn.cursor()
         params = report_def.get("params", {})
@@ -95,6 +100,8 @@ def generate_report(db_path, report_def, output_path, session=None):
     # is the subject of this and does not need the banner. Computed before
     # the connection is closed.
     notice = report_def.get("notice")
+    if fn_notice:
+        notice = (fn_notice + " " + notice) if notice else fn_notice
     if report_def.get("id") != "duplicate_submissions":
         dnote = _duplicate_notice(conn)
         if dnote:

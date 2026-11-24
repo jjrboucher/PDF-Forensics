@@ -161,8 +161,19 @@ def _log_info(path):
     return build, dbs
 
 
+HASH_THREADS = 8    # files hashed at once (build 2026-11-19b)
+
+
 class _HashCache:
+    """MD5 of each file in the case folder, reused while its size and time
+    are unchanged. Files not in the cache are hashed in threads (hashlib
+    releases the lock while hashing, and reads overlap), started as each
+    file is listed: submit() returns a placeholder and resolve() fills in
+    every record's digest at the end of the scan, so the index lists the
+    same digests in the same order as hashing one file at a time."""
+
     def __init__(self, root):
+        import threading
         self.path = os.path.join(root, CACHE_NAME)
         self.root = root
         try:
@@ -171,6 +182,40 @@ class _HashCache:
         except Exception:
             self.data = {}
         self.used = {}
+        self._lock = threading.Lock()
+        self._pool = None
+        self._pending = []          # (record, future)
+
+    def submit(self, rec, fpath):
+        """Set rec["md5"] now from the cache, or later in resolve()."""
+        rel = os.path.relpath(fpath, self.root)
+        try:
+            st = os.stat(fpath)
+        except OSError:
+            rec["md5"] = None
+            return
+        hit = self.data.get(rel)
+        if hit and hit[:2] == [st.st_size, int(st.st_mtime)]:
+            with self._lock:
+                self.used[rel] = hit
+            rec["md5"] = hit[2]
+            return
+        if self._pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            self._pool = ThreadPoolExecutor(max_workers=HASH_THREADS)
+        rec["md5"] = None
+        self._pending.append((rec, self._pool.submit(self.md5, fpath)))
+
+    def resolve(self):
+        for rec, fut in self._pending:
+            try:
+                rec["md5"] = fut.result()
+            except Exception:
+                rec["md5"] = None
+        self._pending = []
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
 
     def md5(self, fpath):
         rel = os.path.relpath(fpath, self.root)
@@ -181,7 +226,8 @@ class _HashCache:
         key = [st.st_size, int(st.st_mtime)]
         hit = self.data.get(rel)
         if hit and hit[:2] == key:
-            self.used[rel] = hit
+            with self._lock:
+                self.used[rel] = hit
             return hit[2]
         h = hashlib.md5()
         try:
@@ -191,13 +237,15 @@ class _HashCache:
         except Exception:
             return None
         digest = h.hexdigest()
-        self.used[rel] = key + [digest]
+        with self._lock:
+            self.used[rel] = key + [digest]
         return digest
 
     def save(self):
+        self.resolve()
         try:
             with open(self.path, "w", encoding="utf-8") as fh:
-                json.dump(self.used, fh)
+                json.dump(dict(sorted(self.used.items())), fh)
         except Exception:
             pass
 
@@ -213,9 +261,10 @@ def _file_rec(path, root, cache, kind, **extra):
         "size": st.st_size,
         "mtime": st.st_mtime,
         "ts": _ts_of(name),
-        "md5": cache.md5(path),
+        "md5": None,
     }
     rec.update(extra)
+    cache.submit(rec, path)
     return rec
 
 

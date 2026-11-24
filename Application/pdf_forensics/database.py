@@ -615,6 +615,17 @@ def record_encryption(conn, pdf_path, result, session=None,
     password is part of the evidence and the repeatable procedure.
     Never raises.
     """
+    if md5 is None:
+        # Build 2026-11-23: always recorded (hashing needs no password);
+        # the Encrypted Files report showed none for locked files.
+        try:
+            h = hashlib.md5()
+            with open(pdf_path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            md5 = h.hexdigest()
+        except Exception:
+            md5 = None
     try:
         name = os.path.basename(pdf_path)
         conn.execute(

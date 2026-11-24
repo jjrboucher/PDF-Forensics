@@ -18,6 +18,7 @@ ACCENT      = "#ED1C24"
 ACCENT_HVR  = "#FA0F00"
 ACCENT_PRSS = "#B30B00"
 SUCCESS     = "#4CAF50"
+WARN        = "#F0A030"   # amber: a setting changed from its default
 
 # Font family
 if sys.platform == "win32":
@@ -100,6 +101,37 @@ def apply_theme(style):
                               ("active", BG_HOVER)],
               foreground=[("disabled", "#555555")],
               background=[("active", BG_PANEL)])
+    # Drop-down lists (the parallel-workers choice) match the entries.
+    style.configure("TCombobox", fieldbackground=BG_INPUT,
+                    background=BG_INPUT, foreground=TEXT_PRIM,
+                    arrowcolor=TEXT_PRIM, bordercolor=BORDER,
+                    lightcolor=BORDER, darkcolor=BORDER, padding=4)
+    style.map("TCombobox",
+              fieldbackground=[("readonly", BG_INPUT),
+                               ("disabled", "#2A2A2A")],
+              foreground=[("disabled", "#555555"), ("readonly", TEXT_PRIM)],
+              selectbackground=[("readonly", BG_INPUT)],
+              selectforeground=[("readonly", TEXT_PRIM)],
+              bordercolor=[("focus", ACCENT)])
+    # A combobox whose value is not the recommended default (amber).
+    style.configure("Warn.TCombobox", fieldbackground=BG_INPUT,
+                    background=BG_INPUT, foreground=WARN,
+                    arrowcolor=WARN, bordercolor=WARN,
+                    lightcolor=WARN, darkcolor=WARN, padding=4)
+    style.map("Warn.TCombobox",
+              fieldbackground=[("readonly", BG_INPUT),
+                               ("disabled", "#2A2A2A")],
+              foreground=[("disabled", "#555555"), ("readonly", WARN)],
+              selectbackground=[("readonly", BG_INPUT)],
+              selectforeground=[("readonly", WARN)])
+    try:                                   # the list that drops down
+        master = style.master
+        master.option_add("*TCombobox*Listbox.background", BG_INPUT)
+        master.option_add("*TCombobox*Listbox.foreground", TEXT_PRIM)
+        master.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+        master.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+    except Exception:
+        pass
     # Radio buttons match the checkboxes. Without their own style they
     # fall back to Tk's default, which paints a light box behind the label
     # when focused or hovered.

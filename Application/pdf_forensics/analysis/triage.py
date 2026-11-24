@@ -262,15 +262,14 @@ def triage_pdf_bytes(data, filename, path, source="Current",
                     key = _safe_str(k).lstrip("/")
                     result["metadata"][f"info:{key}"] = _safe_str(v)
             try:
-                with doc_pk.open_metadata() as xmp:
-                    for k, v in xmp.items():
-                        if isinstance(v, (set, frozenset)):
-                            val = ", ".join(sorted(_safe_str(x) for x in v))
-                        elif isinstance(v, (list, tuple)):
-                            val = ", ".join(_safe_str(x) for x in v)
-                        else:
-                            val = _safe_str(v)
-                        result["metadata"][f"xmp:{k}"] = val
+                from pdf_forensics.analysis.metadata import read_xmp
+                items, problem, _raw = read_xmp(doc_pk)
+                if problem:
+                    result["metadata"]["xmp:_unparsed"] = _safe_str(
+                        f"XMP present but could not be parsed as it "
+                        f"stands ({problem})")
+                for k, val in items:
+                    result["metadata"][f"xmp:{k}"] = _safe_str(val)
             except Exception:
                 pass
             doc_pk.close()
@@ -302,9 +301,210 @@ def reconstruct_prior_versions(data, password=None):
             for c in classify_prior_versions(data, password=password)
             if c["status"] in ("valid", "encrypted")]
 
+def _comments_for(data_or_path, row, session=None):
+    """Reviewer comments of one triaged row (current or prior version),
+    tagged with the row's filename/path/source. Accepts a path (str) or
+    raw bytes."""
+    # An encrypted file is opened with the password that opened it for
+    # triage ("" for permissions-only files); one that could not be
+    # opened has no readable comments and is already reported as such.
+    out = []
+    if row.get("encrypted") and not row.get("enc_opened", True):
+        return out
+    password = row.get("enc_password") or ""
+    try:
+        import pikepdf
+        from pdf_forensics.analysis.comments import extract_comments
+        if isinstance(data_or_path, (bytes, bytearray)):
+            ctx = pikepdf.open(io.BytesIO(data_or_path), password=password)
+        else:
+            ctx = pikepdf.open(data_or_path, password=password)
+        with ctx as _cpdf:
+            for c in extract_comments(_cpdf):
+                c = dict(c)
+                c["filename"] = row["filename"]
+                c["path"] = row["path"]
+                c["source"] = row.get("source", "Current")
+                out.append(c)
+    except Exception as e:
+        if session:
+            session.log(
+                f"  Could not extract comments from "
+                f"{row['filename']}: {e}", "warning")
+    return out
+
+
+def _triage_one(pdf_path, include_prior_versions, password_manager,
+                session, pf):
+    """
+    Triage one submitted file and, if requested, its prior versions.
+    Used one file at a time and, in worker processes, several at once
+    (1.3.0, build 2026-11-19); session and pf may be the stand-ins that
+    record for the main process (analysis/parallel.py).
+
+    Returns {"rows", "comments", "skipped" (bool), "locked" (path of an
+    encrypted file that could not be opened, or None), "status"}.
+    """
+    import hashlib as _hashlib
+    from pdf_forensics import perf as _perf
+    from pdf_forensics import _mupdf as _mu
+
+    def _log_mupdf(context):
+        try:
+            _mu.drain(session, context)
+        except Exception:
+            pass
+
+    out = {"rows": [], "comments": [], "skipped": False, "locked": None,
+           "status": "ok"}
+    try:
+        # Read once; reuse the bytes for the current-version triage,
+        # prior-version reconstruction, and comment extraction.
+        file_data = None
+        try:
+            with open(pdf_path, "rb") as fh:
+                file_data = fh.read()
+        except Exception:
+            file_data = None
+
+        if file_data is not None:
+            triage = triage_pdf_bytes(
+                file_data, os.path.basename(pdf_path),
+                os.path.abspath(pdf_path),
+                password_manager=password_manager)
+        else:
+            triage = triage_pdf(pdf_path)
+        _log_mupdf(f"triage: {os.path.basename(pdf_path)}")
+        if file_data is not None:
+            pf.set("md5", _hashlib.md5(file_data).hexdigest())
+            pf.set("size_mb", round(len(file_data) / 1048576, 2))
+        if triage:
+            pf.set("pages", triage.get("pages"))
+            pf.set("image_placements", triage.get("image_count"))
+        pf.lap("triage_scan")
+        if (triage and triage.get("encrypted")
+                and not triage.get("enc_opened", True)):
+            out["status"] = "encrypted, not opened"
+            out["locked"] = os.path.abspath(pdf_path)
+            if session:
+                session.log(f"  Encrypted, not opened: "
+                            f"{os.path.basename(pdf_path)} — "
+                            f"{triage.get('enc_status','')}", "warning")
+
+        if triage:
+            out["rows"].append(triage)
+            out["comments"].extend(_comments_for(
+                file_data if file_data is not None else pdf_path,
+                triage, session))
+            pf.lap("triage_comments")
+            if session:
+                session.log(
+                    f"  Triaged: {os.path.basename(pdf_path)} "
+                    f"({triage['pages']} pages, "
+                    f"{triage['image_count']} images)")
+
+            # Prior versions: reconstruct in memory and triage each
+            # with the same method, so their metadata lands in the
+            # spreadsheet just as it does in the HTML metadata report.
+            if include_prior_versions and file_data is not None:
+                base = os.path.splitext(os.path.basename(pdf_path))[0]
+                try:
+                    from pdf_forensics.analysis.metadata import (
+                        classify_prior_versions, describe_version_check)
+                    _ppw = (triage.get("enc_password") or None) \
+                        if triage else None
+                    _checks = classify_prior_versions(file_data,
+                                                      password=_ppw)
+                    if triage is not None:
+                        triage["version_check"] = \
+                            describe_version_check(_checks)
+                    for _c in _checks:
+                        if _c["status"] in ("valid", "encrypted") \
+                                or not session:
+                            continue
+                        session.log(
+                            f"    \u21b3 %%EOF {_c['version_number']} at "
+                            f"byte {_c['eof_offset']:,}: "
+                            + ("not a prior version (linearized file, "
+                               "first-page section)"
+                               if _c["status"] == "linearization" else
+                               f"not a usable prior version "
+                               f"({_c['reason']})"))
+                    priors = [(_c["version_number"],
+                               file_data[:_c["end"]])
+                              for _c in _checks
+                              if _c["status"] in ("valid", "encrypted")]
+                except Exception as e:
+                    priors = []
+                    if session:
+                        session.log(
+                            f"  Could not reconstruct prior "
+                            f"versions of "
+                            f"{os.path.basename(pdf_path)}: {e}",
+                            "warning")
+                for vnum, vbytes in priors:
+                    vname = f"{base}_version{vnum}.pdf"
+                    # Same password handling as the current version:
+                    # the parent's password first, then the run's
+                    # list. Without these a prior version of an
+                    # encrypted file could not be opened, and was
+                    # reported as "no password list supplied" even
+                    # when one had been.
+                    vtriage = triage_pdf_bytes(
+                        vbytes, vname,
+                        os.path.abspath(pdf_path),
+                        source=f"Prior v{vnum}",
+                        version_number=vnum,
+                        password_manager=password_manager,
+                        parent_password=_ppw)
+                    _log_mupdf(f"triage: {vname}")
+                    if (vtriage and vtriage.get("encrypted")
+                            and not vtriage.get("enc_opened", True)
+                            and session):
+                        session.log(
+                            f"    \u21b3 Prior version {vnum} is "
+                            f"encrypted and was not opened: {vname} "
+                            f"\u2014 {vtriage.get('enc_status', '')}",
+                            "warning")
+                    if vtriage:
+                        out["rows"].append(vtriage)
+                        pf.add("revisions")
+                        out["comments"].extend(
+                            _comments_for(vbytes, vtriage, session))
+                        if session:
+                            session.log(
+                                f"    \u21b3 Prior version {vnum} "
+                                f"metadata included ({vname})")
+            pf.lap("triage_versions")
+        else:
+            out["skipped"] = True
+            out["status"] = "skipped"
+            if session:
+                session.log(f"  Skipped: {pdf_path}", "warning")
+    except Exception as e:
+        out["skipped"] = True
+        out["status"] = f"failed ({_perf.error_label(e)})"
+        if session:
+            session.log(f"  Error triaging {pdf_path}: {e}", "error")
+    return out
+
+
+def _triage_worker(spec):
+    """Worker process: triage one file without the session or the
+    performance log (recorded and written by the main process)."""
+    from pdf_forensics.analysis.parallel import RecordingSession
+    rs = RecordingSession(spec.get("session_info"))
+    rs.perf.begin()
+    res = _triage_one(spec["path"], spec["include_prior_versions"], None,
+                      rs, rs.perf)
+    res["logs"] = rs.take()
+    res["perf"] = rs.perf.take()
+    return res
+
+
 def run_triage(pdf_paths, output_path, session=None,
                progress_callback=None, include_prior_versions=True,
-               password_manager=None, run_state=None):
+               password_manager=None, run_state=None, workers=1):
     """
     Triage a list of PDFs and write results to an Excel file.
 
@@ -321,6 +521,9 @@ def run_triage(pdf_paths, output_path, session=None,
                                current version's.
 
       password_manager       : the run's PasswordManager, or None
+      workers                : files triaged at once, each in its own
+                               process ("auto" or a number; 1.3.0). With a
+                               password list, always one at a time.
       run_state              : optional dict that carries a triage run's
                                rows between calls, so a later call can be
                                merged into the same spreadsheet. Pass an
@@ -361,195 +564,95 @@ def run_triage(pdf_paths, output_path, session=None,
     skipped = 0
     all_comments = []   # flat list across all triaged PDFs
 
-    def _extract_comments(data_or_path, row):
-        """Append this row's reviewer comments to all_comments,
-        tagged with the row's filename/path/source. Accepts a path
-        (str) or raw bytes."""
-        # An encrypted file is opened with the password that opened it for
-        # triage ("" for permissions-only files); one that could not be
-        # opened has no readable comments and is already reported as such.
-        if row.get("encrypted") and not row.get("enc_opened", True):
-            return
-        password = row.get("enc_password") or ""
-        try:
-            import pikepdf
-            from pdf_forensics.analysis.comments import extract_comments
-            if isinstance(data_or_path, (bytes, bytearray)):
-                ctx = pikepdf.open(io.BytesIO(data_or_path),
-                                   password=password)
-            else:
-                ctx = pikepdf.open(data_or_path, password=password)
-            with ctx as _cpdf:
-                for c in extract_comments(_cpdf):
-                    c = dict(c)
-                    c["filename"] = row["filename"]
-                    c["path"] = row["path"]
-                    c["source"] = row.get("source", "Current")
-                    all_comments.append(c)
-        except Exception as e:
-            if session:
-                session.log(
-                    f"  Could not extract comments from "
-                    f"{row['filename']}: {e}", "warning")
-
     # PyMuPDF messages raised while triaging (e.g. "corrupt object stream")
     # are kept off the console by _mupdf.silence() and written to the
-    # session log here, attributed to the file or prior version that
-    # produced them, as analysis does. Anything left over from earlier
-    # processing in the session is logged first under its own label so it
-    # is not attributed to the first triaged file.
+    # session log, attributed to the file or prior version that produced
+    # them, as analysis does. Anything left over from earlier processing in
+    # the session is logged first under its own label so it is not
+    # attributed to the first triaged file.
     from pdf_forensics import _mupdf as _mu
-
-    def _log_mupdf(context):
-        try:
-            _mu.drain(session, context)
-        except Exception:
-            pass
-
-    _log_mupdf("before triage")
+    try:
+        _mu.drain(session, "before triage")
+    except Exception:
+        pass
 
     locked_unopened = []
     # Performance log: flags and counts only (files by MD5, no names).
     import time as _time
-    import hashlib as _hashlib
     from pdf_forensics import perf as _perf
     pf = _perf.get(session)
+    from pdf_forensics.analysis.parallel import resolve_workers
+    n_workers = min(resolve_workers(workers), max(1, len(pdf_paths)))
+    if password_manager is not None and n_workers > 1:
+        # A password that opens one file is tried first on the files after
+        # it, and the spreadsheet records which password opened each file;
+        # to keep that exactly as one at a time, triage with a password
+        # list runs one file at a time.
+        n_workers = 1
+        if session:
+            session.log("Triage with a password list runs one file at a "
+                        "time, so passwords are tried in the same order")
     pf.run_begin("triage", len(pdf_paths),
                  merge_into_earlier_run=bool(merging),
                  prior_versions=bool(include_prior_versions),
-                 password_list=password_manager is not None)
+                 password_list=password_manager is not None,
+                 workers=n_workers)
 
-    for i, pdf_path in enumerate(pdf_paths):
-        if progress_callback:
-            progress_callback(i + 1, len(pdf_paths),
-                              os.path.basename(pdf_path))
-        pf.file_begin("submitted")
-        _pf_status = "ok"
-
-        try:
-            # Read once; reuse the bytes for the current-version triage,
-            # prior-version reconstruction, and comment extraction.
-            file_data = None
-            try:
-                with open(pdf_path, "rb") as fh:
-                    file_data = fh.read()
-            except Exception:
-                file_data = None
-
-            if file_data is not None:
-                triage = triage_pdf_bytes(
-                    file_data, os.path.basename(pdf_path),
-                    os.path.abspath(pdf_path),
-                    password_manager=password_manager)
-            else:
-                triage = triage_pdf(pdf_path)
-            _log_mupdf(f"triage: {os.path.basename(pdf_path)}")
-            if file_data is not None:
-                pf.set("md5", _hashlib.md5(file_data).hexdigest())
-                pf.set("size_mb", round(len(file_data) / 1048576, 2))
-            if triage:
-                pf.set("pages", triage.get("pages"))
-                pf.set("image_placements", triage.get("image_count"))
-            pf.lap("triage_scan")
-            if triage and triage.get("encrypted") and not triage.get("enc_opened", True):
-                _pf_status = "encrypted, not opened"
-                locked_unopened.append(os.path.abspath(pdf_path))
-                if session:
-                    session.log(f"  Encrypted, not opened: "
-                                f"{os.path.basename(pdf_path)} — "
-                                f"{triage.get('enc_status','')}", "warning")
-
-            if triage:
-                results.append(triage)
-                _extract_comments(
-                    file_data if file_data is not None else pdf_path,
-                    triage)
-                pf.lap("triage_comments")
-                if session:
-                    session.log(
-                        f"  Triaged: {os.path.basename(pdf_path)} "
-                        f"({triage['pages']} pages, "
-                        f"{triage['image_count']} images)")
-
-                # Prior versions: reconstruct in memory and triage each
-                # with the same method, so their metadata lands in the
-                # spreadsheet just as it does in the HTML metadata report.
-                if include_prior_versions and file_data is not None:
-                    base = os.path.splitext(
-                        os.path.basename(pdf_path))[0]
-                    try:
-                        from pdf_forensics.analysis.metadata import (
-                            classify_prior_versions, describe_version_check)
-                        _ppw = (triage.get("enc_password") or None) if triage else None
-                        _checks = classify_prior_versions(file_data, password=_ppw)
-                        if triage is not None:
-                            triage["version_check"] = describe_version_check(_checks)
-                        for _c in _checks:
-                            if _c["status"] in ("valid", "encrypted") or not session:
-                                continue
-                            session.log(
-                                f"    \u21b3 %%EOF {_c['version_number']} at byte "
-                                f"{_c['eof_offset']:,}: "
-                                + ("not a prior version (linearized file, "
-                                   "first-page section)"
-                                   if _c["status"] == "linearization" else
-                                   f"not a usable prior version ({_c['reason']})"))
-                        priors = [(_c["version_number"], file_data[:_c["end"]])
-                                  for _c in _checks
-                                  if _c["status"] in ("valid", "encrypted")]
-                    except Exception as e:
-                        priors = []
-                        if session:
-                            session.log(
-                                f"  Could not reconstruct prior "
-                                f"versions of "
-                                f"{os.path.basename(pdf_path)}: {e}",
-                                "warning")
-                    for vnum, vbytes in priors:
-                        vname = f"{base}_version{vnum}.pdf"
-                        # Same password handling as the current version:
-                        # the parent's password first, then the run's
-                        # list. Without these a prior version of an
-                        # encrypted file could not be opened, and was
-                        # reported as "no password list supplied" even
-                        # when one had been.
-                        vtriage = triage_pdf_bytes(
-                            vbytes, vname,
-                            os.path.abspath(pdf_path),
-                            source=f"Prior v{vnum}",
-                            version_number=vnum,
-                            password_manager=password_manager,
-                            parent_password=_ppw)
-                        _log_mupdf(f"triage: {vname}")
-                        if (vtriage and vtriage.get("encrypted")
-                                and not vtriage.get("enc_opened", True)
-                                and session):
-                            session.log(
-                                f"    \u21b3 Prior version {vnum} is "
-                                f"encrypted and was not opened: {vname} "
-                                f"\u2014 {vtriage.get('enc_status', '')}",
-                                "warning")
-                        if vtriage:
-                            results.append(vtriage)
-                            pf.add("revisions")
-                            _extract_comments(vbytes, vtriage)
-                            if session:
-                                session.log(
-                                    f"    \u21b3 Prior version {vnum} "
-                                    f"metadata included ({vname})")
-                pf.lap("triage_versions")
-            else:
-                skipped += 1
-                _pf_status = "skipped"
-                if session:
-                    session.log(f"  Skipped: {pdf_path}", "warning")
-        except Exception as e:
+    def _add(i, pdf_path, res):
+        nonlocal skipped
+        results.extend(res["rows"])
+        all_comments.extend(res["comments"])
+        if res["skipped"]:
             skipped += 1
-            _pf_status = f"failed ({_perf.error_label(e)})"
-            if session:
-                session.log(f"  Error triaging {pdf_path}: {e}",
-                            "error")
-        pf.file_end(_pf_status)
+        if res["locked"]:
+            locked_unopened.append(res["locked"])
+
+    if n_workers <= 1:
+        for i, pdf_path in enumerate(pdf_paths):
+            if progress_callback:
+                progress_callback(i + 1, len(pdf_paths),
+                                  os.path.basename(pdf_path))
+            pf.file_begin("submitted")
+            res = _triage_one(pdf_path, include_prior_versions,
+                              password_manager, session, pf)
+            _add(i, pdf_path, res)
+            pf.file_end(res["status"])
+    else:
+        # Several files at once (1.3.0, build 2026-11-19): each file is
+        # triaged in a worker process; rows, comments, log entries and
+        # performance rows are added in the order the files were given.
+        import multiprocessing as mp
+        from concurrent.futures import ProcessPoolExecutor
+        from pdf_forensics.analysis.parallel import session_info
+        if session:
+            session.log(f"Triage: {n_workers} file(s) at a time; rows are "
+                        f"written in the order selected")
+        info = session_info(session)
+        with ProcessPoolExecutor(max_workers=n_workers,
+                                 mp_context=mp.get_context("spawn")) as pool:
+            futs = [pool.submit(_triage_worker,
+                                {"path": p, "session_info": info,
+                                 "include_prior_versions":
+                                     include_prior_versions})
+                    for p in pdf_paths]
+            for i, (pdf_path, fut) in enumerate(zip(pdf_paths, futs)):
+                try:
+                    res = fut.result()
+                except Exception as e:      # the worker process failed
+                    res = {"rows": [], "comments": [], "skipped": True,
+                           "locked": None, "logs": [], "perf": None,
+                           "status": f"failed ({_perf.error_label(e)})"}
+                    if session:
+                        session.log(f"  Error triaging {pdf_path}: {e}",
+                                    "error")
+                if progress_callback:
+                    progress_callback(i + 1, len(pdf_paths),
+                                      os.path.basename(pdf_path))
+                if session and res.get("logs"):
+                    session.replay(res["logs"])
+                pf.file_resume(res.get("perf"), kind="submitted")
+                _add(i, pdf_path, res)
+                pf.file_end(res["status"])
 
     pf.run_end()
     if not results:
@@ -683,6 +786,7 @@ def run_triage(pdf_paths, output_path, session=None,
         cell.alignment = header_align
         cell.border = border
 
+    key_col = {k: i + 6 for i, k in enumerate(all_meta_keys)}
     for row_idx, r in enumerate(results, 2):
         ws2.cell(row=row_idx, column=1,
                  value=r["filename"]).font = cell_font
@@ -699,10 +803,18 @@ def run_triage(pdf_paths, output_path, session=None,
             if v == "FALSE":
                 cell.font = Font(name=cell_font.name, size=cell_font.size,
                                  bold=True, color="C00000")
-        for col_offset, key in enumerate(all_meta_keys):
-            val = _safe_str(r["metadata"].get(key, ""))
-            cell = ws2.cell(row=row_idx, column=col_offset + 6,
-                            value=val)
+        # Only fields this file has are written (build 2026-11-23b): a
+        # 12,745-file case had 756 metadata columns, and writing and
+        # styling every empty cell (13.8 million) took 278 s of a 744 s
+        # triage. Empty cells are now simply left empty.
+        for key, raw in r["metadata"].items():
+            col = key_col.get(key)
+            if col is None or raw is None:
+                continue
+            val = _safe_str(raw)
+            if val == "":
+                continue
+            cell = ws2.cell(row=row_idx, column=col, value=val)
             cell.font = cell_font
             cell.border = border
 
@@ -782,8 +894,11 @@ def run_triage(pdf_paths, output_path, session=None,
     # Save
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     wb.save(output_path)
+    # The metadata sheet's size (build 2026-11-23): one column per
+    # metadata field found in any file, and every row writes every column.
     pf.event("spreadsheet", "triage", _time.perf_counter() - _t_xlsx,
-             rows=len(results))
+             rows=len(results), metadata_columns=len(meta_headers),
+             metadata_cells=len(results) * len(meta_headers))
 
     if session:
         if merging:

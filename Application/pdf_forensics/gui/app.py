@@ -351,6 +351,11 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # keeps its space.
     status_label.pack_forget()
     status_label.pack(side="left", padx=14, fill="both", expand=True)
+    # The status bar keeps its place at the bottom whatever the screen
+    # (build 2026-11-24b): packed before the content area, so a screen
+    # taller than the window no longer pushes it out of sight.
+    content_area.pack_forget()
+    content_area.pack(fill="both", expand=True)
 
     # ---------------------------------------------------------------
     # Background runs (keeps the window responsive)
@@ -451,10 +456,13 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         if _busy["job"] and not messagebox.askyesno(
                 "Processing in progress",
                 f"{_busy['job']} is still running. If you close the "
-                f"application now, the document being processed will not "
+                f"application now, the documents being processed will not "
                 f"be saved (documents already completed are saved).\n\n"
                 f"Close anyway?"):
             return
+        runner = app.get("parallel_runner")
+        if runner is not None:          # stop worker processes at once
+            runner.terminate()
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", _on_close)
@@ -471,8 +479,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     # Per-frame window sizes: (width, height)
     frame_sizes = {
         "main":     (780, 540),
-        "analysis": (1200, 936),
-        "graph":    (1060, 540),
+        "analysis": (1200, 990),
+        "graph":    (1060, 700),
         "reports":  (1180, 1030),  # 22 reports; clamped to the screen
     }
 
@@ -501,6 +509,13 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             return
         if app["current_frame"]:
             app["current_frame"].pack_forget()
+        # A finished run's message belongs to its own screen (build
+        # 2026-11-24b: "Done. 5 analysed ..." stayed on the graph screen).
+        try:
+            status_var.set("Ready")
+            status_label.config(fg=TEXT_SEC)
+        except Exception:
+            pass
         frame = frames[name]
         frame.pack(in_=content_area, fill="both", expand=True)
         app["current_frame"] = frame
@@ -527,6 +542,69 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         body.pack(fill="x", padx=14, pady=(0, 12))
         return body
 
+    def scroll_column(parent, width):
+        """A fixed-width column whose contents scroll when they are taller
+        than the window (build 2026-11-24b: on a 24-inch screen the report
+        and graph screens' controls could run off the bottom). Returns
+        (outer, inner, footer): put the panels in inner; footer stays at
+        the bottom, always visible (for the screen's main button). The
+        scroll bar shows only when needed; the mouse wheel scrolls the
+        column while the pointer is over it."""
+        outer = tk.Frame(parent, bg=BG_DARK, width=width)
+        outer.pack_propagate(False)
+        footer = tk.Frame(outer, bg=BG_DARK)
+        footer.pack(side="bottom", fill="x")
+        canvas = tk.Canvas(outer, bg=BG_DARK, highlightthickness=0, bd=0)
+        sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        inner = tk.Frame(canvas, bg=BG_DARK)
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        state = {"shown": False}
+
+        def _update(_e=None):
+            try:
+                canvas.configure(scrollregion=canvas.bbox("all"))
+                need = inner.winfo_reqheight() > canvas.winfo_height() + 1
+            except Exception:
+                return
+            if need and not state["shown"]:
+                sb.pack(side="right", fill="y", before=canvas)
+                state["shown"] = True
+            elif not need and state["shown"]:
+                sb.pack_forget()
+                canvas.yview_moveto(0)
+                state["shown"] = False
+
+        def _resize(e):
+            try:
+                canvas.itemconfigure(win, width=e.width)
+            except Exception:
+                pass
+            _update()
+
+        def _wheel(e):
+            if not state["shown"]:
+                return
+            step = -1 if getattr(e, "delta", 0) > 0 or \
+                getattr(e, "num", 0) == 4 else 1
+            canvas.yview_scroll(step * 3, "units")
+
+        def _enter(_e=None):
+            canvas.bind_all("<MouseWheel>", _wheel)
+            canvas.bind_all("<Button-4>", _wheel)
+            canvas.bind_all("<Button-5>", _wheel)
+
+        def _leave(_e=None):
+            for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                canvas.unbind_all(ev)
+
+        inner.bind("<Configure>", _update)
+        canvas.bind("<Configure>", _resize)
+        outer.bind("<Enter>", _enter)
+        outer.bind("<Leave>", _leave)
+        canvas.pack(side="left", fill="both", expand=True)
+        return outer, inner, footer
+
     def attach_tooltip(widget, text, wraplength=320):
         """Attach a hover tooltip to a widget. The tip appears after a
         short delay near the cursor and disappears on leave. Reusable
@@ -539,19 +617,36 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             if state["tip"] is not None:
                 return
             try:
-                x = widget.winfo_pointerx() + 14
-                y = widget.winfo_pointery() + 18
+                px = widget.winfo_pointerx()
+                py = widget.winfo_pointery()
+                sw = widget.winfo_screenwidth()
+                sh = widget.winfo_screenheight()
             except Exception:
                 return
             tip = tk.Toplevel(widget)
             tip.wm_overrideredirect(True)
-            tip.wm_geometry(f"+{x}+{y}")
             tip.configure(bg=BORDER)
             lbl = tk.Label(
                 tip, text=text, justify="left", bg="#2B2B2B",
-                fg=TEXT_PRIM, font=FONT_SUBTITLE, wraplength=wraplength,
+                fg=TEXT_PRIM, font=FONT_SUBTITLE,
+                wraplength=min(wraplength, max(200, sw - 60)),
                 padx=8, pady=6, bd=0)
             lbl.pack(padx=1, pady=1)
+            # Keep the tip on the screen (build 2026-11-24b): above the
+            # pointer when there is no room below (allowing for the
+            # taskbar), and left of it when there is no room to the
+            # right. It ran off the bottom of a 24-inch screen.
+            x, y = px + 14, py + 18
+            try:
+                tip.update_idletasks()
+                tw, th = tip.winfo_reqwidth(), tip.winfo_reqheight()
+                if y + th > sh - 48:
+                    y = max(0, py - th - 12)
+                if x + tw > sw - 8:
+                    x = max(0, sw - tw - 8)
+            except Exception:
+                pass
+            tip.wm_geometry(f"+{x}+{y}")
             state["tip"] = tip
 
         def schedule(_e=None):
@@ -779,9 +874,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     split = tk.Frame(analysis_frame, bg=BG_DARK)
     split.pack(fill="both", expand=True, padx=20, pady=(0, 8))
 
-    left_panel = tk.Frame(split, bg=BG_DARK, width=580)
-    left_panel.pack(side="left", fill="y", padx=(0, 10))
-    left_panel.pack_propagate(False)
+    # Scrolling left column; the Run button stays visible below it
+    # (build 2026-11-24b: the button was squeezed on a 24-inch screen).
+    left_outer, left_panel, a_footer = scroll_column(split, 580)
+    left_outer.pack(side="left", fill="y", padx=(0, 10))
 
     right_panel = tk.Frame(split, bg=BG_DARK)
     right_panel.pack(side="left", fill="both", expand=True)
@@ -1064,6 +1160,215 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         variable=skip_duplicates_var)
     skip_cb.pack(anchor="w")
 
+    # Parallel workers: how many files are processed at once. "1" is the
+    # one-file-at-a-time loop of earlier versions; results are the same
+    # either way (analysis/parallel.py). Build 2026-11-19b: every session
+    # starts at Auto (a number chosen for one run is not carried into the
+    # next), Auto is decided again at the start of each step from free
+    # memory and how busy the processors are, and the setting is shown on
+    # the analysis, graphs and reports screens (one setting; amber when it
+    # is not Auto), with an information panel.
+    from pdf_forensics.analysis import parallel as _par
+    _auto_n = _par.default_workers()
+    WORKER_CHOICES = ([f"Auto (adapts, up to {_auto_n})",
+                       "1 (one file at a time)"]
+                      + [str(n) for n in range(2, (os.cpu_count() or 2) + 1)])
+    workers_var = tk.StringVar(value=WORKER_CHOICES[0])
+    _worker_marks = []          # (combobox, note label) on each screen
+
+    def _fixed_workers():
+        """The number chosen, or None for Auto."""
+        v = workers_var.get()
+        if v.startswith("Auto"):
+            return None
+        try:
+            return max(1, int(v.split()[0]))
+        except (ValueError, IndexError):
+            return None
+
+    def _refresh_worker_marks(*_):
+        n = _fixed_workers()
+        for cb, note in _worker_marks:
+            try:
+                cb.configure(style="TCombobox" if n is None
+                             else "Warn.TCombobox")
+                note.configure(text="" if n is None
+                               else f"\u25cf not Auto ({n})")
+            except Exception:
+                pass
+    workers_var.trace_add("write", _refresh_worker_marks)
+
+    def _workers_info():
+        """The information panel: this machine, what Auto would choose now
+        and why, and the trade-offs."""
+        st = _par.machine_state()
+        n, why = _par.auto_choice(state=st)
+        mem = (f"{st['ram_gb']:g} GB installed" if st.get("ram_gb")
+               else "installed memory not known")
+        if st.get("free_gb") is not None:
+            mem += f", {st['free_gb']:g} GB free now"
+        busy = (f"{st['busy_pct']:.0f}%" if st.get("busy_pct") is not None
+                else "not known")
+        reason = {
+            "machine": (("the most this machine supports: one process per "
+                         "physical processor core (a core's second thread "
+                         "adds little for this work), " if st.get("cores")
+                         else "the most this machine supports: one process "
+                         "per logical processor, keeping one for the "
+                         "database and this window (physical cores are not "
+                         "known without psutil), ")
+                        + "about "
+                        f"{_par.RAM_PER_WORKER_GB} GB of installed memory "
+                        f"per process, and at most {_par.MAX_AUTO_WORKERS}"),
+            "free memory": ("lowered because free memory is short right "
+                            f"now (Auto wants about "
+                            f"{_par.FREE_GB_PER_WORKER} GB free per "
+                            "process); the most this machine supports is "
+                            f"{why['ceiling']}"),
+            "busy processors": ("lowered because other programs are "
+                                "keeping the processors busy right now; "
+                                "the most this machine supports is "
+                                f"{why['ceiling']}"),
+        }[why["limit"]]
+        fixed = _fixed_workers()
+        current = ("Auto" if fixed is None
+                   else f"{fixed} (chosen by you; not Auto)")
+        sections = [
+            ("h", "Files processed at once"),
+            ("", f"Current setting: {current}"),
+            ("", ""),
+            ("b", "This computer"),
+            ("", f"  Processor cores: "
+                 f"{st['cores'] if st.get('cores') else 'not known'}; "
+                 f"logical processors: {st['cpus']}"),
+            ("", f"  Memory: {mem}"),
+            ("", f"  Processors busy now: {busy}"),
+        ] + ([
+            ("", "  psutil is not installed, so Auto cannot see free "
+                 "memory or how busy the processors are, and uses the "
+                 "most this computer supports. To let it adapt, install "
+                 "it (pip install psutil) and restart the application."),
+        ] if st.get("free_gb") is None and st.get("busy_pct") is None
+            else []) + [
+            ("", ""),
+            ("b", f"What Auto would choose now: {n} at once"),
+            ("", f"  {reason[0].upper() + reason[1:]}."),
+            ("", "  Auto is decided again at the start of each step "
+                 "(triage, analysis, graphs, visual overlay reports), so "
+                 "it lowers itself when other programs are using the "
+                 "computer."),
+            ("", ""),
+            ("b", "More at once"),
+            ("", "  + Much shorter runs on cases with many files."),
+            ("", "  \u2212 More memory in use."),
+            ("", "  \u2212 Each file takes longer on its own, because the "
+                 "processes share the processors and the disk (typically "
+                 "1.4 to 2 times), so one very large file can finish "
+                 "later than it would alone."),
+            ("", "  \u2212 The computer is less responsive for other work "
+                 "during the run."),
+            ("", ""),
+            ("b", "One at a time"),
+            ("", "  + Least memory; the computer stays responsive."),
+            ("", "  \u2212 Slowest on large cases."),
+            ("", ""),
+            ("b", "Results"),
+            ("", "  The results are identical either way: files are "
+                 "written to the database, and reports produced, in the "
+                 "order you selected them. Only the time taken changes."),
+            ("", ""),
+            ("b", "Recommendation"),
+            ("", "  Leave it on Auto. Choose a lower number if you need "
+                 "the computer for other work during a long run or "
+                 "memory is tight; choose 1 to process files exactly as "
+                 "earlier versions did. The setting is shared by the "
+                 "analysis, graphs and reports screens, and returns to "
+                 "Auto each time the application starts."),
+        ]
+        win = tk.Toplevel(root)
+        win.title("Files processed at once")
+        win.configure(bg=BG_DARK)
+        win.transient(root)
+        txt = tk.Text(win, wrap="word", bg=BG_PANEL, fg=TEXT_PRIM,
+                      highlightthickness=0, borderwidth=0, width=72,
+                      height=34, font=(FONT_FAMILY, 10), padx=14, pady=12,
+                      relief="flat")
+        txt.tag_configure("h", font=(FONT_FAMILY, 12, "bold"))
+        txt.tag_configure("b", font=(FONT_FAMILY, 10, "bold"))
+        for tag, line in sections:
+            txt.insert("end", line + "\n", tag or ())
+        txt.config(state="disabled")
+        txt.pack(fill="both", expand=True, padx=10, pady=(10, 6))
+        ttk.Button(win, text="Close", command=win.destroy).pack(
+            pady=(0, 10))
+        win.bind("<Escape>", lambda e: win.destroy())
+
+    def workers_control(parent, label, bg=BG_PANEL):
+        """The setting's row: label, choice, \u24d8 and the amber note."""
+        row = tk.Frame(parent, bg=bg)
+        ttk.Label(row, text=label, style="Panel.TLabel").pack(
+            side="left", padx=(4, 8))
+        cb = ttk.Combobox(row, textvariable=workers_var,
+                          values=WORKER_CHOICES, state="readonly",
+                          width=22)
+        cb.pack(side="left")
+        attach_tooltip(cb, "How many PDFs are processed at the same time, "
+                           "each in its own process: triage, full parsing, "
+                           "and the visual overlay reports and graphs. Auto "
+                           "uses the processor cores and memory, and is "
+                           "decided again at the start of each step. The "
+                           "results are the same as one file at a time: "
+                           "they are written in the order the files were "
+                           "selected. Choose 1 for the one-file-at-a-time "
+                           "behaviour of earlier versions. One setting for "
+                           "the analysis, graphs and reports screens.")
+        info = tk.Label(row, text="\u24d8", bg=bg, fg=TEXT_SEC,
+                        cursor="hand2", font=(FONT_FAMILY, 12))
+        info.pack(side="left", padx=(8, 0))
+        info.bind("<Button-1>", lambda e: _workers_info())
+        attach_tooltip(info, "What Auto chooses on this computer, and the "
+                             "trade-offs. Click for details.")
+        note = tk.Label(row, text="", bg=bg, fg=WARN,
+                        font=(FONT_FAMILY, 9, "bold"))
+        note.pack(side="left", padx=(8, 0))
+        attach_tooltip(note, "A fixed number is in use instead of Auto. "
+                             "It returns to Auto when the application "
+                             "is next started.")
+        _worker_marks.append((cb, note))
+        _refresh_worker_marks()
+        return row
+
+    def _selected_workers(step="analysis", log=None):
+        """The number to use for this step. Auto is decided now, from free
+        memory and how busy the processors are; the choice and its reason
+        go to log(msg, tag), if given, and to the performance log (numbers
+        only, no names)."""
+        fixed = _fixed_workers()
+        if fixed is None:
+            n, why = _par.auto_choice(step)
+            msg = _par.describe_auto(n, why)
+        else:
+            n = fixed
+            msg = (f"{n} at once (chosen by you, not Auto; Auto would allow "
+                   f"up to {_auto_n} on this computer)")
+        if log:
+            try:
+                log(msg, "dim")
+            except Exception:
+                pass
+        try:
+            from pdf_forensics import perf as _perf
+            if app.get("session"):
+                _perf.get(app["session"]).note(f"workers ({step}): {msg}")
+        except Exception:
+            pass
+        return n
+
+    # In both modes (triage, analysis), so packed in the panel itself,
+    # above the full-parsing options.
+    workers_row = workers_control(opt_body, "Files processed at once:")
+    workers_row.pack(anchor="w", padx=(22, 0), pady=(6, 0))
+
     # Database, under the full-parsing options
     db_wrap = tk.Frame(full_frame, bg=BG_PANEL)
     db_wrap.pack(fill="x", padx=(22, 0), pady=(10, 0))
@@ -1131,8 +1436,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     mode_var.trace_add("write", on_triage_toggle)
 
     # Run button at bottom of left panel
-    action_row_a = tk.Frame(left_panel, bg=BG_DARK)
-    action_row_a.pack(fill="x", side="bottom", pady=(8, 4))
+    action_row_a = tk.Frame(a_footer, bg=BG_DARK)
+    action_row_a.pack(fill="x", pady=(8, 4))
 
     # --- RIGHT SIDE: status log ---
 
@@ -1203,6 +1508,60 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         progress_inner, mode="determinate", maximum=100, value=0)
     analysis_progress.pack(fill="x", padx=10, pady=(0, 10))
 
+    # Skip (build 2026-11-23): stop one file of a parallel analysis that is
+    # taking too long; it is recorded as failed ("skipped by the
+    # examiner") and the run continues. Shown only while one runs. The
+    # watchdog does the same by itself after 30 minutes without progress.
+    def _skip_dialog():
+        runner = app.get("parallel_runner")
+        if runner is None:
+            return
+        files = sorted(runner.running_files(), key=lambda f: -f[2])
+        if not files:
+            messagebox.showinfo("Skip a file",
+                                "No file is being analysed at the moment.")
+            return
+        win = tk.Toplevel(root)
+        win.title("Skip a file")
+        win.transient(root)
+        tk.Label(win, text="Files being analysed now (longest without "
+                 "progress first):", anchor="w").pack(fill="x", padx=10,
+                                                      pady=(10, 4))
+        lb = tk.Listbox(win, width=90, height=min(12, len(files)))
+        for idx, name, idle, page, pages in files:
+            where = (f"page {page} of {pages}" if pages
+                     else "first page not finished")
+            lb.insert("end", f"{name} \u2014 {where}; "
+                             f"{idle / 60:.1f} min since last progress")
+        lb.selection_set(0)
+        lb.pack(fill="both", expand=True, padx=10)
+
+        def _go():
+            sel = lb.curselection()
+            if not sel:
+                return
+            idx, name = files[sel[0]][0], files[sel[0]][1]
+            if not messagebox.askyesno(
+                    "Skip a file",
+                    f"Stop analysing {name}?\n\nIt will be recorded as "
+                    f"failed (skipped by the examiner). Files running "
+                    f"alongside it are restarted; the run continues.",
+                    parent=win):
+                return
+            if not runner.skip(idx):
+                messagebox.showinfo("Skip a file", "That file has already "
+                                    "finished.", parent=win)
+            win.destroy()
+        btns = tk.Frame(win)
+        btns.pack(fill="x", padx=10, pady=10)
+        ttk.Button(btns, text="Skip selected file",
+                   command=_go).pack(side="right")
+        ttk.Button(btns, text="Close",
+                   command=win.destroy).pack(side="right", padx=(0, 6))
+
+    skip_btn = ttk.Button(progress_inner, text="Skip a file\u2026",
+                          command=_skip_dialog)
+
     def progress_reset(total_files):
         analysis_progress.config(mode="determinate",
                                  maximum=max(1, total_files), value=0)
@@ -1272,6 +1631,182 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         count_selected.set(str(len(pdf_files)))
 
     # --- Run analysis ---
+
+    def _run_parallel(n_workers, conn, db_val, out_dir, session):
+        """Analyse the selected files with n_workers processes
+        (analysis/parallel.py). The log shows a line per file while it is
+        analysed; lines are completed as results are written, in the order
+        the files were selected. Returns the runner's stats.
+
+        Build 2026-11-20: the runner's thread only records progress here;
+        the window draws it once a second on its own thread (LiveLines).
+        Drawing on every progress message took the runner's thread away
+        from handing out work, so at 18 processes about two thirds of them
+        sat idle and analysis was slower than at 12."""
+        from pdf_forensics.analysis.parallel import ParallelRunner
+        from pdf_forensics.gui.live import LiveLines, fmt_elapsed
+        prog = {}                       # key -> {"page","pages","images"}
+        names = {}
+        took = {}                       # key -> seconds analysing
+        st = {"total": len(pdf_files), "done": 0, "running": set(),
+              "waiting": set(), "written": set(),
+              "processed": 0, "versions": 0, "failed": 0, "skipped": 0,
+              "images": 0, "encrypted": 0}
+
+        def _status():
+            analysis_progress.config(maximum=max(1, st["total"]),
+                                     value=st["done"])
+            # Build 2026-11-19b: "running" is only what a worker is
+            # analysing now; a file finished early waits for those
+            # selected before it to be written, and is counted apart.
+            parts = [f"{st['done']} of {st['total']} file(s) written",
+                     f"{len(st['running'])} running"]
+            if st["waiting"]:
+                parts.append(f"{len(st['waiting'])} analysed, waiting to "
+                             f"be written to the database")
+            progress_status_var.set(
+                " \u00b7 ".join(parts) + " \u00b7 largest files first; "
+                "results written in the order selected")
+
+        def _counters():
+            count_processed.set(str(st["processed"] - st["versions"]))
+            count_versions.set(str(st["versions"]))
+            count_failed.set(str(st["failed"]))
+            count_skipped.set(str(st["skipped"]))
+            count_images.set(str(st["images"]))
+            count_encrypted.set(str(st["encrypted"]))
+
+        def _tick():                    # Tk thread, once a second
+            _status()
+            _counters()
+
+        live = LiveLines(root, log_text, on_tick=_tick)
+
+        def _progress_text(key):
+            p = prog.get(key) or {}
+            txt = f"  \u25cb {names.get(key, '')} \u2014 "
+            if p.get("pages"):
+                txt += f"page {p['page']}/{p['pages']}"
+            else:
+                txt += "starting..."
+            if p.get("images"):
+                txt += f" \u00b7 {p['images']} image(s) written"
+            return txt
+
+        def on_event(evt):              # the runner's thread: no drawing
+            t = evt["type"]
+            key = evt.get("key")
+            if (t in ("start", "progress", "images", "finished")
+                    and key in st["written"]):
+                return      # a late progress message for a file written
+            if t == "start":
+                names[key] = evt["name"]
+                prog[key] = {"page": 0, "pages": 0, "images": 0}
+                st["running"].add(key)
+                live.set(key, _progress_text(key))
+            elif t in ("progress", "images"):
+                p = prog.setdefault(key, {"page": 0, "pages": 0,
+                                          "images": 0})
+                if t == "progress":
+                    p["page"], p["pages"] = evt["page"], evt["pages"]
+                else:
+                    p["images"] = evt["images"]
+                if key in names:
+                    live.set(key, _progress_text(key))
+            elif t == "finished":
+                if key in st["running"]:
+                    st["running"].discard(key)
+                    st["waiting"].add(key)
+                    took[key] = live.elapsed(key)
+                    live.set(key, f"  \u25cb {names.get(key, '')} \u2014 "
+                                  f"analysed in {fmt_elapsed(took[key])}; "
+                                  f"waiting to be written to the database",
+                             clock=False)
+            elif t == "queued":
+                st["total"] += evt["count"]
+            elif t == "versions":
+                live.set(("versions", key), "", clock=False, parent=key)
+                live.done(("versions", key),
+                          f"    \u21b3 {evt['count']} prior version(s) of "
+                          f"{evt['name']} extracted and analysed",
+                          "dim")
+                # (drawn under the file's own line)
+            elif t == "result":
+                if key in st["running"]:
+                    took[key] = live.elapsed(key)
+                st["running"].discard(key)
+                st["waiting"].discard(key)
+                st["written"].add(key)
+                st["done"] += 1
+                name, oc = evt["name"], evt["outcome"]
+                secs = (f" \u00b7 {fmt_elapsed(took[key])}"
+                        if key in took else "")
+                if oc == "analysed":
+                    st["processed"] += 1
+                    if evt.get("version") is not None:
+                        st["versions"] += 1
+                    st["images"] += evt.get("images", 0)
+                    live.done(key, f"  \u2713 {name} \u2014 "
+                                   f"{evt.get('images', 0)} img, "
+                                   f"{evt.get('findings', 0)} findings"
+                                   f"{secs}", "success")
+                elif oc == "duplicate":
+                    st["skipped"] += 1
+                    live.done(key, f"  \u2298 {name} \u2014 identical copy "
+                                   f"of {evt.get('duplicate_of')} (not "
+                                   f"re-analysed)", "skip")
+                elif oc == "encrypted":
+                    st["encrypted"] += 1
+                    scheme = evt.get("scheme") or "scheme unknown"
+                    live.done(key, f"  \U0001f512 {name} \u2014 encrypted, "
+                                   f"not opened ({scheme})", "skip")
+                elif oc == "not_found":
+                    st["failed"] += 1
+                    live.done(key, f"  \u2717 {name} \u2014 not found",
+                              "error")
+                else:
+                    st["failed"] += 1
+                    live.done(key, f"  \u2717 {name} \u2014 "
+                                   f"{evt.get('error')}", "error")
+
+        log_to_gui(f"Analysing up to {n_workers} file(s) at a time, largest "
+                   f"first; results are written in the order selected.",
+                   "dim")
+        versions_out = None
+        if extract_versions_var.get():
+            versions_out = (session.pdf_versions_dir
+                            or os.path.join(out_dir, "pdf_versions"))
+            os.makedirs(versions_out, exist_ok=True)
+        runner = ParallelRunner(
+            list(pdf_files), conn, db_val, session=session,
+            workers=n_workers, out_dir=out_dir,
+            store_images=bool(store_images_var.get()),
+            skip_duplicates=bool(skip_duplicates_var.get()),
+            extract_versions=bool(extract_versions_var.get()),
+            versions_out=versions_out,
+            password_manager=app.get("password_manager"),
+            on_event=on_event)
+        app["parallel_runner"] = runner
+        root.after(0, live.start)
+        root.after(0, lambda: skip_btn.pack(anchor="e", padx=10,
+                                            pady=(0, 8)))
+        try:
+            stats = runner.run()
+        finally:
+            app["parallel_runner"] = None
+            root.after(0, skip_btn.pack_forget)
+            live.stop(wait=True)
+        if stats.get("timed_out") or stats.get("skipped"):
+            log_to_gui(f"  Note: {stats.get('timed_out', 0)} file(s) made no "
+                       f"progress for {runner.watchdog_s / 60:g} minutes and "
+                       f"{stats.get('skipped', 0)} were skipped; they are "
+                       f"recorded as failed (see the session log).", "skip")
+        if stats.get("worker_restarts"):
+            log_to_gui(f"  Note: a worker process stopped unexpectedly "
+                       f"{stats['worker_restarts']} time(s); the files it was "
+                       f"analysing were re-run one at a time (see the "
+                       f"session log).", "skip")
+        return stats
 
     def run_analysis():
         if not pdf_files:
@@ -1357,15 +1892,35 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         from pdf_forensics.analysis.images import clear_image_cache
         clear_image_cache()
         pf = _perf.get(session)
+        n_workers = _selected_workers("analysis", log_to_gui)
         pf.run_begin("analysis", len(process_queue), interface="GUI",
+                     workers=n_workers,
                      store_images=bool(store_images_var.get()),
                      extract_to_disk=bool(out_dir),
                      prior_versions=bool(extract_versions_var.get()),
                      skip_duplicates=bool(skip_duplicates_var.get()),
                      password_list=app.get("password_manager") is not None)
         perf_parent = {}   # extracted version path -> parent's log #
+        # Files with the same name get their own image and prior-version
+        # folders (name, name_2, ...), never a shared one.
+        from pdf_forensics.analysis.parallel import unique_stems
+        stem_of = {}
+        for _p, _st in zip(pdf_files, unique_stems(pdf_files)):
+            stem_of.setdefault(_p, _st)
 
-        while queue_idx < len(process_queue):
+        if n_workers > 1:
+            r = _run_parallel(n_workers, conn, db_val, out_dir, session)
+            processed = r["analysed"]
+            versions_done = r["versions"]
+            skipped_copies = r["duplicates"]
+            failed = r["failed"]
+            not_found = r["not_found"]
+            total_imgs = r["images"]
+            total_findings = r["findings"]
+            encrypted_unopened.extend(r["encrypted_paths"])
+
+        # One file at a time (also the reference for parallel analysis).
+        while n_workers <= 1 and queue_idx < len(process_queue):
             pdf_path = process_queue[queue_idx]
             this_is_version = queue_idx in is_extracted_version
             this_lineage = version_lineage.get(queue_idx)
@@ -1384,7 +1939,9 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     session.log(f"Not found: {pdf_path}", "warning")
                 continue
 
-            base = os.path.splitext(basename)[0]
+            base = (os.path.splitext(basename)[0] if this_is_version
+                    else stem_of.get(pdf_path,
+                                     os.path.splitext(basename)[0]))
             # A name Windows can create as given (see pathutil.safe_name)
             pdf_extract_dir = os.path.join(
                 out_dir, safe_name(base, out_dir)) if out_dir else None
@@ -1424,14 +1981,28 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                                   page=_p["page"], pages=_p["pages"])
                 root.update_idletasks()
 
+            # Redrawn at most four times a second (and on the last page):
+            # redrawing after every page and every image took about a tenth
+            # of a one-at-a-time run (1.3.0, build 2026-11-19).
+            import time as _ptime
+
+            def _due(_p, final=False):
+                now = _ptime.monotonic()
+                if final or now - _p.get("t", 0.0) >= 0.25:
+                    _p["t"] = now
+                    return True
+                return False
+
             def on_page_progress(page_num, total_pages, _p=_prog,
                                  _show=_show_progress):
                 _p["page"], _p["pages"] = page_num, total_pages
-                _show()
+                if _due(_p, final=page_num >= total_pages):
+                    _show()
 
             def on_images_written(n, _p=_prog, _show=_show_progress):
                 _p["images"] = n
-                _show()
+                if _due(_p):
+                    _show()
 
             try:
                 # Duplicate check (checkbox-based, no dialog)
@@ -1536,7 +2107,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                         os.makedirs(versions_out, exist_ok=True)
                         version_paths = extract_prior_versions(
                             pdf_path, versions_out, session=session,
-                            password=(enc.get("password") if enc else None))
+                            password=(enc.get("password") if enc else None),
+                            name=base)
                         if version_paths:
                             log_to_gui(
                                 f"    \u21b3 {len(version_paths)} prior "
@@ -1937,7 +2509,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                 session=session,
                 progress_callback=on_triage_progress,
                 password_manager=app.get("password_manager"),
-                run_state=triage_state)
+                run_state=triage_state,
+                workers=_selected_workers("triage", log_to_gui))
 
             files_n, vers_n, rows_n = _triage_counts()
             count_processed.set(str(files_n))
@@ -2009,9 +2582,10 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     g_split = tk.Frame(graph_frame, bg=BG_DARK)
     g_split.pack(fill="both", expand=True, padx=20, pady=(0, 8))
 
-    g_left = tk.Frame(g_split, bg=BG_DARK, width=420)
-    g_left.pack(side="left", fill="y", padx=(0, 10))
-    g_left.pack_propagate(False)
+    # Scrolling left column with the Generate button kept below it,
+    # always visible (build 2026-11-24b: the button was cut off).
+    g_left_outer, g_left, g_footer = scroll_column(g_split, 420)
+    g_left_outer.pack(side="left", fill="y", padx=(0, 10))
 
     g_right = tk.Frame(g_split, bg=BG_DARK)
     g_right.pack(side="left", fill="both", expand=True)
@@ -2074,6 +2648,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
         text="Group prior versions by lineage (recommended)",
         variable=group_versions_var)
     _grp.pack(anchor="w", pady=(6, 0))
+    workers_control(scope_body, "Graphs made at once:").pack(
+        anchor="w", pady=(8, 0))
     attach_tooltip(_grp,
                    "In cross-document scope, treat a document and the prior "
                    "versions extracted from it as one lineage, so an image "
@@ -2091,8 +2667,8 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                    "files.")
 
     # Generate button
-    action_row_g = tk.Frame(g_left, bg=BG_DARK)
-    action_row_g.pack(fill="x", side="bottom", pady=(8, 4))
+    action_row_g = tk.Frame(g_footer, bg=BG_DARK)
+    action_row_g.pack(fill="x", pady=(8, 4))
 
     # --- RIGHT: status log ---
     g_log_outer = tk.Frame(g_right, bg=BORDER, padx=1, pady=1)
@@ -2182,28 +2758,98 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
             # the coincidence is reported at generation time
             # instead of being discovered later by hashing files.
             dataset_seen = {}
-            import time as _time
             from pdf_forensics import perf as _perf
+            from pdf_forensics.graph.generate import generate_scopes
             _gpf = _perf.get(session)
+            specs = []
             for scope in scopes:
-                _tg0 = _time.perf_counter()
+                scope_label = scope.replace("_", "")
+                out_path = (session.make_graph_path(scope_label)
+                            or f"graph-{scope_label}.html")
+                specs.append({"db": db, "scope": scope,
+                              "group_versions": group_versions_var.get(),
+                              "out_path": out_path,
+                              "case_number": session.case_number})
+            # Several graphs are made at once, one process each (1.3.0);
+            # results are reported in the order the scopes are listed.
+            n_g = min(len(specs), _selected_workers("graphs", g_log))
+            g_log(f"Building {len(specs)} graph(s)"
+                  + (f", {n_g} at a time" if n_g > 1 else "") + ":")
+            for scope in scopes:
                 session.log(f"Generating graph: scope={scope}")
-                g_log(f"  Loading data for {scope}...")
 
-                rows = load_data(
-                    conn, scope=scope,
-                    group_versions=group_versions_var.get())
-                if not rows:
-                    g_log(f"  \u2298 {scope} — no data", "dim")
+            # A live line per graph, updated in place with its stage and
+            # an elapsed-time clock (build 2026-11-19b).
+            from pdf_forensics.gui.live import LiveLines, fmt_elapsed
+            g_state = {"done": 0, "failed": 0}
+            STAGE_TEXT = {
+                "loading": lambda i: "loading data\u2026",
+                "loaded": lambda i: (f"{i['placements']:,} placements, "
+                                     f"{i['unique_images']:,} unique "
+                                     f"images"),
+                "thumbnails": lambda i: (f"thumbnails {i['done']:,} / "
+                                         f"{i['total']:,}"),
+                "building": lambda i: "building the graph\u2026",
+                "network": lambda i: (f"laying out the network "
+                                      f"({i['nodes']:,} nodes, "
+                                      f"{i['edges']:,} links)"),
+                "write_html": lambda i: "writing the HTML file\u2026",
+                "custom_ui": lambda i: "adding the viewer controls\u2026",
+            }
+
+            def _g_tick():
+                running = len(specs) - g_state["done"] - g_state["failed"]
+                status_var.set(
+                    f"Generating graphs: {g_state['done']} of {len(specs)} "
+                    f"done \u00b7 {running} running \u00b7 "
+                    f"{fmt_elapsed(_time_mod.monotonic() - g_live.t0)}")
+                status_label.config(fg=ACCENT)
+
+            import time as _time_mod
+            g_live = LiveLines(root, g_log_text, on_tick=_g_tick)
+            for scope in scopes:
+                g_live.set(scope, f"  \u25cb {scope}: waiting\u2026")
+            root.after(0, g_live.start)
+
+            def _g_progress(scope, stage, info):
+                if stage == "finished":
+                    g_state["done"] += 1
+                    if info.get("rows"):
+                        g_live.done(scope, f"  \u2713 {scope}: built in "
+                                    f"{fmt_elapsed(info['elapsed'])}")
+                    else:
+                        g_live.done(scope, f"  \u2298 {scope}: no data",
+                                    "dim")
+                elif stage == "failed":
+                    g_state["failed"] += 1
+                    g_live.done(scope, f"  \u2717 {scope}: "
+                                f"{info.get('error')}", "error")
+                elif stage in STAGE_TEXT:
+                    try:
+                        txt = STAGE_TEXT[stage](info)
+                    except Exception:
+                        txt = stage
+                    g_live.set(scope, f"  \u25cb {scope}: {txt}")
+
+            _gpf.load_begin()
+            try:
+                g_results = list(generate_scopes(specs, workers=n_g,
+                                                 on_progress=_g_progress))
+            finally:
+                g_live.stop()
+                _gpf.load_end("graphs")
+            g_log("")
+            for spec, res in g_results:
+                scope = spec["scope"]
+                if isinstance(res, Exception):
+                    session.log(f"Graph error ({scope}): {res}", "error")
+                    continue
+                if not res["rows"]:
                     session.log(f"  No data for scope {scope}")
                     continue
-
-                md5_set = {row[6] for row in rows}
-                g_log(f"  {len(rows)} placements, "
-                      f"{len(md5_set)} unique images")
-
-                dataset_key = tuple(rows)
-                same_as = dataset_seen.get(dataset_key)
+                g_log(f"  {scope}: {res['rows']} placements, "
+                      f"{res['unique_images']} unique images")
+                same_as = dataset_seen.get(res["digest"])
                 if same_as:
                     note = (f"Note: {scope} selected the identical "
                             f"dataset as {same_as} for this "
@@ -2212,52 +2858,21 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                     g_log(f"  \u24d8 {note}", "dim")
                     session.log(f"  {note}")
                 else:
-                    dataset_seen[dataset_key] = scope
-
-                image_bytes = load_image_bytes(conn, md5_set)
-                findings_by_md5 = load_findings_for_md5s(conn, md5_set)
-
-                g_log(f"  Generating thumbnails...")
-                root.update_idletasks()
-                _tt0 = _time.perf_counter()
-                thumbnails = {}
-                for md5, (blob, ext, w, h) in image_bytes.items():
-                    thumb = make_thumbnail_data_uri(blob, ext, w, h)
-                    if thumb:
-                        thumbnails[md5] = thumb
-                _gpf.event("graph_thumbnails", scope,
-                           _time.perf_counter() - _tt0,
-                           images=len(image_bytes))
-
-                g_log(f"  Building graph...")
-                root.update_idletasks()
-                G = build_graph(rows, thumbnails)
-                image_meta = build_image_metadata(rows, findings_by_md5)
-                doc_meta = build_document_metadata(rows)
-
-                scope_label = scope.replace("_", "")
-                out_path = session.make_graph_path(scope_label)
-                if not out_path:
-                    out_path = f"graph-{scope_label}.html"
-
-                g_log(f"  Writing HTML...")
-                root.update_idletasks()
-                visualize_graph(
-                    G, image_meta, thumbnails, db,
-                    doc_meta=doc_meta,
-                    output_path=out_path,
-                    case_number=(session.case_number
-                                 if session else None),
-                    scope=scope,
-                    group_versions=group_versions_var.get())
-
+                    dataset_seen[res["digest"]] = scope
+                _gpf.event("graph_thumbnails", scope, res["t_thumb"],
+                           images=res["thumb_images"])
+                out_path = res["out_path"]
                 session.register_output("graph", out_path)
                 generated.append((scope, out_path))
                 session.log(f"  Generated: {out_path}")
-                _gpf.event("graph", scope, _time.perf_counter() - _tg0,
-                           placements=len(rows), unique_images=len(md5_set))
-                g_log(f"  \u2713 {scope} — {os.path.basename(out_path)}",
-                      "success")
+                _gpf.event("graph", scope, res["elapsed"],
+                           placements=res["rows"],
+                           unique_images=res["unique_images"],
+                           nodes=res.get("nodes"), edges=res.get("edges"),
+                           **{k: (round(v, 2) if isinstance(v, float)
+                                  else v) for k, v in
+                              res.get("timings", {}).items()})
+                g_log(f"    \u2192 {os.path.basename(out_path)}", "dim")
 
             conn.close()
 
@@ -2303,23 +2918,24 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
     ttk.Button(back_row_r, text="< Back to Main Menu",
                command=lambda: show_frame("main")).pack(side="left")
 
-    # Horizontal split
-    r_split = tk.Frame(reports_frame, bg=BG_DARK)
-    r_split.pack(fill="both", expand=True, padx=20, pady=(0, 8))
+    # Layout (build 2026-11-24b): the Visual report panel and the Generate
+    # button run across the full width at the bottom, packed FIRST so
+    # they always stay visible; above them, the database and report
+    # choices (left, scrolling if the window is short) beside the Report
+    # Log, which ends level with them.
+    r_bottom = tk.Frame(reports_frame, bg=BG_DARK)
+    r_bottom.pack(side="bottom", fill="x", padx=20, pady=(0, 8))
 
-    r_left = tk.Frame(r_split, bg=BG_DARK, width=560)
-    r_left.pack(side="left", fill="y", padx=(0, 10))
-    r_left.pack_propagate(False)
+    r_split = tk.Frame(reports_frame, bg=BG_DARK)
+    r_split.pack(fill="both", expand=True, padx=20, pady=(0, 0))
+
+    r_left_outer, r_left, _r_footer = scroll_column(r_split, 560)
+    r_left_outer.pack(side="left", fill="y", padx=(0, 10))
 
     r_right = tk.Frame(r_split, bg=BG_DARK)
-    r_right.pack(side="left", fill="both", expand=True)
+    r_right.pack(side="left", fill="both", expand=True, pady=(0, 12))
 
     # --- LEFT: controls ---
-
-    # Generate button row — packed to the bottom FIRST so it always
-    # remains visible regardless of how many panels are stacked above.
-    action_row_r = tk.Frame(r_left, bg=BG_DARK)
-    action_row_r.pack(fill="x", side="bottom", pady=(8, 4))
 
     # DB picker for reports
     report_db_var = tk.StringVar()
@@ -2388,14 +3004,22 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                command=select_none_reports).pack(
         side="left", padx=(8, 0))
 
-    # Visual overlay report option
-    visual_opts = make_panel(r_left, "Visual report")
+    # Visual overlay report option: full width, one line.
+    visual_opts = make_panel(r_bottom, "Visual report")
     visual_report_var = tk.BooleanVar(value=True)
+    _visual_row = tk.Frame(visual_opts, bg=BG_PANEL)
+    _visual_row.pack(fill="x")
     _visual_cb = ttk.Checkbutton(
-        visual_opts,
+        _visual_row,
         text="Generate visual overlay report (annotated page images)",
         variable=visual_report_var)
-    _visual_cb.pack(anchor="w")
+    _visual_cb.pack(side="left")
+    workers_control(_visual_row, "Documents rendered at once:").pack(
+        side="left", padx=(40, 0))
+
+    # Generate button, under the Visual report panel.
+    action_row_r = tk.Frame(r_bottom, bg=BG_DARK)
+    action_row_r.pack(fill="x", pady=(0, 4))
     attach_tooltip(
         _visual_cb,
         "Renders flagged pages with detected text/image overlays "
@@ -2548,13 +3172,101 @@ def launch_app(initial_case=None, initial_pdfs=None, initial_db=None,
                         "visual-overlays", "html")
                     vpath = os.path.join(out_dir, vfname)
 
-                    def _vis_progress(i, total):
-                        status_var.set(f"Visual overlay report {i} of "
-                                       f"{total}...")
-                        status_label.config(fg=ACCENT)
+                    # Progress in the Report Log itself (build
+                    # 2026-11-19b), not only in the status bar, which a
+                    # small window may not show: a live line with the
+                    # count and a clock, a line under it for each
+                    # document running longer than LONG_DOC_S, and a
+                    # completion line.
+                    import threading as _thr
+                    import time as _vt
+                    from pdf_forensics.gui.live import LiveLines, fmt_elapsed
+                    LONG_DOC_S = 30
+                    v_lock = _thr.Lock()
+                    v_state = {"done": 0, "total": None, "running": {}}
+                    v_shown = {}            # i -> name, long-running lines
 
-                    ndocs, n = generate_visual_reports(
-                        db, vpath, session=session, progress=_vis_progress)
+                    def _v_render():
+                        with v_lock:
+                            done, total = v_state["done"], v_state["total"]
+                            running = dict(v_state["running"])
+                        now = _vt.time()
+                        if total is None:
+                            v_live.set("vis", "  \u25cb Visual overlay "
+                                       "reports: finding documents\u2026")
+                        else:
+                            v_live.set("vis", f"  \u25cb Visual overlay "
+                                       f"reports: {done} of {total} "
+                                       f"document(s) \u00b7 "
+                                       f"{_running_text(running)}")
+                        for i, (name, t0) in running.items():
+                            if i in v_shown or now - t0 < LONG_DOC_S:
+                                continue
+                            v_shown[i] = (name, t0)
+                            v_live.set(("doc", i), f"      \u25cb {name}: "
+                                       f"rendering", parent="vis",
+                                       started=_vt.monotonic() - (now - t0))
+                        for i, (name, t0) in list(v_shown.items()):
+                            if i not in running and t0 is not None:
+                                v_live.done(("doc", i), f"      \u2713 "
+                                            f"{name}: "
+                                            f"{fmt_elapsed(now - t0)}",
+                                            "dim")
+                                v_shown[i] = (name, None)
+
+                    def _running_text(running):
+                        """'2 running', or '1 running in 4 parts' when
+                        documents are drawn in parts (runs of pages) by
+                        several processes at once (build 2026-11-24b)."""
+                        docs = {k[0] if isinstance(k, tuple) else k
+                                for k in running}
+                        if len(running) > len(docs):
+                            return (f"{len(docs)} running in "
+                                    f"{len(running)} parts")
+                        return f"{len(docs)} running"
+
+                    def _v_status(info):
+                        with v_lock:
+                            v_state.update(info)
+                        _v_render()
+
+                    def _v_tick():
+                        _v_render()
+                        with v_lock:
+                            done, total = v_state["done"], v_state["total"]
+                            nrun = _running_text(v_state["running"])
+                        if total is not None:
+                            status_var.set(
+                                f"Visual overlay reports: {done} of {total} "
+                                f"done \u00b7 {nrun} \u00b7 "
+                                f"{fmt_elapsed(_vt.monotonic() - v_live.t0)}")
+                            status_label.config(fg=ACCENT)
+
+                    def _vis_progress(i, total):
+                        pass        # counts come from _v_status
+
+                    nv = _selected_workers("visual reports", r_log)
+                    v_live = LiveLines(root, r_log_text, on_tick=_v_tick)
+                    _v_render()
+                    root.after(0, v_live.start)
+                    _vt0 = _vt.monotonic()
+                    try:
+                        ndocs, n = generate_visual_reports(
+                            db, vpath, session=session,
+                            progress=_vis_progress, workers=nv,
+                            status=_v_status)
+                    except Exception:
+                        v_live.done("vis", "  \u2717 Visual overlay "
+                                    "reports stopped", "error")
+                        v_live.stop()
+                        raise
+                    with v_lock:
+                        total = v_state["total"] or 0
+                    v_live.done("vis", f"  \u2713 Visual overlay reports: "
+                                f"{total} document(s) done in "
+                                f"{fmt_elapsed(_vt.monotonic() - _vt0)}",
+                                "dim")
+                    v_live.stop()
                     if n > 0:
                         r_log(f"  \u2713 Visual overlay reports — "
                               f"{ndocs} document(s), {n} finding(s); "

@@ -102,7 +102,8 @@ def exif_dates(label, image_bytes, ext=None):
         return out
     try:
         from PIL import Image
-        img = Image.open(io.BytesIO(image_bytes))
+        from pdf_forensics.analysis.metadata import open_image_info
+        img = open_image_info(image_bytes)
         exif = img.getexif()
         sub = exif.get_ifd(0x8769) if exif else {}
         for tag, otag, name in ((0x9003, 0x9011, "DateTimeOriginal"),

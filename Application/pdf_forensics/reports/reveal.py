@@ -53,6 +53,8 @@ import io
 
 import pikepdf
 
+from pdf_forensics.analysis import colour as _colour
+
 # --- Constants kept in sync with analysis/detectors.py --------------------
 WHITE_THRESHOLD = 0.9            # per-channel min for a fill to be "white"
 NEAR_RECT_TOLERANCE = 15.0       # pts tolerance, text-position vs rect
@@ -272,6 +274,8 @@ def _walk_content(page):
         Tlm = list(Tm)
         in_bt = False
         fill_color = (0.0, 0.0, 0.0)
+        fill_space = None        # colour space set by cs (1.3.0)
+        colour_cache = {}
 
         def mark_paint():
             s = site
@@ -293,20 +297,33 @@ def _walk_content(page):
                 except Exception:
                     pass
             elif op == 'g':
+                fill_space = None
                 try:
                     v = float(str(operands[0]))
                     fill_color = (v, v, v)
                 except Exception:
                     pass
             elif op == 'rg':
+                fill_space = None
                 try:
                     fill_color = tuple(float(str(x)) for x in operands[:3])
                 except Exception:
                     pass
+            elif op == 'cs':
+                fill_space = (_colour.lookup_space(operands[0], resources)
+                              if operands else None)
             elif op in ('sc', 'scn'):
                 try:
                     vals = [float(str(x)) for x in operands if _is_number(x)]
-                    if len(vals) == 1:
+                    # Evaluated in its colour space where that can be done
+                    # exactly, as the analysis does (analysis/colour.py);
+                    # otherwise read as before.
+                    _rgb = (_colour.resolve_rgb(fill_space, vals, resources,
+                                                cache=colour_cache)
+                            if fill_space is not None else None)
+                    if _rgb is not None:
+                        fill_color = _rgb
+                    elif len(vals) == 1:
                         fill_color = (vals[0],) * 3
                     elif len(vals) >= 3:
                         fill_color = tuple(vals[:3])
@@ -320,8 +337,10 @@ def _walk_content(page):
                 in_bt = False
             elif in_bt and op == 'Tm':
                 try:
-                    Tm = [float(str(x)) for x in operands]
-                    Tlm = list(Tm)
+                    vals = [float(str(x)) for x in operands]
+                    if len(vals) == 6:       # malformed Tm ignored
+                        Tm = vals
+                        Tlm = list(Tm)
                 except Exception:
                     pass
             elif in_bt and op in ('Td', 'TD'):
@@ -737,9 +756,34 @@ def _open_source(src_path):
     if data is None:
         with open(src_path, "rb") as fh:
             data = fh.read()
+        # A document pikepdf cannot read as it stands was analysed from
+        # MuPDF's repaired copy (analysis/engine.open_documents, build
+        # 2026-11-23); its visual report is drawn from the same copy, so
+        # object numbers agree with the analysis.
+        try:
+            pikepdf.open(io.BytesIO(data)).close()
+        except pikepdf.PasswordError:
+            pass
+        except Exception:
+            data = _repaired_copy(data) or data
         _SRC_CACHE.clear()          # one document at a time
         _SRC_CACHE[src_path] = data
     return pikepdf.open(io.BytesIO(data))
+
+
+def _repaired_copy(data):
+    """MuPDF's repaired (and decrypted) copy of a PDF, or None."""
+    try:
+        import pymupdf
+        doc = pymupdf.open(stream=data, filetype="pdf")
+        try:
+            return doc.tobytes(
+                garbage=0,
+                encryption=getattr(pymupdf, "PDF_ENCRYPT_NONE", 1))
+        finally:
+            doc.close()
+    except Exception:
+        return None
 
 
 def _inherited(page_obj, key):

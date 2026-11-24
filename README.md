@@ -2,7 +2,7 @@
 
 ![Application: Apache 2.0](https://img.shields.io/badge/Application-Apache_2.0-blue.svg)
 ![Course & Guide: CC BY 4.0](https://img.shields.io/badge/Course_%26_Guide-CC_BY_4.0-lightgrey.svg)
-![Application version](https://img.shields.io/badge/app-v1.2.0-informational)
+![Application version](https://img.shields.io/badge/app-v1.3.0-informational)
 ![Explorer version](https://img.shields.io/badge/explorer-v1.0-informational)
 ![Course version](https://img.shields.io/badge/course-0.9_pre--release-orange)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -12,10 +12,10 @@ documents. This repository brings together four companion pieces:
 
 | Component | What it is | Location | Status |
 |---|---|---|---|
-| **PDF Forensics Suite** | A desktop and command-line application that examines PDFs for signs of alteration and produces reports, graphs, spreadsheets and a case index | [`Application/`](Application) | v1.2.0 (build 2026-11-12) |
+| **PDF Forensics Suite** | A desktop and command-line application that examines PDFs for signs of alteration and produces reports, graphs, spreadsheets and a case index | [`Application/`](Application) | v1.3.0 (build 2026-11-24c) |
 | **PDF Structure Explorer** | A single-file, browser-based learning tool that shows any PDF's internal structure: select a component to see it on the page and in the raw bytes. Includes the guide *Inside a PDF* and teaching sample PDFs | [`PDF Explorer/`](PDF%20Explorer) | v1.0 (2026-11-04) |
 | **PDF Forensics Examiner Course** | A self-paced, browser-based course with lessons, hands-on labs, quizzes, a capstone exercise, a final assessment and a certificate | [`Course/`](Course) | 0.9 pre-release (beta review) |
-| **Technical Reference Guide** | An in-depth guide to PDF structure, detection logic, risk scoring, false positives, counter-verification and chain of custody | [`PDF_Forensics_Technical_Guide.docx`](PDF_Forensics_Technical_Guide.docx) | v1.2 (applies to Suite v1.2.0) |
+| **Technical Reference Guide** | An in-depth guide to PDF structure, detection logic, risk scoring, false positives, counter-verification and chain of custody | [`PDF_Forensics_Technical_Guide.docx`](PDF_Forensics_Technical_Guide.docx) | v1.2 (applies to Suite v1.3.0) |
 
 The application tells you **where to look**; the explorer lets you **see** a
 PDF's structure, byte by byte; the course teaches you **how to look** with
@@ -54,7 +54,9 @@ PDF-Forensics/
 │   ├── requirements.txt
 │   ├── pdf_forensics.py                   Entry point (GUI or CLI)
 │   ├── pdf_forensics/                     Application package
-│   └── Documentation/                     User guides (.docx)
+│   ├── Documentation/                     User guides (.docx)
+│   ├── tests/                             Automated tests and a database comparison tool
+│   └── build_exe/                         Scripts to build a Windows executable (PyInstaller)
 ├── PDF Explorer/                          PDF Structure Explorer (Apache 2.0; guide CC BY 4.0)
 │   ├── README.md                          Explorer documentation
 │   ├── pdf-structure-explorer.html        The explorer; open it in a browser
@@ -81,7 +83,8 @@ SQLite database and presented as 22 interactive HTML reports (including a
 timeline of every timestamp, normalised to UTC), per-document Visual Overlay
 reports with an index, image-relationship graphs,
 Excel triage, risk and timeline spreadsheets, and a case index with an MD5 manifest of
-every output. Source files are only ever read, never modified.
+every output. Large cases are analysed several files at a time, with the same
+results as one at a time. Source files are only ever read, never modified.
 
 ### Quick start
 
@@ -172,7 +175,7 @@ The course is in **beta review** and has not yet been released as version 1.0.
 ## Technical Reference Guide
 
 [`PDF_Forensics_Technical_Guide.docx`](PDF_Forensics_Technical_Guide.docx)
-(version 1.2, applies to PDF Forensics Suite v1.2.0, build 2026-11-12) is the
+(version 1.2, applies to PDF Forensics Suite v1.3.0, build 2026-11-24c) is the
 in-depth companion to both the application and the course. It covers the
 applicable standards, a PDF structure primer, every artifact the Suite
 analyses and its detection logic, risk scoring, known false positives,
@@ -203,7 +206,7 @@ Get-FileHash PDF_Forensics_Technical_Guide.docx -Algorithm SHA256
 The value must match the one in the corresponding `SHA256SUMS.txt`. After
 installing the
 application, `python pdf_forensics.py --version` should print
-`pdf_forensics 1.2.0 (build 2026-11-12)`.
+`pdf_forensics 1.3.0 (build 2026-11-24c)`.
 
 ## Licensing
 

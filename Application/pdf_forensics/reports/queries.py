@@ -6,7 +6,8 @@ Each report is a dict with:
   - name:        display name
   - description: what the report shows
   - query:       SQL query (for simple tabular reports)
-  - query_fn:    callable(conn) -> (columns, data) for pivoted reports
+  - query_fn:    callable(conn) -> (columns, data) for pivoted reports, or
+                 (columns, data, notice) to add a notice at the top
   - columns:     list of column defs (for SQL-based reports)
   - sticky_cols: number of leftmost columns to freeze on scroll
 
@@ -173,6 +174,7 @@ def _query_encrypted_files(conn):
         {"name": "Scheme",     "label": "Encryption",          "col_type": "text"},
         {"name": "Attempts",   "label": "Passwords Tried",     "col_type": "numeric"},
         {"name": "PDF MD5",    "label": "PDF MD5",             "col_type": "hash"},
+        {"name": "Copies",     "label": "Files with this MD5", "col_type": "numeric"},
         {"name": "Path",       "label": "Path",                "col_type": "text"},
     ]
     blank = {c["name"]: "" for c in columns}
@@ -192,12 +194,17 @@ def _query_encrypted_files(conn):
         JOIN (SELECT pdf_path, MAX(id) AS mid FROM encryption
               WHERE is_encrypted = 1 GROUP BY pdf_path) last
           ON last.mid = e.id
-        ORDER BY e.opened ASC, e.pdf_filename
+        ORDER BY e.opened ASC, e.pdf_md5, e.pdf_filename
     """).fetchall()
     if not rows:
         r = dict(blank); r["Filename"] = "None"
         r["Status"] = ("No encrypted files are recorded in this database.")
         return columns, [r]
+    # Identical copies are grouped (build 2026-11-23): rows of one MD5 are
+    # together, each says how many files share it, and the notice gives
+    # the number of distinct documents.
+    from collections import Counter
+    copies = Counter(r[2] for r in rows if r[2])
     data = []
     for fn_, path, md5, opened, pw, src, scheme, attempts in rows:
         row = dict(blank)
@@ -218,9 +225,95 @@ def _query_encrypted_files(conn):
         row.update({"Filename": fn_, "Status": status, "Password": pw_disp,
                     "Source": src_disp, "Scheme": scheme or "",
                     "Attempts": attempts if attempts is not None else "",
-                    "PDF MD5": md5 or "", "Path": path})
+                    "PDF MD5": md5 or "",
+                    "Copies": copies.get(md5, "") if md5 else "",
+                    "Path": path})
         data.append(row)
-    return columns, data
+    locked = [r for r in rows if not r[3]]
+    opened = [r for r in rows if r[3]]
+
+    def _distinct(rs):
+        known = {r[2] for r in rs if r[2]}
+        return len(known) + sum(1 for r in rs if not r[2])
+    notice = (f"{len(rows)} encrypted file(s), {_distinct(rows)} distinct "
+              f"document(s) by MD5: {len(opened)} opened "
+              f"({_distinct(opened)} distinct), {len(locked)} not opened "
+              f"({_distinct(locked)} distinct).")
+    return columns, data, notice
+
+
+DOC_COMPARISON_MAX_ROWS = 10000
+
+
+def _query_doc_comparison(conn, max_rows=None):
+    """Pairs of documents that share images, most shared first (build
+    2026-11-20b).
+
+    The SQL before this paired every placement of an image with every
+    other placement of it, which grows with the square of how often an
+    image is used; it now pairs documents (each document's distinct
+    images once): the same rows, 15 to 20 times faster on a synthetic
+    test. With many documents, one image they all carry (a letterhead
+    logo, say) makes every pair of them share it: 12,746 documents would
+    give about 81 million pairs, too many for a report. So the pairs are
+    read in one pass, keeping only the max_rows sharing the most images
+    (ties: in document order); the report lists those and states the
+    total. Returns (columns, data, notice)."""
+    import heapq
+    if max_rows is None:
+        max_rows = DOC_COMPARISON_MAX_ROWS
+    cur = conn.cursor()
+    cur.execute("""
+        WITH placed AS (
+            SELECT DISTINCT p.analysis_id AS aid, d.md5_hash AS md5
+            FROM images i
+            JOIN pages p      ON p.id = i.page_id
+            JOIN image_data d ON d.id = i.image_data_id
+        )
+        SELECT x1.aid, x2.aid, COUNT(*)
+        FROM placed x1
+        JOIN placed x2 ON x2.md5 = x1.md5 AND x2.aid > x1.aid
+        GROUP BY x1.aid, x2.aid
+    """)
+    total = 0
+    top = []            # heap of (count, -a1, -a2): the smallest is first
+    while True:
+        chunk = cur.fetchmany(50000)
+        if not chunk:
+            break
+        for a1, a2, n in chunk:
+            total += 1
+            key = (n, -a1, -a2)
+            if len(top) < max_rows:
+                heapq.heappush(top, key)
+            elif key > top[0]:
+                heapq.heapreplace(top, key)
+    best = sorted(top, reverse=True)
+    names = {}
+    ids = {-k[1] for k in best} | {-k[2] for k in best}
+    for aid, name in conn.execute(
+            "SELECT id, pdf_filename FROM analyses").fetchall():
+        if aid in ids:
+            names[aid] = name
+    columns = [
+        {"name": "Document A", "label": "Document A", "col_type": "text"},
+        {"name": "Document B", "label": "Document B", "col_type": "text"},
+        {"name": "Shared Images", "label": "Shared Images",
+         "col_type": "numeric"},
+    ]
+    data = [{"Document A": names.get(-a1, ""),
+             "Document B": names.get(-a2, ""),
+             "Shared Images": n} for n, a1, a2 in best]
+    notice = None
+    if total > len(data):
+        notice = (f"Showing the {len(data):,} pairs of documents that share "
+                  f"the most images, of {total:,} pairs that share at least "
+                  f"one. The rest are not listed: with this many documents, "
+                  f"images they nearly all carry (such as a logo) make "
+                  f"almost every pair share something. The Cross-Document "
+                  f"report lists every shared image and the documents it "
+                  f"appears in.")
+    return columns, data, notice
 
 
 def _query_duplicate_submissions(conn):
@@ -857,24 +950,10 @@ REPORTS = [
         "name": "Document Comparison Matrix",
         "description":
             "Pairs of documents that share one or more images.",
-        "query": """
-            SELECT
-                a1.pdf_filename      AS "Document A",
-                a2.pdf_filename      AS "Document B",
-                COUNT(DISTINCT id1.md5_hash) AS "Shared Images"
-            FROM images i1
-            JOIN pages p1          ON p1.id = i1.page_id
-            JOIN analyses a1       ON a1.id = p1.analysis_id
-            JOIN image_data id1    ON id1.id = i1.image_data_id
-            JOIN image_data id2    ON id2.md5_hash = id1.md5_hash
-                                  AND id2.id != id1.id
-            JOIN images i2         ON i2.image_data_id = id2.id
-            JOIN pages p2          ON p2.id = i2.page_id
-            JOIN analyses a2       ON a2.id = p2.analysis_id
-                                  AND a2.id > a1.id
-            GROUP BY a1.id, a2.id
-            ORDER BY COUNT(DISTINCT id1.md5_hash) DESC
-        """,
+        # Build 2026-11-20b: computed by _query_doc_comparison (pairs of
+        # documents, not of placements; at most DOC_COMPARISON_MAX_ROWS
+        # listed, with the total stated).
+        "query_fn": _query_doc_comparison,
         "columns": [
             {"name": "Document A",    "label": "Document A",    "col_type": "text"},
             {"name": "Document B",    "label": "Document B",    "col_type": "text"},
